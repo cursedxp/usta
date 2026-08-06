@@ -721,7 +721,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Interfaces:** yok (yalnız doküman).
 
-- [ ] **Step 1: §4.6'dan sonra yeni bölüm ekle**
+- [x] **Step 1: §4.6'dan sonra yeni bölüm ekle**
 
 `## 4.6 Pedagoji Katmanı (v0.3)` bölümünün sonuna (bir sonraki `## 5` başlığından önce):
 
@@ -734,7 +734,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Katalog otomatik güncellenir:** kapanış flush'ı `learner/index.md` sonundaki `## Kayıtlar` bölümüne `- konu | proje-yolu | YYYY-MM-DD` upsert eder. Yan etki: index system prompt'ta olduğundan Usta tüm başlıklardan haberdardır — izolasyon bozulmaz (progress yalnız aktif konudan yüklenir).
 ```
 
-- [ ] **Step 2: §7 dosya yapısında index.md açıklamasını güncelle**
+- [x] **Step 2: §7 dosya yapısında index.md açıklamasını güncelle**
 
 `index.md             # TÜM öğrenme başlıkları kataloğu (rust: AKTİF, js: AKTİF, marketing: duraklamış)` satırını şununla değiştir:
 
@@ -742,7 +742,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     index.md             # TÜM öğrenme başlıkları kataloğu — "## Kayıtlar" bölümü kapanışta otomatik upsert edilir (v0.4)
 ```
 
-- [ ] **Step 3: "Alınan Kararlar" bölümüne ekle**
+- [x] **Step 3: "Alınan Kararlar" bölümüne ekle**
 
 `## 11. Alınan Kararlar` sonuna:
 
@@ -751,7 +751,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Reset onayları (v0.4):** konu reseti `[e/H]`, factory reset kelime onayı ("evet"); stdin kapalı/boş = hayır (güvenli varsayılan). Reset komutları backend'siz çalışır.
 ```
 
-- [ ] **Step 4: Commit + push**
+- [x] **Step 4: Commit + push**
 
 ```bash
 git add SPEC.md

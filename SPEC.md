@@ -66,6 +66,13 @@
 
 Kuralların tamamı USTA.md'de yaşar; Rust sadece tetikler (açılış turn'ü, check koşucusu, progress formatı).
 
+## 4.7 Yönetim Komutları (v0.4)
+
+- **`usta topics`** — global katalog listelenir: `konu | proje | son oturum`. LLM gerekmez.
+- **`usta reset <konu>`** — bulunduğun projenin o konudaki progress'i silinir (`[e/H]` onaylı), katalogdan düşülür. "Bu konuyu baştan öğreneyim" senaryosu.
+- **`usta reset --factory`** — katalogdaki TÜM projelerin `.usta/`'sı + global brain silinir; liste önce gösterilir, onay için "evet" yazılır. Katalogda olmayan eski projeler kapsam dışı (uyarı + `find` ipucu basılır).
+- **Katalog otomatik güncellenir:** kapanış flush'ı `learner/index.md` sonundaki `## Kayıtlar` bölümüne `- konu | proje-yolu | YYYY-MM-DD` upsert eder. Yan etki: index system prompt'ta olduğundan Usta tüm başlıklardan haberdardır — izolasyon bozulmaz (progress yalnız aktif konudan yüklenir).
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -100,7 +107,7 @@ usta/
   SPEC.md                # bu dosya
   USTA.md                # çekirdek davranış: Socratic, dokunmaz, uydurmaz, senior
   learner/
-    index.md             # TÜM öğrenme başlıkları kataloğu (rust: AKTİF, js: AKTİF, marketing: duraklamış)
+    index.md             # TÜM öğrenme başlıkları kataloğu — "## Kayıtlar" bölümü kapanışta otomatik upsert edilir (v0.4)
     profile.md           # kullanıcı: ADHD, "suya gir", kişilik, iletişim tarzı
     progress/
       rust.md            # başlık-başı ilerleme + seviye (tekrar anlatmasın)
@@ -147,6 +154,8 @@ usta/
 - **Proaktiflik:** girdi ayrı thread'de (rustyline + ready el-sıkışması), ana döngü `tokio::select!` — feedback için Enter beklenmez.
 - **Pedagoji tetikleri (v0.3):** açılış drilli shell'den tetiklenir (progress boş değilse); `cargo check` sonucu LLM'e `[... SADECE SENİN GÖZÜN İÇİN ...]` bloğuyla gider — saklama/tahmin kararı USTA.md kuralında, kodda değil.
 - **Global USTA.md güncellemesi (v0.3):** scaffold var olan dosyanın üstüne yazmaz — davranış güncellemesinden sonra `rm ~/.config/usta/USTA.md` + bir kez `usta` çalıştırmak gerekir. Bilinçli kabul; dosya versiyonlama v0.4 adayı.
+- **Katalog formatı (v0.4):** `learner/index.md` sonunda `## Kayıtlar`; satır `- konu | proje-yolu | YYYY-MM-DD`; bölüm-üstü serbest metin korunur; tarih `chrono` ile yerel saat.
+- **Reset onayları (v0.4):** konu reseti `[e/H]`, factory reset kelime onayı ("evet"); stdin kapalı/boş = hayır (güvenli varsayılan). Reset komutları backend'siz çalışır.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
