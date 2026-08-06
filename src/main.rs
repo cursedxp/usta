@@ -6,6 +6,7 @@ mod backend;
 mod brain;
 mod config;
 mod defaults;
+mod input;
 mod session;
 mod watcher;
 
@@ -13,7 +14,6 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
 use crate::backend::Backend;
@@ -39,8 +39,7 @@ async fn main() -> Result<()> {
         println!("(.usta/ kuruldu)");
     }
 
-    let mut rl = DefaultEditor::new()?;
-    let topic = resolve_topic(&args, &mut rl)?;
+    let topic = resolve_topic(&args)?;
 
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
     // model — bkz. brain.rs).
@@ -49,57 +48,64 @@ async fn main() -> Result<()> {
 
     let mut session = Session::new(topic.clone(), system);
 
-    // Dosya izleyiciyi proje kökünde başlat (proaktif feedback).
+    // Dosya izleyici + girdi thread'i + debounce durumu.
     let mut watch_rx = watcher::spawn(&project_root)?;
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+    let mut input_rx = input::spawn("sen> ", ready_rx);
+    let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
 
     println!("Usta hazır — konu: {topic}. Kod yaz, kaydet; ben izlerim. (/quit ile çık)");
+    let _ = ready_tx.send(()); // ilk prompt
 
     loop {
-        // 1) İzleyici kanalını boşalt → değişen dosyalara proaktif feedback.
-        let mut changed: Vec<PathBuf> = Vec::new();
-        while let Ok(p) = watch_rx.try_recv() {
-            if !changed.contains(&p) {
-                changed.push(p);
-            }
-        }
-        for path in changed {
-            if let Err(e) = handle_file_change(&backend, &mut session, &path).await {
-                // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
-                eprintln!("(dosya feedback atlandı: {}: {e})", path.display());
-            }
-        }
-
-        // 2) Kullanıcı girdisi.
-        match rl.readline("sen> ") {
-            Ok(line) => {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                if line == "/quit" {
-                    break;
-                }
-                let _ = rl.add_history_entry(line);
-                session.push_user(line);
-                match backend.complete(&session.system, session.history()).await {
-                    Ok((reply, web)) => {
-                        print_reply(&reply, web);
-                        session.push_assistant(reply);
+        tokio::select! {
+            maybe_ev = input_rx.recv() => match maybe_ev {
+                Some(input::InputEvent::Line(line)) => {
+                    let line = line.trim().to_string();
+                    if line == "/quit" {
+                        break;
                     }
-                    Err(e) => eprintln!("(hata: {e})"),
+                    if !line.is_empty() {
+                        session.push_user(&line);
+                        match backend.complete(&session.system, session.history()).await {
+                            Ok((reply, web)) => {
+                                print_reply(&reply, web);
+                                session.push_assistant(reply);
+                            }
+                            Err(e) => eprintln!("(hata: {e})"),
+                        }
+                    }
+                    let _ = ready_tx.send(());
                 }
-            }
-            // Ctrl-D / Ctrl-C → temiz çıkış.
-            Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
-            Err(e) => {
-                eprintln!("(girdi hatası: {e})");
-                break;
+                Some(input::InputEvent::Eof) | None => break,
+            },
+            Some(path) = watch_rx.recv() => {
+                debouncer.push(path, tokio::time::Instant::now());
+            },
+            _ = sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
+                // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
+                println!(); // yarım kalan prompt satırını kirletme
+                for path in debouncer.flush() {
+                    if let Err(e) = handle_file_change(&backend, &mut session, &path).await {
+                        // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
+                        eprintln!("(dosya feedback atlandı: {}: {e})", path.display());
+                    }
+                }
             }
         }
     }
 
     println!("Görüşürüz — suya girmeye devam et.");
     Ok(())
+}
+
+/// Deadline varsa ona kadar uyu; yoksa asla dönmeyen future (select guard'ı
+/// zaten bu kolu deadline'sız poll etmez — bu sadece tip güvenliği).
+async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Komut satırında açık bir konu verilmiş mi? — sadece `usta start <konu>`
@@ -117,13 +123,14 @@ fn explicit_topic(args: &[String]) -> Option<String> {
 /// Konuyu çöz: açık argüman > TTY promptu > sessiz "genel" default'u.
 /// Stdin pipe'lanmışsa (TTY değilse) cevaplanamayacak bir prompt'a takılmadan
 /// direkt "genel" döner.
-fn resolve_topic(args: &[String], rl: &mut DefaultEditor) -> Result<String> {
+fn resolve_topic(args: &[String]) -> Result<String> {
     if let Some(raw) = explicit_topic(args) {
         return Ok(slugify_topic(&raw));
     }
     if !std::io::stdin().is_terminal() {
         return Ok("genel".to_string());
     }
+    let mut rl = DefaultEditor::new()?;
     match rl.readline("Ne öğreneceksin/yapacaksın? (ör. rust, javascript): ") {
         Ok(line) => Ok(slugify_topic(&line)),
         // Ctrl-D / Ctrl-C promptta → engellemeden "genel"e düş.

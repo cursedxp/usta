@@ -68,15 +68,12 @@ pub fn is_ignored(path: &Path) -> bool {
 /// Kayıt fırtınasını yatıştıran saf debounce durumu. Editörler tek kayıtta
 /// birden çok modify olayı üretir; her olay `push`lanır, son olaydan `window`
 /// sonra `deadline` dolar ve select-loop `flush` ile hepsini tek seferde işler.
-/// Henüz `main.rs`'e bağlanmadı (Task 3) — şimdilik sadece testlerden kullanılıyor.
-#[allow(dead_code)]
 pub struct Debouncer {
     pending: Vec<PathBuf>,
     deadline: Option<Instant>,
     window: Duration,
 }
 
-#[allow(dead_code)]
 impl Debouncer {
     pub fn new(window: Duration) -> Self {
         Debouncer { pending: Vec::new(), deadline: None, window }

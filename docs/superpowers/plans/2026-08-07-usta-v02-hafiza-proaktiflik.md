@@ -246,7 +246,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `main` içinde `handle_file_change(&Backend, &mut Session, &Path)` imzası korunur (Task 4 değiştirecek).
 - Davranış sözleşmesi: dosya kaydı geldiğinde kullanıcı Enter'a basmasa bile ~1 sn sonra feedback basılır. `/quit`, Ctrl-C, Ctrl-D üçü de döngüden temiz çıkar.
 
-- [ ] **Step 1: `src/input.rs`'i yaz**
+- [x] **Step 1: `src/input.rs`'i yaz**
 
 ```rust
 //! Kullanıcı girdisi: rustyline ayrı thread'de koşar, satırlar tokio kanalına
@@ -310,7 +310,7 @@ pub fn spawn(
 }
 ```
 
-- [ ] **Step 2: `resolve_topic`'i rustyline parametresinden arındır**
+- [x] **Step 2: `resolve_topic`'i rustyline parametresinden arındır**
 
 `src/main.rs` — imza `fn resolve_topic(args: &[String]) -> Result<String>` olur; editörünü kendi içinde kurar, iş bitince düşer (girdi thread'i kendi editörünü sonra kurar — çakışma yok):
 
@@ -334,7 +334,7 @@ fn resolve_topic(args: &[String]) -> Result<String> {
 }
 ```
 
-- [ ] **Step 3: Ana döngüyü select-loop olarak yeniden yaz**
+- [x] **Step 3: Ana döngüyü select-loop olarak yeniden yaz**
 
 `src/main.rs` — `mod input;` ekle. `main` gövdesinde `let mut rl = DefaultEditor::new()?;` satırını sil; döngü şu hale gelir:
 
@@ -407,14 +407,14 @@ async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
 
 Eski drain bloğu (`let mut changed ...` + `rl.readline` match'i) tamamen silinir. `use rustyline::error::ReadlineError;` ve `use rustyline::DefaultEditor;` import'ları main.rs'te `resolve_topic` için kalır (`ReadlineError` artık kullanılmıyorsa import'unu sil).
 
-- [ ] **Step 4: Test + build + manuel duman testi**
+- [x] **Step 4: Test + build + manuel duman testi**
 
 Run: `cargo test && cargo build`
 Expected: tüm testler PASS, build temiz.
 
 Manuel (mümkünse): boş bir temp dizinde `cargo run -- start deneme` başlat, İKİNCİ terminalden `echo "fn main() {}" > /tmp/<odizin>/x.rs` yaz. Beklenen: Enter'a basmadan ~1 sn içinde Usta feedback'i düşer. `/quit`, Ctrl-C ve Ctrl-D üçü de temiz çıkar. (Backend yoksa `USTA_BACKEND` hatası normaldir — o durumda sadece derleme + testle yetin.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/input.rs src/main.rs
