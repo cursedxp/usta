@@ -1,0 +1,91 @@
+# Usta
+
+> Terminal'de çalışan, seni **yaparak öğreten** Socratic mühendislik mentoru.
+> Kod yazmaz, uydurmaz, senin yerine düşünmez — **sorar, sınar, yol gösterir.**
+
+Usta bir "kod tamamlayıcı" değil. Yanında oturan bir usta: sen gerçek işi yaparken
+seni yetiştirir. Amaç senin kodun değil, **senin gelişmen.**
+
+Domain-agnostik — Rust, JavaScript, marketing, ne öğreniyorsan. İlk kullanıcı: yazarı.
+
+---
+
+## Felsefe
+
+- **Yaparak öğrenme.** Pasif ders yok. Gerçek projeyi inşa ederken, o akışın içinde öğrenirsin.
+- **Sıfır otonom aksiyon.** Usta neyin hatalı olduğunu ve nasıl yaklaşman gerektiğini gösterir — ama **kodu sen yazarsın.** Kopyala-yapıştır çözüm vermez.
+- **Uydurmaz.** Bilmiyorsa web'de araştırır, sonra öğretir.
+- **Senior gibi.** Ölçeğe duyarlı mimari (1 kişilik vs 1000 kişilik), teknoloji seçimi, kod kalitesi.
+- **"İnce kabuk, kalın beyin."** Davranış Rust'ta değil, düzenlenebilir markdown dosyalarında yaşar (`USTA.md`, `learner/`, `approaches/`).
+
+## Öne çıkanlar
+
+| | |
+|---|---|
+| 🧠 **Kalıcı hafıza** | Oturum kapanışında ne öğrendiğini `progress/<konu>.md`'ye yazar. Sonraki oturum bunu bilir — tekrar anlatmaz, eksiği hedefler. |
+| ⚡ **Gerçek proaktiflik** | Dosyayı kaydettiğin an feedback gelir — Enter'a basmana gerek yok (debounce + `tokio::select!`). İlk görüşte tam içerik, sonra unified diff. |
+| 🎓 **Pedagoji katmanı** | Açılış drilli (geri çağırma), anlat-modu (Feynman), ipucu merdiveni (fading), tahmin protokolü (`cargo check` sonucunu söylemez — önce tahmin ettirir). |
+| 🔎 **Araştırma** | Bilmediğini web'de arar (WebSearch) — uydurma yok. |
+| 🗂️ **Yönetim** | `usta topics` nerede ne öğrendiğini gösterir; `reset` konuyu veya her şeyi sıfırlar. |
+
+## Kurulum
+
+```bash
+git clone https://github.com/cursedxp/usta
+cd usta
+cargo build --release
+# opsiyonel: cargo install --path .
+```
+
+**LLM backend** (ikisinden biri yeter):
+
+1. **Claude CLI (default, önerilen)** — [Claude Code](https://claude.com/claude-code) PATH'te ise Usta onu kullanır. Mevcut aboneliğin, **API key gerekmez**.
+2. **Anthropic API** — `export ANTHROPIC_API_KEY=sk-ant-...`
+
+`USTA_BACKEND=cli|api` ile zorlayabilirsin.
+
+## Kullanım
+
+```bash
+usta                    # başlat — konuyu sorar (veya sen söylersin)
+usta start rust         # doğrudan Rust oturumu
+usta topics             # nerede ne öğreniyorum? (katalog)
+usta reset rust         # bu projedeki Rust progress'ini sıfırla (onaylı)
+usta reset --factory    # her şeyi sıfırla — Usta seni hiç tanımamış gibi (kelime onaylı)
+usta init               # sadece iskeleti kur (opsiyonel — start zaten kurar)
+```
+
+Bir öğrenme oturumu:
+
+```
+usta start rust
+  → (varsa) açılış drilli: geçen seferden 2-3 hatırlama sorusu
+  → kod yazarsın, kaydedersin
+  → Usta proaktif Socratic feedback verir (kodu yazmadan)
+  → cargo check hatası varsa: söylemez, "nerede patlar?" diye tahmin ettirir
+  → /quit → oturum özeti progress'e yazılır, katalog güncellenir
+```
+
+## Nasıl çalışır — "ince kabuk, kalın beyin"
+
+Rust yalnızca kabuk: CLI, LLM client, dosya izleyici (`notify`), `cargo check` koşucusu, markdown yükleyici. **Zekâ ve kişilik markdown'da** yaşar:
+
+```
+~/.config/usta/          # GLOBAL beyin (bir kez kurulur, tüm projelerde paylaşılır)
+  USTA.md                #   çekirdek davranış + pedagoji kuralları
+  learner/profile.md     #   sen kimsin (öğrenme tarzın)
+  learner/index.md       #   ## Kayıtlar — konu | proje | tarih kataloğu
+  approaches/            #   software.md, _default.md — domaine göre yaklaşım
+
+<proje>/.usta/           # PROJE (her projede ayrı)
+  learner/progress/<konu>.md   #   seviye, gap'ler, geri çağırma soruları, hata günlüğü
+  approaches/            #   opsiyonel proje-özel override
+```
+
+Davranışı değiştirmek = markdown'ı düzenle, Rust'a dokunma. (Global `USTA.md` güncellemesi için: `rm ~/.config/usta/USTA.md` + bir kez `usta`.)
+
+## Durum
+
+v0.4 · Rust 2021 · 72 birim test. Tasarım kararları: [`SPEC.md`](SPEC.md). Çekirdek davranış: [`USTA.md`](USTA.md).
+
+Yol haritası fikirleri: streaming, çoklu terminal sağlamlaştırma, gaps→curriculum otomasyonu, kendi-sağlık-denetimi.
