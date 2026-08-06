@@ -6,6 +6,7 @@ mod backend;
 mod brain;
 mod config;
 mod defaults;
+mod feedback;
 mod input;
 mod session;
 mod watcher;
@@ -53,6 +54,7 @@ async fn main() -> Result<()> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     let mut input_rx = input::spawn("sen> ", ready_rx);
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
+    let mut files = feedback::FileMemory::new();
 
     println!("Usta hazır — konu: {topic}. Kod yaz, kaydet; ben izlerim. (/quit ile çık)");
     let _ = ready_tx.send(()); // ilk prompt
@@ -86,7 +88,7 @@ async fn main() -> Result<()> {
                 // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
                 println!(); // yarım kalan prompt satırını kirletme
                 for path in debouncer.flush() {
-                    if let Err(e) = handle_file_change(&backend, &mut session, &path).await {
+                    if let Err(e) = handle_file_change(&backend, &mut session, &mut files, &path).await {
                         // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
                         eprintln!("(dosya feedback atlandı: {}: {e})", path.display());
                     }
@@ -261,13 +263,30 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
     Ok(results)
 }
 
-/// Kaydedilen dosyayı sentetik user turn olarak enjekte et → Socratic feedback.
-async fn handle_file_change(backend: &Backend, session: &mut Session, path: &Path) -> Result<()> {
+/// Kaydedilen dosyayı FileMemory'den geçir; ilk görüşte tam içerik, sonrasında
+/// diff olarak sentetik user turn'e çevir → Socratic feedback.
+async fn handle_file_change(
+    backend: &Backend,
+    session: &mut Session,
+    files: &mut feedback::FileMemory,
+    path: &Path,
+) -> Result<()> {
     let contents = std::fs::read_to_string(path)?;
-    let injected = format!(
-        "[Dosya kaydedildi: {}]\n{contents}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver.",
-        path.display()
-    );
+    let injected = match files.observe(path, contents) {
+        feedback::ChangePayload::Skip => return Ok(()),
+        feedback::ChangePayload::TooLarge(len) => {
+            println!("(büyük dosya izleme dışı: {} — {len} bayt)", path.display());
+            return Ok(());
+        }
+        feedback::ChangePayload::FirstSight(full) => format!(
+            "[Dosya kaydedildi: {}]\n{full}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver.",
+            path.display()
+        ),
+        feedback::ChangePayload::Diff(diff) => format!(
+            "[Dosya değişti: {}]\nDeğişiklik (unified diff):\n{diff}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver — değişen kısma odaklan.",
+            path.display()
+        ),
+    };
     session.push_user(&injected);
     let (reply, web) = backend.complete(&session.system, session.history()).await?;
     print_reply(&reply, web);

@@ -443,13 +443,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `FileMemory::observe(&mut self, path: &Path, current: String) -> ChangePayload`
 - Consumes: Task 3'ün select-loop'u — `handle_file_change` imzası `(&Backend, &mut Session, &mut FileMemory, &Path)` olur.
 
-- [ ] **Step 1: Cargo.toml'a `similar` ekle**
+- [x] **Step 1: Cargo.toml'a `similar` ekle**
 
 ```toml
 similar = "2"
 ```
 
-- [ ] **Step 2: Failing testleri yaz**
+- [x] **Step 2: Failing testleri yaz**
 
 `src/feedback.rs`'i test-önce iskeletle oluştur (önce sadece testler + `use`'lar — derlenmeyecek, o fail'imiz):
 
@@ -518,12 +518,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Fail'i gör**
+- [x] **Step 3: Fail'i gör**
 
 `src/main.rs`'e `mod feedback;` ekle. Run: `cargo test feedback`
 Expected: FAIL — `FileMemory`/`ChangePayload` tanımsız (derleme hatası).
 
-- [ ] **Step 4: Implemente et**
+- [x] **Step 4: Implemente et**
 
 `src/feedback.rs` başına:
 
@@ -591,12 +591,12 @@ impl FileMemory {
 }
 ```
 
-- [ ] **Step 5: Testlerin geçtiğini gör**
+- [x] **Step 5: Testlerin geçtiğini gör**
 
 Run: `cargo test feedback`
 Expected: 5 test PASS.
 
-- [ ] **Step 6: `handle_file_change`'i bağla**
+- [x] **Step 6: `handle_file_change`'i bağla**
 
 `src/main.rs` — imza ve gövde:
 
@@ -635,12 +635,12 @@ async fn handle_file_change(
 
 Select-loop'ta: `let mut files = feedback::FileMemory::new();` (debouncer'ın yanına) ve çağrı `handle_file_change(&backend, &mut session, &mut files, &path).await`.
 
-- [ ] **Step 7: Test + build**
+- [x] **Step 7: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS, build temiz.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock src/feedback.rs src/main.rs
