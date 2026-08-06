@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
     let topic_arg = match parse_command(&args)? {
         Command::Init => return run_init(),
         Command::Topics => return run_topics(),
+        Command::Reset(ResetTarget::Topic(t)) => return run_reset_topic(&t),
         Command::Start(t) => t,
     };
 
@@ -178,6 +179,13 @@ async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     }
 }
 
+/// Reset kapsamı.
+#[derive(Debug, PartialEq)]
+pub enum ResetTarget {
+    /// Bulunduğun projede tek konunun progress'i.
+    Topic(String),
+}
+
 /// Komut satırı komutu — argüman ayrıştırma tek yerde, saf ve test edilebilir.
 #[derive(Debug, PartialEq)]
 pub enum Command {
@@ -185,6 +193,8 @@ pub enum Command {
     Init,
     /// `usta topics` — global katalogdan konu listesi.
     Topics,
+    /// `usta reset <konu>` — progress sil (onaylı) + katalogdan düş.
+    Reset(ResetTarget),
     /// `usta` / `usta start [konu]` — öğrenme oturumu.
     Start(Option<String>),
 }
@@ -197,6 +207,10 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
         Some("start") => Ok(Command::Start(rest.next().cloned())),
         Some("init") => Ok(Command::Init),
         Some("topics") => Ok(Command::Topics),
+        Some("reset") => match rest.next().map(String::as_str) {
+            Some(topic) => Ok(Command::Reset(ResetTarget::Topic(slugify_topic(topic)))),
+            None => anyhow::bail!("kullanım: usta reset <konu>"),
+        },
         Some(other) => anyhow::bail!(
             "bilinmeyen komut: '{other}'. Komutlar: start [konu], init, topics"
         ),
@@ -293,6 +307,47 @@ fn run_topics() -> Result<()> {
         println!("{} | {} | {}", e.topic, e.project.display(), e.date);
     }
     Ok(())
+}
+
+/// `usta reset <konu>` — bulunduğun projenin o konudaki progress'ini sil
+/// (onaylı) ve global katalogdan düş. LLM gerekmez.
+fn run_reset_topic(topic: &str) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let Some(root) = config::find_project_root(&cwd) else {
+        anyhow::bail!("bu dizinde (veya üstünde) .usta yok — resetlenecek proje bulunamadı");
+    };
+    let path = progress::progress_path(&root, topic);
+    if !path.is_file() {
+        println!("kayıt yok: {}", path.display());
+        return Ok(());
+    }
+    if !confirm(&format!("{} silinecek. Emin misin? [e/H] ", path.display()), &["e", "evet"])? {
+        println!("vazgeçildi.");
+        return Ok(());
+    }
+    std::fs::remove_file(&path)
+        .with_context(|| format!("silinemedi: {}", path.display()))?;
+    println!("silindi: {}", path.display());
+
+    // Katalogdan da düş — katalog yoksa/okunamıyorsa sessizce geç.
+    let global = config::global_root()?;
+    let index_path = global.join("learner/index.md");
+    if let Ok(current) = std::fs::read_to_string(&index_path) {
+        let updated = index::remove(&current, topic, &root);
+        progress::write_atomic(&index_path, &updated)?;
+    }
+    Ok(())
+}
+
+/// Onay iste: stdin'den tek satır oku, kabul listesiyle (küçük harf)
+/// karşılaştır. Stdin kapalı/boş = hayır — güvenli varsayılan.
+fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
+    use std::io::Write;
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(yes.contains(&line.trim().to_lowercase().as_str()))
 }
 
 /// `usta init`'in per-dosya/dizin durum satırı.
@@ -472,6 +527,20 @@ mod tests {
     #[test]
     fn parse_unknown_command_errors() {
         assert!(parse_command(&["usta".into(), "rust".into()]).is_err());
+    }
+
+    #[test]
+    fn parse_reset_topic_is_slugified() {
+        let args = vec!["usta".into(), "reset".into(), "C++".into()];
+        assert_eq!(
+            parse_command(&args).unwrap(),
+            Command::Reset(ResetTarget::Topic("c".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_reset_without_arg_errors() {
+        assert!(parse_command(&["usta".into(), "reset".into()]).is_err());
     }
 
     /// `write_project_scaffold` bir temp dizinde `.usta/` iskeletini kurar —

@@ -428,7 +428,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `confirm(prompt: &str, yes: &[&str]) -> Result<bool>` — stdin'den okur; boş/kapalı stdin = hayır (güvenli varsayılan). Task 4 da kullanır.
 - Davranış: konu parse'ta slug'lanır (`"C++"` → `c`) — progress dosya adıyla aynı kural.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/index.rs` testlerine ekle:
 
@@ -473,12 +473,12 @@ fn parse_reset_without_arg_errors() {
 }
 ```
 
-- [ ] **Step 2: Fail'i gör**
+- [x] **Step 2: Fail'i gör**
 
 Run: `cargo test 'reset'`
 Expected: FAIL (`ResetTarget`/`remove` tanımsız).
 
-- [ ] **Step 3: Implemente et**
+- [x] **Step 3: Implemente et**
 
 `src/index.rs`'e ekle:
 
@@ -564,12 +564,12 @@ fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
 }
 ```
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: yeni 4 test dahil hepsi PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main.rs src/index.rs

@@ -72,6 +72,15 @@ fn render(content: &str, list: &[IndexEntry]) -> String {
     out
 }
 
+/// (konu, proje) satırını düş — eşleşme yoksa kayıtlar değişmeden kalır.
+pub fn remove(content: &str, topic: &str, project: &Path) -> String {
+    let list: Vec<IndexEntry> = entries(content)
+        .into_iter()
+        .filter(|e| !(e.topic == topic && e.project == project))
+        .collect();
+    render(content, &list)
+}
+
 /// Kapanışta çağrılır: kataloğu oku → upsert → atomik yaz.
 pub fn record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<()> {
     let path = global.join("learner/index.md");
@@ -127,5 +136,26 @@ mod tests {
     fn entries_skips_malformed_lines() {
         let content = "## Kayıtlar\n- bozuk satır boru yok\n- rust | /p/a | 2026-08-07\n";
         assert_eq!(entries(content).len(), 1);
+    }
+
+    #[test]
+    fn remove_drops_only_matching_line() {
+        let v = upsert(
+            &upsert("", "rust", Path::new("/p/a"), "2026-08-07"),
+            "js",
+            Path::new("/p/a"),
+            "2026-08-07",
+        );
+        let out = remove(&v, "rust", Path::new("/p/a"));
+        let list = entries(&out);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].topic, "js");
+    }
+
+    #[test]
+    fn remove_without_match_keeps_entries() {
+        let v = upsert("", "rust", Path::new("/p/a"), "2026-08-07");
+        let out = remove(&v, "rust", Path::new("/p/BASKA"));
+        assert_eq!(entries(&out).len(), 1);
     }
 }
