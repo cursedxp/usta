@@ -61,13 +61,13 @@ Hedef görünüm:
 - Consumes: yok.
 - Sözleşme: düz modda çıktı eski davranışa yakın kalır (`Usta> ...`, `(msg)`) — pipe edilen kullanım ve testler bozulmaz.
 
-- [ ] **Step 1: Cargo.toml'a termimad ekle**
+- [x] **Step 1: Cargo.toml'a termimad ekle**
 
 ```toml
 termimad = "0.30"
 ```
 
-- [ ] **Step 2: `src/ui.rs`'i yaz**
+- [x] **Step 2: `src/ui.rs`'i yaz**
 
 ```rust
 //! Sunum katmanı: kim konuşuyor tek bakışta belli olsun. ● (turuncu) = Usta,
@@ -146,7 +146,7 @@ fn skin() -> MadSkin {
 }
 ```
 
-- [ ] **Step 3: `main.rs` call-site'larını taşı**
+- [x] **Step 3: `main.rs` call-site'larını taşı**
 
 `mod ui;` ekle, sonra:
 
@@ -176,14 +176,14 @@ fn print_reply(reply: &str, web: bool) {
    - Kapanış `println!("Görüşürüz — suya girmeye devam et.")` → `ui::notice("Görüşürüz — suya girmeye devam et.")`
    - `run_init`/`run_topics`/`run_reset_*` çıktıları OLDUĞU GİBİ kalır (komut modu, sohbet değil).
 
-- [ ] **Step 4: Test + build + duman**
+- [x] **Step 4: Test + build + duman**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS (davranış değişmedi, sadece sunum).
 
 Duman (backend gerekmez): `echo "" | cargo run -- start deneme` → düz mod çıktısı ANSI'siz olmalı (pipe kapısı çalışıyor).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock src/ui.rs src/main.rs

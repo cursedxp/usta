@@ -12,6 +12,7 @@ mod index;
 mod input;
 mod progress;
 mod session;
+mod ui;
 mod watcher;
 
 use std::io::IsTerminal;
@@ -44,7 +45,7 @@ async fn main() -> Result<()> {
     let had_project_root = config::find_project_root(&cwd).is_some();
     let project_root = ensure_scaffold(&cwd)?;
     if !had_project_root {
-        println!("(.usta/ kuruldu)");
+        ui::notice(".usta/ kuruldu");
     }
 
     let topic = resolve_topic(topic_arg)?;
@@ -59,11 +60,11 @@ async fn main() -> Result<()> {
     // Dosya izleyici + girdi thread'i + debounce durumu.
     let mut watch_rx = watcher::spawn(&project_root)?;
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
-    let mut input_rx = input::spawn("sen> ", ready_rx);
+    let mut input_rx = input::spawn("■ ", ready_rx);
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
 
-    println!("Usta hazır — konu: {topic}. Kod yaz, kaydet; ben izlerim. (/quit ile çık)");
+    ui::banner(&topic);
 
     // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
     // 2-3 geri çağırma sorusuyla ısındırır (testing effect — USTA.md kuralı).
@@ -78,7 +79,7 @@ async fn main() -> Result<()> {
                 session.push_assistant(reply);
             }
             // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
-            Err(e) => eprintln!("(açılış drilli atlandı: {e})"),
+            Err(e) => ui::warn(&format!("açılış drilli atlandı: {e}")),
         }
     }
 
@@ -99,7 +100,7 @@ async fn main() -> Result<()> {
                                 print_reply(&reply, web);
                                 session.push_assistant(reply);
                             }
-                            Err(e) => eprintln!("(hata: {e})"),
+                            Err(e) => ui::warn(&format!("hata: {e}")),
                         }
                     }
                     let _ = ready_tx.send(());
@@ -115,7 +116,7 @@ async fn main() -> Result<()> {
                 for path in debouncer.flush() {
                     if let Err(e) = handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path).await {
                         // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
-                        eprintln!("(dosya feedback atlandı: {}: {e})", path.display());
+                        ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display()));
                     }
                 }
             }
@@ -123,10 +124,10 @@ async fn main() -> Result<()> {
     }
 
     if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
-        eprintln!("(progress güncellenemedi: {e})");
+        ui::warn(&format!("progress güncellenemedi: {e}"));
     }
 
-    println!("Görüşürüz — suya girmeye devam et.");
+    ui::notice("Görüşürüz — suya girmeye devam et.");
     Ok(())
 }
 
@@ -136,7 +137,7 @@ async fn flush_progress(backend: &mut Backend, session: &Session, project_root: 
     if session.history().is_empty() {
         return Ok(());
     }
-    println!("(oturum özetleniyor — progress yazılıyor…)");
+    ui::notice("oturum özetleniyor — progress yazılıyor…");
     let path = progress::progress_path(project_root, &session.topic);
     let existing = std::fs::read_to_string(&path).ok();
     let mut history = session.history().to_vec();
@@ -150,17 +151,17 @@ async fn flush_progress(backend: &mut Backend, session: &Session, project_root: 
         anyhow::bail!("model boş içerik döndürdü — dosya yazılmadı");
     }
     progress::write_atomic(&path, &content)?;
-    println!("(progress güncellendi: {})", path.display());
+    ui::notice(&format!("progress güncellendi: {}", path.display()));
 
     // Global kataloğu güncelle — başarısızlık progress yazımını geri almaz,
     // sadece not düşülür (katalog konfor katmanı, hafızanın kendisi değil).
     match config::global_root() {
         Ok(global) => {
             if let Err(e) = index::record(&global, &session.topic, project_root, &today()) {
-                eprintln!("(katalog güncellenemedi: {e})");
+                ui::warn(&format!("katalog güncellenemedi: {e}"));
             }
         }
-        Err(e) => eprintln!("(katalog güncellenemedi: {e})"),
+        Err(e) => ui::warn(&format!("katalog güncellenemedi: {e}")),
     }
 
     Ok(())
@@ -494,12 +495,9 @@ async fn handle_file_change(
     Ok(())
 }
 
-/// Usta yanıtını yazdır; web araştırıldıysa küçük not ekle.
+/// Usta yanıtını sunum katmanına devret.
 fn print_reply(reply: &str, web: bool) {
-    println!("Usta> {reply}");
-    if web {
-        println!("(🔎 web araştırıldı)");
-    }
+    ui::print_usta_reply(reply, web);
 }
 
 #[cfg(test)]
