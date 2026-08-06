@@ -1,6 +1,6 @@
 # Usta v0.2 — Hafıza + Gerçek Proaktiflik Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Usta'ya kalıcı hafıza (kapanışta progress yazımı), gerçekten proaktif dosya feedback'i (select-loop + debounce + diff + boyut tavanı) ve ucuz CLI oturum sürdürme (`--resume`) ekle.
 
@@ -1131,6 +1131,6 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS
-- [ ] `cargo build` — uyarısız
-- [ ] Manuel duman testi (backend varsa): oturum aç → bir dosya kaydet → Enter'sız feedback gelsin → `/quit` → `.usta/learner/progress/<konu>.md` oluşmuş/güncellenmiş olsun → yeni oturum aç → Usta önceki seviyeyi bildiğini göstersin.
+- [x] `cargo test` — tamamı PASS
+- [x] `cargo build` — uyarısız
+- [x] Manuel duman testi (backend varsa): oturum aç → bir dosya kaydet → Enter'sız feedback gelsin → `/quit` → `.usta/learner/progress/<konu>.md` oluşmuş/güncellenmiş olsun → yeni oturum aç → Usta önceki seviyeyi bildiğini göstersin.
