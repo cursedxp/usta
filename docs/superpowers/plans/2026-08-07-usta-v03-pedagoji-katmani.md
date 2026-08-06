@@ -217,7 +217,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `progress::opening_prompt` (Task 2), `progress::progress_path` (v0.2), select-loop + `&mut backend` (v0.2).
 - Davranış sözleşmesi: `.usta/learner/progress/<konu>.md` var ve boş değilse, ilk `sen> ` promptundan ÖNCE Usta drill sorusunu basar. Dosya yoksa (ilk oturum) hiçbir şey değişmez. Drill çağrısı hata verirse oturum normal devam eder.
 
-- [ ] **Step 1: Drill bloğunu ekle**
+- [x] **Step 1: Drill bloğunu ekle**
 
 `src/main.rs` — `println!("Usta hazır — ...")` satırı ile `let _ = ready_tx.send(());` satırı ARASINA:
 
@@ -240,12 +240,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: Test + build**
+- [x] **Step 2: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS, build temiz.
 
-- [ ] **Step 3: Manuel duman testi (backend varsa)**
+- [x] **Step 3: Manuel duman testi (backend varsa)**
 
 Temp dizinde `.usta/learner/progress/deneme.md` dosyasına elle şu içeriği yaz:
 
@@ -257,7 +257,7 @@ Temp dizinde `.usta/learner/progress/deneme.md` dosyasına elle şu içeriği ya
 
 `cargo run -- start deneme` başlat. Beklenen: `sen> ` promptundan önce Usta soru sorar. Dosyayı silip tekrar başlat → drill yok, direkt prompt. (Backend yoksa derleme+test yeterli.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/main.rs

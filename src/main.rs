@@ -59,6 +59,24 @@ async fn main() -> Result<()> {
     let mut files = feedback::FileMemory::new();
 
     println!("Usta hazır — konu: {topic}. Kod yaz, kaydet; ben izlerim. (/quit ile çık)");
+
+    // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
+    // 2-3 geri çağırma sorusuyla ısındırır (testing effect — USTA.md kuralı).
+    let has_progress = std::fs::read_to_string(progress::progress_path(&project_root, &topic))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if has_progress {
+        session.push_user(&progress::opening_prompt(&topic));
+        match backend.complete(&session.system, session.history()).await {
+            Ok((reply, web)) => {
+                print_reply(&reply, web);
+                session.push_assistant(reply);
+            }
+            // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
+            Err(e) => eprintln!("(açılış drilli atlandı: {e})"),
+        }
+    }
+
     let _ = ready_tx.send(()); // ilk prompt
 
     loop {

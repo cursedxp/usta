@@ -43,8 +43,7 @@ pub fn closing_prompt(topic: &str, existing: Option<&str>) -> String {
 
 /// Açılış drilli turn'ü: progress varsa oturum başında Usta ilk sözü alır ve
 /// geri çağırma sorusu sorar (testing effect — USTA.md "Açılış Drilli" kuralı).
-/// main.rs'e bağlanması Task 3'te — o güne kadar dead_code uyarısını bastır.
-#[allow(dead_code)]
+/// main.rs'e bağlandığı yer: Task 3 (açılış drilli tetiği).
 pub fn opening_prompt(topic: &str) -> String {
     format!(
         "[OTURUM AÇILIŞI — GERİ ÇAĞIRMA DRİLLİ]\n\
