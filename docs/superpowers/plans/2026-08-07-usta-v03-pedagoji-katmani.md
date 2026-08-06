@@ -113,7 +113,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: v0.2'nin `closing_prompt(topic, existing)` fonksiyonu (gövdesi değişir, imza aynı).
 - Produces: `progress::opening_prompt(topic: &str) -> String` — Task 3 açılış drilli bunu sentetik user turn olarak enjekte eder.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/progress.rs` test modülüne ekle:
 
@@ -135,12 +135,12 @@ fn opening_prompt_embeds_topic_and_asks_to_quiz() {
 }
 ```
 
-- [ ] **Step 2: Fail'i gör**
+- [x] **Step 2: Fail'i gör**
 
 Run: `cargo test progress`
 Expected: FAIL — `closing_prompt` yeni bölümleri içermiyor, `opening_prompt` tanımsız.
 
-- [ ] **Step 3: Implemente et**
+- [x] **Step 3: Implemente et**
 
 `closing_prompt`'un gövdesini şununla değiştir (imza aynı):
 
@@ -189,12 +189,12 @@ pub fn opening_prompt(topic: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: yeni 2 test dahil hepsi PASS (v0.2'nin `closing_prompt_embeds_topic_and_existing` ve `closing_prompt_marks_missing_file` testleri de geçmeye devam etmeli — format değişikliği topic/existing gömmeyi bozmuyor).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/progress.rs

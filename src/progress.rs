@@ -15,6 +15,8 @@ pub fn progress_path(project_root: &Path, topic: &str) -> PathBuf {
 }
 
 /// Kapanış çağrısının user-turn içeriği: mevcut dosya + katı üretim kuralları.
+/// Format pedagoji katmanını taşır: geri çağırma soruları (açılış drilli
+/// bunlardan seçer), hata günlüğü (tekrar = gap adayı), merdiven notu (fading).
 pub fn closing_prompt(topic: &str, existing: Option<&str>) -> String {
     let current = existing.unwrap_or("(dosya henüz yok)");
     format!(
@@ -23,10 +25,33 @@ pub fn closing_prompt(topic: &str, existing: Option<&str>) -> String {
          Mevcut dosya:\n---\n{current}\n---\n\n\
          Kurallar:\n\
          - Bu oturumdaki konuşmaya ve dosya feedback'lerine göre güncelle.\n\
-         - Yapı: `# {topic} — İlerleme` başlığı + `Seviye` / `Kapatılanlar` / `Gap'ler` maddeleri.\n\
-         - Gap'leri KANITLA yaz (hangi kodda/konuşmada görüldü).\n\
+         - Yapı: `# {topic} — İlerleme` başlığı + şu bölümler:\n\
+           `## Seviye` — tek satır durum.\n\
+           `## Kapatılanlar` — madde madde.\n\
+           `## Gap'ler` — KANITLA (hangi kodda/konuşmada görüldü).\n\
+           `## Geri çağırma soruları` — 3-5 soru + tek satır cevap. Sonraki oturumun \
+           açılış drilli bunlardan seçer: bu oturumda kapatılan konudan yeni soru ekle, \
+           iyice oturmuş eskileri çıkar.\n\
+           `## Hata günlüğü` — `hata tipi | kaç kez | son örnek` satırları. Bu oturumda \
+           görülen derleme/mantık hatalarını mevcut satırlarla BİRLEŞTİR (sayaç artır). \
+           3+ tekrar eden tipin yanına `GAP ADAYI` yaz.\n\
+           `## İpucu merdiveni` — hangi konuda hangi basamakta takıldı (fading kararı için).\n\
          - Oturumda kanıtı olmayan hiçbir şeyi ekleme, mevcut dosyadaki hâlâ geçerli bilgiyi koru.\n\
          - SADECE dosya içeriğini döndür — açıklama, selamlama, kod bloğu işareti yok."
+    )
+}
+
+/// Açılış drilli turn'ü: progress varsa oturum başında Usta ilk sözü alır ve
+/// geri çağırma sorusu sorar (testing effect — USTA.md "Açılış Drilli" kuralı).
+/// main.rs'e bağlanması Task 3'te — o güne kadar dead_code uyarısını bastır.
+#[allow(dead_code)]
+pub fn opening_prompt(topic: &str) -> String {
+    format!(
+        "[OTURUM AÇILIŞI — GERİ ÇAĞIRMA DRİLLİ]\n\
+         Konu: {topic}. Progress dosyandaki 'Geri çağırma soruları'ndan 2-3 tanesini seç \
+         ve bana SOR — cevaplarını verme, anlatma. Kısa tut: 2 dakikalık ısınma, sonra \
+         günün işine geçeriz. Progress'te soru yoksa seviyeme uygun 2 küçük hatırlama \
+         sorusu üret."
     )
 }
 
@@ -82,6 +107,22 @@ mod tests {
     fn closing_prompt_marks_missing_file() {
         let s = closing_prompt("rust", None);
         assert!(s.contains("(dosya henüz yok)"));
+    }
+
+    #[test]
+    fn closing_prompt_requests_rich_sections() {
+        let s = closing_prompt("rust", None);
+        assert!(s.contains("Geri çağırma soruları"));
+        assert!(s.contains("Hata günlüğü"));
+        assert!(s.contains("İpucu merdiveni"));
+    }
+
+    #[test]
+    fn opening_prompt_embeds_topic_and_asks_to_quiz() {
+        let s = opening_prompt("rust");
+        assert!(s.contains("rust"));
+        assert!(s.contains("GERİ ÇAĞIRMA DRİLLİ"));
+        assert!(s.contains("SOR"));
     }
 
     #[test]
