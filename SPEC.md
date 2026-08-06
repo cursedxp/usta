@@ -47,6 +47,13 @@
 7. **Eğitim planlama:** tespit edilen gap'lere göre hedefli mini-dersler/alıştırmalar kurgular. Planlar ve önerir — yaptırmaz.
 8. **Domaine göre yaklaşım seçimi:** her proje speklik değil. Yazılım → spek+mimari; marketing → brief/hipotez/ölçüm; git öğrenme → "spek gereksiz, direkt yap". Usta doğru yapılandırma-adımını seçer.
 
+## 4.5 Başlatma / Kullanım
+
+- **`usta`** (argsız) → eksikse global + proje `.usta/` **otomatik kurulur** (bootstrap), sonra konuyu sorar (TTY'de) veya `genel`'e düşer (piped).
+- **`usta start <konu>`** → konu açıkça verilir (slug'lanır: `"JavaScript Basics"` → `javascript`). Kısayol.
+- **`usta init`** → opsiyonel; sadece kurar (başlatmadan), per-dosya durum yazar. Artık zorunlu değil.
+- Konu = öğrenme başlığı/dosyalama anahtarı (`progress/<konu>.md`). **Ne inşa ettiğin** (proje/hedef) klasör + sohbette söylenir — Usta parça-başı "spek'in ne?" diye sorar.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
