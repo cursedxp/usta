@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     let mut session = Session::new(topic.clone(), system);
 
     // Dosya izleyiciyi proje kökünde başlat (proaktif feedback).
-    let watch_rx = watcher::spawn(&project_root)?;
+    let mut watch_rx = watcher::spawn(&project_root)?;
 
     println!("Usta hazır — konu: {topic}. Kod yaz, kaydet; ben izlerim. (/quit ile çık)");
 

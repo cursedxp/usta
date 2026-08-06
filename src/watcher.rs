@@ -6,16 +6,17 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc;
 use std::thread;
 
 use anyhow::{Context, Result};
 use notify::{EventKind, RecursiveMode, Watcher};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 /// `root` altını özyinelemeli izle; modify olaylarındaki dosya yollarını gönder.
-/// Dönen alıcı `try_recv` ile REPL döngüsünün başında boşaltılır.
-pub fn spawn(root: &Path) -> Result<Receiver<PathBuf>> {
-    let (out_tx, out_rx) = mpsc::channel::<PathBuf>();
+/// Dönen alıcı select-loop'ta `recv().await` (veya `try_recv`) ile tüketilir.
+pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
+    let (out_tx, out_rx) = unbounded_channel::<PathBuf>();
     let (ev_tx, ev_rx) = mpsc::channel::<notify::Result<notify::Event>>();
 
     let mut watcher = notify::recommended_watcher(move |res| {

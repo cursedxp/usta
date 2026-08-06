@@ -45,7 +45,7 @@
 - Produces: `watcher::spawn(root: &Path) -> Result<tokio::sync::mpsc::UnboundedReceiver<PathBuf>>` — Task 3'ün select-loop'u bu receiver'ı `recv().await` ile kullanacak.
 - `is_ignored`, `dedup_paths` değişmez (dedup Task 2'de silinecek).
 
-- [ ] **Step 1: Cargo.toml'a tokio `sync` + `time` feature'larını ekle**
+- [x] **Step 1: Cargo.toml'a tokio `sync` + `time` feature'larını ekle**
 
 ```toml
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
@@ -53,7 +53,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io
 
 (`time` bu görevde gerekmiyor ama Task 2-3 kullanacak — tek Cargo değişikliği burada toplanır.)
 
-- [ ] **Step 2: `src/watcher.rs`'te kanalı değiştir**
+- [x] **Step 2: `src/watcher.rs`'te kanalı değiştir**
 
 `use std::sync::mpsc::{self, Receiver};` satırını kaldır, yerine:
 
@@ -74,16 +74,16 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
 
 Geri kalan gövde aynı — `out_tx.send(path).is_err()` tokio `UnboundedSender`'da da senkron çalışır, thread içinden gönderim güvenli.
 
-- [ ] **Step 3: `src/main.rs` drain'i derlet**
+- [x] **Step 3: `src/main.rs` drain'i derlet**
 
 `main` içindeki drain bloğunda tek değişiklik: `watch_rx` artık tokio receiver, `try_recv()` `Result<T, TryRecvError>` döndürmeye devam eder — `while let Ok(p) = watch_rx.try_recv()` olduğu gibi derlenir. `let watch_rx` → `let mut watch_rx` yap (tokio `try_recv` `&mut self` ister).
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: tüm mevcut testler PASS (watcher testleri saf fonksiyonlarda — etkilenmez), build temiz.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock src/watcher.rs src/main.rs
