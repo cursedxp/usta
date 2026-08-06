@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         Command::Init => return run_init(),
         Command::Topics => return run_topics(),
         Command::Reset(ResetTarget::Topic(t)) => return run_reset_topic(&t),
+        Command::Reset(ResetTarget::Factory) => return run_reset_factory(),
         Command::Start(t) => t,
     };
 
@@ -184,6 +185,8 @@ async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
 pub enum ResetTarget {
     /// Bulunduğun projede tek konunun progress'i.
     Topic(String),
+    /// Bilinen tüm proje `.usta/`'ları + global brain — sıfır nokta.
+    Factory,
 }
 
 /// Komut satırı komutu — argüman ayrıştırma tek yerde, saf ve test edilebilir.
@@ -208,8 +211,9 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
         Some("init") => Ok(Command::Init),
         Some("topics") => Ok(Command::Topics),
         Some("reset") => match rest.next().map(String::as_str) {
+            Some("--factory") => Ok(Command::Reset(ResetTarget::Factory)),
             Some(topic) => Ok(Command::Reset(ResetTarget::Topic(slugify_topic(topic)))),
-            None => anyhow::bail!("kullanım: usta reset <konu>"),
+            None => anyhow::bail!("kullanım: usta reset <konu>  veya  usta reset --factory"),
         },
         Some(other) => anyhow::bail!(
             "bilinmeyen komut: '{other}'. Komutlar: start [konu], init, topics"
@@ -336,6 +340,47 @@ fn run_reset_topic(topic: &str) -> Result<()> {
         let updated = index::remove(&current, topic, &root);
         progress::write_atomic(&index_path, &updated)?;
     }
+    Ok(())
+}
+
+/// `usta reset --factory` — katalogdaki tüm projelerin `.usta/`'sı + global
+/// brain silinir. Sonraki `usta` çalıştırması her şeyi varsayılanlardan
+/// baştan kurar (bootstrap) — Usta kullanıcıyı hiç tanımamış gibi başlar.
+fn run_reset_factory() -> Result<()> {
+    let global = config::global_root()?;
+    let index_content =
+        std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
+    let mut targets: Vec<PathBuf> = index::entries(&index_content)
+        .into_iter()
+        .map(|e| e.project.join(".usta"))
+        .filter(|p| p.is_dir())
+        .collect();
+    targets.sort();
+    targets.dedup();
+
+    println!("FABRİKA SIFIRLAMASI — silinecekler:");
+    for t in &targets {
+        println!("  {}", t.display());
+    }
+    println!("  {} (global brain)", global.display());
+    println!("Not: katalogda olmayan eski projeler listede DEĞİL.");
+    println!("Kontrol: find ~ -maxdepth 5 -name .usta -type d");
+
+    if !confirm("Hepsi kalıcı silinecek. Onay için 'evet' yaz: ", &["evet"])? {
+        println!("vazgeçildi.");
+        return Ok(());
+    }
+    for t in &targets {
+        std::fs::remove_dir_all(t)
+            .with_context(|| format!("silinemedi: {}", t.display()))?;
+        println!("silindi: {}", t.display());
+    }
+    if global.is_dir() {
+        std::fs::remove_dir_all(&global)
+            .with_context(|| format!("silinemedi: {}", global.display()))?;
+        println!("silindi: {}", global.display());
+    }
+    println!("Sıfır nokta. Sonraki 'usta' çalıştırması her şeyi baştan kurar.");
     Ok(())
 }
 
@@ -541,6 +586,15 @@ mod tests {
     #[test]
     fn parse_reset_without_arg_errors() {
         assert!(parse_command(&["usta".into(), "reset".into()]).is_err());
+    }
+
+    #[test]
+    fn parse_reset_factory_flag() {
+        let args = vec!["usta".into(), "reset".into(), "--factory".into()];
+        assert_eq!(
+            parse_command(&args).unwrap(),
+            Command::Reset(ResetTarget::Factory)
+        );
     }
 
     /// `write_project_scaffold` bir temp dizinde `.usta/` iskeletini kurar —

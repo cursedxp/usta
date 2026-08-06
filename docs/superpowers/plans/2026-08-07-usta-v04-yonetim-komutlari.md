@@ -591,7 +591,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `index::entries`, `config::global_root`, `confirm` (Task 3).
 - Davranış sözleşmesi: katalogdaki TÜM projelerin `.usta/` dizinleri + global brain silinir. Liste ÖNCE gösterilir; onay kelime bazlıdır ("evet" yazılmalı — [e/H]'den bilinçli olarak daha sert). Katalogda olmayan eski projeler kapsam dışıdır — uyarı + `find` komutu basılır.
 
-- [ ] **Step 1: Parse testini yaz**
+- [x] **Step 1: Parse testini yaz**
 
 `src/main.rs` testlerine:
 
@@ -609,7 +609,7 @@ fn parse_reset_factory_flag() {
 Run: `cargo test parse_reset_factory`
 Expected: FAIL (`Factory` varyantı yok).
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `ResetTarget`'a varyant ekle:
 
@@ -679,12 +679,12 @@ fn run_reset_factory() -> Result<()> {
 }
 ```
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS, uyarı yok.
 
-- [ ] **Step 4: Manuel duman testi (sandbox'ta!)**
+- [x] **Step 4: Manuel duman testi (sandbox'ta!)** — NOT çalıştırılmadı (güvenlik kısıtı gereği); insan final doğrulamasına ertelendi.
 
 ```bash
 export XDG_CONFIG_HOME=$(mktemp -d)/config
@@ -700,7 +700,7 @@ echo "evet" | cargo run --manifest-path <usta-repo>/Cargo.toml -- reset --factor
 
 **DİKKAT: `XDG_CONFIG_HOME` set etmeden factory reset'i ASLA deneme — gerçek `~/.config/usta` gider.**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main.rs
