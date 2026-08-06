@@ -55,7 +55,6 @@ pub async fn run_check(root: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn is_cargo_project_true_when_manifest_exists() {
