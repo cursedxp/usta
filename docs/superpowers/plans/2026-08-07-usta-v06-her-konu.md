@@ -567,7 +567,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `SPEC.md`
 
-- [ ] **Step 1: §4.7'den sonra yeni bölüm ekle**
+- [x] **Step 1: §4.7'den sonra yeni bölüm ekle**
 
 ```markdown
 ## 4.8 Her-Konu Öğrenimi (v0.6)
@@ -580,17 +580,17 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 - **Kapanış çok-dosya:** tek çağrı `===DOSYA: <ad>===` bölücülü `progress`(her zaman) / `approach` / `curriculum`(değiştiğinde) üretir; bölücüsüz yanıt geriye-uyumlu progress sayılır; bilinmeyen ad uyarıyla atlanır.
 ```
 
-- [ ] **Step 2: "Alınan Kararlar" bölümüne ekle**
+- [x] **Step 2: "Alınan Kararlar" bölümüne ekle**
 
 ```markdown
 - **Her-konu (v0.6):** yaklaşım dosyaları elle değil ilk-oturum tanışmasıyla üretilir; curriculum proje-lokal (`.usta/learner/curriculum/`) yaşar — §7'deki global `learner/curriculum/` yerine (izolasyon: harita da konu+proje bağlamına ait). Kapanış bölücü formatı `===DOSYA: <ad>===`.
 ```
 
-- [ ] **Step 3: §7 dosya yapısında curriculum satırını güncelle**
+- [x] **Step 3: §7 dosya yapısında curriculum satırını güncelle**
 
 `curriculum/` satırının açıklamasını şu hale getir: `# gap'lere göre planlanan dersler + müfredat haritası — v0.6'dan itibaren proje-lokal .usta/learner/curriculum/<konu>.md`
 
-- [ ] **Step 4: Commit + push**
+- [x] **Step 4: Commit + push**
 
 ```bash
 git add SPEC.md

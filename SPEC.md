@@ -73,6 +73,15 @@ Kuralların tamamı USTA.md'de yaşar; Rust sadece tetikler (açılış turn'ü,
 - **`usta reset --factory`** — katalogdaki TÜM projelerin `.usta/`'sı + global brain silinir; liste önce gösterilir, onay için "evet" yazılır. Katalogda olmayan eski projeler kapsam dışı (uyarı + `find` ipucu basılır).
 - **Katalog otomatik güncellenir:** kapanış flush'ı `learner/index.md` sonundaki `## Kayıtlar` bölümüne `- konu | proje-yolu | YYYY-MM-DD` upsert eder. Yan etki: index system prompt'ta olduğundan Usta tüm başlıklardan haberdardır — izolasyon bozulmaz (progress yalnız aktif konudan yüklenir).
 
+## 4.8 Her-Konu Öğrenimi (v0.6)
+
+Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
+
+- **Yaklaşım üretimi:** yaklaşımı olmayan konuda ilk oturum `[YENİ KONU — TANIŞMA]` ile açılır (açık sohbet, form değil; yön kullanıcıda). Usta domain doğasını `_default.md`'nin üç sorusuyla türetir (pratik / çıktı / feedback), kapanışta `.usta/approaches/<konu>.md` yazılır. **Canlı belge:** oturum içinde revize edilir, elle düzenlenebilir.
+- **Müfredat haritası:** ilk oturumda web araştırmalı TAM harita `.usta/learner/curriculum/<konu>.md`'ye çıkarılır; her madde `görülmedi/görüldü/oturdu/derinleşildi`. Kapanışta güncellenir. Kapsam bekçiliği ("haritada X hâlâ açık"), drill beslemesi (oturdu-ama-eskidi bölgesi) ve derinlik ayarı (sığlaşma yasağı) buradan çalışır.
+- **Brain yüklemesi genel:** `approaches/` altındaki TÜM dosyalar (global ∪ proje, override proje lehine, alfabetik) + aktif konunun curriculum + progress'i system prompt'a girer. Yaklaşım seçimini kod değil USTA.md kuralı yapar.
+- **Kapanış çok-dosya:** tek çağrı `===DOSYA: <ad>===` bölücülü `progress`(her zaman) / `approach` / `curriculum`(değiştiğinde) üretir; bölücüsüz yanıt geriye-uyumlu progress sayılır; bilinmeyen ad uyarıyla atlanır.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -114,8 +123,8 @@ usta/
       javascript.md
     gaps/
       rust.md            # tespit edilen eksikler + kanıt
-    curriculum/
-      rust.md            # gap'lere göre planlanan dersler/alıştırmalar
+    curriculum/          # gap'lere göre planlanan dersler + müfredat haritası — v0.6'dan itibaren proje-lokal .usta/learner/curriculum/<konu>.md
+      rust.md            # görülmedi/görüldü/oturdu/derinleşildi durumlu konu ağacı
     tech-notes.md        # (opsiyonel, sonra) araştırılan teknoloji notları — iki kez araştırmasın
   approaches/
     software.md          # spek + mimari (ölçek okuma) + teknoloji seçimi + kod kalitesi
@@ -158,6 +167,7 @@ usta/
 - **Reset onayları (v0.4):** konu reseti `[e/H]`, factory reset kelime onayı ("evet"); stdin kapalı/boş = hayır (güvenli varsayılan). Reset komutları backend'siz çalışır.
 - **Sunum katmanı (v0.5):** roller ikonla ayrılır — `●` (turuncu 208) Usta bloğu, `■` kullanıcı promptu, soluk `·`/`!` sistem bildirimi. Usta yanıtları termimad ile markdown render edilir; LLM beklerken spinner. TTY değilse veya `NO_COLOR` set'liyse düz çıktı (pipe/test uyumu). Davranış katmanına dokunulmadı.
 - **Konu girişi (v0.5):** TTY promptunda tek kelime zorunlu — cümle girilirse yeniden sorulur (3 deneme, sonra ilk kelime açık bildirimle alınır). `usta start <konu>` ve pipe davranışı değişmedi.
+- **Her-konu (v0.6):** yaklaşım dosyaları elle değil ilk-oturum tanışmasıyla üretilir; curriculum proje-lokal (`.usta/learner/curriculum/`) yaşar — §7'deki global `learner/curriculum/` yerine (izolasyon: harita da konu+proje bağlamına ait). Kapanış bölücü formatı `===DOSYA: <ad>===`.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
