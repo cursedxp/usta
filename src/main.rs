@@ -245,10 +245,40 @@ fn resolve_topic(topic_arg: Option<String>) -> Result<String> {
         return Ok("genel".to_string());
     }
     let mut rl = DefaultEditor::new()?;
-    match rl.readline("Ne öğreneceksin/yapacaksın? (ör. rust, javascript): ") {
-        Ok(line) => Ok(slugify_topic(&line)),
-        // Ctrl-D / Ctrl-C promptta → engellemeden "genel"e düş.
-        Err(_) => Ok("genel".to_string()),
+    let mut last = String::new();
+    for attempt in 0..3 {
+        match rl.readline("Tek kelimeyle konu (ör. rust, javascript): ") {
+            Ok(line) => {
+                let t = line.trim().to_string();
+                if t.is_empty() {
+                    return Ok("genel".to_string());
+                }
+                if let Some(slug) = single_token(&t) {
+                    return Ok(slug);
+                }
+                last = t;
+                if attempt < 2 {
+                    println!("Konu tek kelime olmalı — dosyalama anahtarı bu (ör. rust).");
+                }
+            }
+            // Ctrl-D / Ctrl-C promptta → engellemeden "genel"e düş.
+            Err(_) => return Ok("genel".to_string()),
+        }
+    }
+    // Üç denemede tek kelime gelmedi — ilk kelimeyi al, açıkça bildir.
+    let slug = slugify_topic(&last);
+    ui::notice(&format!("ilk kelime konu alındı: {slug}"));
+    Ok(slug)
+}
+
+/// Girdi tek kelimeyse konu slug'ını döndür; cümleyse `None` — konu bir
+/// dosyalama anahtarıdır, cümleden sessizce ilk kelimeyi kapmak sürprizdir.
+pub fn single_token(input: &str) -> Option<String> {
+    let mut words = input.split_whitespace();
+    let first = words.next()?;
+    match words.next() {
+        Some(_) => None,
+        None => Some(slugify_topic(first)),
     }
 }
 
@@ -544,6 +574,22 @@ mod tests {
     #[test]
     fn slugify_empty_string_falls_back_to_genel() {
         assert_eq!(slugify_topic(""), "genel");
+    }
+
+    #[test]
+    fn single_token_accepts_one_word() {
+        assert_eq!(single_token("Rust"), Some("rust".to_string()));
+        assert_eq!(single_token("  C++  "), Some("c".to_string()));
+    }
+
+    #[test]
+    fn single_token_rejects_sentence() {
+        assert_eq!(single_token("aklimda bir proje var"), None);
+    }
+
+    #[test]
+    fn single_token_rejects_empty() {
+        assert_eq!(single_token("   "), None);
     }
 
     #[test]

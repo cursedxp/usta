@@ -308,7 +308,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Produces: `single_token(input: &str) -> Option<String>` — girdi tek kelimeyse slug'ı, birden çok kelimeyse `None`.
 - Davranış: "aklimda bir proje var" gibi cümle girilince sessizce `aklimda` konusu açılmaz — kullanıcıya tek kelime olduğu söylenir, yeniden sorulur (3 deneme; hâlâ cümleyse ilk kelime alınır ve bildirilir). Boş girdi / Ctrl-D / pipe davranışı DEĞİŞMEZ (`genel`).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/main.rs` test modülüne:
 
@@ -333,7 +333,7 @@ fn single_token_rejects_empty() {
 Run: `cargo test single_token`
 Expected: FAIL (fonksiyon tanımsız).
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 ```rust
 /// Girdi tek kelimeyse konu slug'ını döndür; cümleyse `None` — konu bir
@@ -378,12 +378,12 @@ pub fn single_token(input: &str) -> Option<String> {
     Ok(slug)
 ```
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: 3 yeni test dahil hepsi PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/main.rs
