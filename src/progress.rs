@@ -14,30 +14,75 @@ pub fn progress_path(project_root: &Path, topic: &str) -> PathBuf {
         .join(format!("{topic}.md"))
 }
 
-/// Kapanış çağrısının user-turn içeriği: mevcut dosya + katı üretim kuralları.
-/// Format pedagoji katmanını taşır: geri çağırma soruları (açılış drilli
-/// bunlardan seçer), hata günlüğü (tekrar = gap adayı), merdiven notu (fading).
-pub fn closing_prompt(topic: &str, existing: Option<&str>) -> String {
-    let current = existing.unwrap_or("(dosya henüz yok)");
+/// Konuya özel yaklaşım dosyası: `.usta/approaches/<konu>.md`.
+pub fn approach_path(project_root: &Path, topic: &str) -> PathBuf {
+    project_root.join(".usta/approaches").join(format!("{topic}.md"))
+}
+
+/// Konunun müfredat haritası: `.usta/learner/curriculum/<konu>.md`.
+pub fn curriculum_path(project_root: &Path, topic: &str) -> PathBuf {
+    project_root
+        .join(".usta/learner/curriculum")
+        .join(format!("{topic}.md"))
+}
+
+/// Kapanış yanıtı bölücüsü — model her dosyayı bununla başlatır.
+pub const FILE_DELIM: &str = "===DOSYA:";
+
+/// Kapanış yanıtını (ad, içerik) çiftlerine ayır. Bölücü yoksa tüm yanıt
+/// tek "progress" dosyası sayılır — eski format geriye uyumlu kalır.
+pub fn split_files(reply: &str) -> Vec<(String, String)> {
+    if !reply.contains(FILE_DELIM) {
+        return vec![("progress".to_string(), clean_markdown_reply(reply))];
+    }
+    let mut out = Vec::new();
+    for chunk in reply.split(FILE_DELIM).skip(1) {
+        let Some((header, body)) = chunk.split_once("===") else {
+            continue;
+        };
+        let name = header.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        out.push((name, clean_markdown_reply(body)));
+    }
+    out
+}
+
+/// Kapanış çağrısının user-turn içeriği: üç dosyanın mevcut hali + üretim
+/// kuralları. progress her zaman; approach/curriculum canlı belge —
+/// ilk oturumda veya değiştiğinde üretilir (USTA.md "Kapsam Bekçiliği").
+pub fn closing_prompt(
+    topic: &str,
+    progress: Option<&str>,
+    approach: Option<&str>,
+    curriculum: Option<&str>,
+) -> String {
+    let p = progress.unwrap_or("(dosya henüz yok)");
+    let a = approach.unwrap_or("(dosya henüz yok)");
+    let c = curriculum.unwrap_or("(dosya henüz yok)");
     format!(
-        "[OTURUM KAPANIYOR — PROGRESS GÜNCELLEME]\n\
-         Görev: `.usta/learner/progress/{topic}.md` dosyasının YENİ TAM içeriğini üret.\n\n\
-         Mevcut dosya:\n---\n{current}\n---\n\n\
+        "[OTURUM KAPANIYOR — DOSYA GÜNCELLEME]\n\
+         Görev: aşağıdaki üç dosyadan güncellenmesi gerekenleri üret. Her dosyayı şu \
+         satırla başlat: `===DOSYA: <ad>===` (ad: progress | approach | curriculum).\n\n\
+         Mevcut progress ({topic}):\n---\n{p}\n---\n\n\
+         Mevcut approach:\n---\n{a}\n---\n\n\
+         Mevcut curriculum:\n---\n{c}\n---\n\n\
          Kurallar:\n\
-         - Bu oturumdaki konuşmaya ve dosya feedback'lerine göre güncelle.\n\
-         - Yapı: `# {topic} — İlerleme` başlığı + şu bölümler:\n\
-           `## Seviye` — tek satır durum.\n\
-           `## Kapatılanlar` — madde madde.\n\
-           `## Gap'ler` — KANITLA (hangi kodda/konuşmada görüldü).\n\
-           `## Geri çağırma soruları` — 3-5 soru + tek satır cevap. Sonraki oturumun \
-           açılış drilli bunlardan seçer: bu oturumda kapatılan konudan yeni soru ekle, \
-           iyice oturmuş eskileri çıkar.\n\
-           `## Hata günlüğü` — `hata tipi | kaç kez | son örnek` satırları. Bu oturumda \
-           görülen derleme/mantık hatalarını mevcut satırlarla BİRLEŞTİR (sayaç artır). \
-           3+ tekrar eden tipin yanına `GAP ADAYI` yaz.\n\
-           `## İpucu merdiveni` — hangi konuda hangi basamakta takıldı (fading kararı için).\n\
-         - Oturumda kanıtı olmayan hiçbir şeyi ekleme, mevcut dosyadaki hâlâ geçerli bilgiyi koru.\n\
-         - SADECE dosya içeriğini döndür — açıklama, selamlama, kod bloğu işareti yok."
+         - `progress` HER ZAMAN üretilir. Yapı: `# {topic} — İlerleme` başlığı + \
+         `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (KANITLA) / \
+         `## Geri çağırma soruları` (3-5 soru + tek satır cevap; oturmuş eskileri çıkar, \
+         bu oturumdan yenileri ekle) / `## Hata günlüğü` (`tip | kaç kez | son örnek`, \
+         3+ tekrar = GAP ADAYI) / `## İpucu merdiveni`.\n\
+         - `approach` yalnız ilk oturumda veya yaklaşım bu oturumda değiştiyse üretilir — \
+         canlı belge, _default.md'deki üç soruya cevap verir (pratik / çıktı / feedback).\n\
+         - `curriculum` ilk oturumda TAM harita olarak çıkarılır (konu/alt-konu ağacı; her \
+         madde `görülmedi/görüldü/oturdu/derinleşildi` durumuyla; gerekiyorsa web \
+         araştırmasına dayan); sonraki oturumlarda yalnız durum değiştiyse üretilir. \
+         Kapsanmamış kritik madde haritada görünür kalmalı.\n\
+         - Oturumda kanıtı olmayanı ekleme; mevcut dosyalardaki geçerli bilgiyi koru \
+         (kullanıcı elle düzenlemiş olabilir — düzenlemesini ez-me).\n\
+         - Bölücü satırları dışında açıklama/selamlama yazma; her dosya saf markdown."
     )
 }
 
@@ -97,23 +142,70 @@ mod tests {
 
     #[test]
     fn closing_prompt_embeds_topic_and_existing() {
-        let s = closing_prompt("rust", Some("- Seviye: orta"));
+        let s = closing_prompt("rust", Some("- Seviye: orta"), None, None);
         assert!(s.contains("rust"));
         assert!(s.contains("- Seviye: orta"));
     }
 
     #[test]
     fn closing_prompt_marks_missing_file() {
-        let s = closing_prompt("rust", None);
+        let s = closing_prompt("rust", None, None, None);
         assert!(s.contains("(dosya henüz yok)"));
     }
 
     #[test]
     fn closing_prompt_requests_rich_sections() {
-        let s = closing_prompt("rust", None);
+        let s = closing_prompt("rust", None, None, None);
         assert!(s.contains("Geri çağırma soruları"));
         assert!(s.contains("Hata günlüğü"));
         assert!(s.contains("İpucu merdiveni"));
+    }
+
+    #[test]
+    fn paths_build_expected_layout() {
+        assert_eq!(
+            approach_path(Path::new("/proje"), "gtm"),
+            Path::new("/proje/.usta/approaches/gtm.md")
+        );
+        assert_eq!(
+            curriculum_path(Path::new("/proje"), "gtm"),
+            Path::new("/proje/.usta/learner/curriculum/gtm.md")
+        );
+    }
+
+    #[test]
+    fn split_files_without_delimiter_is_progress() {
+        let out = split_files("# Rust — İlerleme\niçerik");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "progress");
+        assert!(out[0].1.contains("içerik"));
+    }
+
+    #[test]
+    fn split_files_separates_three_files() {
+        let reply = "===DOSYA: progress===\nP İÇERİK\n===DOSYA: approach===\nA İÇERİK\n===DOSYA: curriculum===\nC İÇERİK\n";
+        let out = split_files(reply);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0], ("progress".to_string(), "P İÇERİK".to_string()));
+        assert_eq!(out[1], ("approach".to_string(), "A İÇERİK".to_string()));
+        assert_eq!(out[2], ("curriculum".to_string(), "C İÇERİK".to_string()));
+    }
+
+    #[test]
+    fn split_files_cleans_fenced_content() {
+        let reply = "===DOSYA: progress===\n```markdown\n# başlık\n```\n";
+        let out = split_files(reply);
+        assert_eq!(out[0].1, "# başlık");
+    }
+
+    #[test]
+    fn closing_prompt_embeds_all_three_currents_and_delimiter() {
+        let s = closing_prompt("rust", Some("PMEVCUT"), Some("AMEVCUT"), Some("CMEVCUT"));
+        assert!(s.contains("PMEVCUT"));
+        assert!(s.contains("AMEVCUT"));
+        assert!(s.contains("CMEVCUT"));
+        assert!(s.contains("===DOSYA:"));
+        assert!(s.contains("görülmedi/görüldü/oturdu/derinleşildi"));
     }
 
     #[test]

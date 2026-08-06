@@ -143,27 +143,51 @@ async fn ask_usta(
     result
 }
 
-/// Oturum kapanışında progress dosyasını LLM'e tam-içerik yeniden yazdır.
-/// Boş oturumda (hiç turn yok) dosyaya dokunma.
-async fn flush_progress(backend: &mut Backend, session: &Session, project_root: &Path) -> Result<()> {
+/// Oturum kapanışında progress/approach/curriculum dosyalarını LLM'e üretir.
+/// Boş oturumda dokunmaz; bilinmeyen dosya adı uyarıyla atlanır (keyfi yola
+/// asla yazılmaz).
+async fn flush_progress(
+    backend: &mut Backend,
+    session: &Session,
+    project_root: &Path,
+) -> Result<()> {
     if session.history().is_empty() {
         return Ok(());
     }
-    ui::notice("oturum özetleniyor — progress yazılıyor…");
-    let path = progress::progress_path(project_root, &session.topic);
-    let existing = std::fs::read_to_string(&path).ok();
+    ui::notice("oturum özetleniyor — dosyalar yazılıyor…");
+    let p_path = progress::progress_path(project_root, &session.topic);
+    let a_path = progress::approach_path(project_root, &session.topic);
+    let c_path = progress::curriculum_path(project_root, &session.topic);
+    let read = |p: &Path| std::fs::read_to_string(p).ok();
     let mut history = session.history().to_vec();
-    history.push(Message::user(progress::closing_prompt(
+    history.push(Message::user(&progress::closing_prompt(
         &session.topic,
-        existing.as_deref(),
+        read(&p_path).as_deref(),
+        read(&a_path).as_deref(),
+        read(&c_path).as_deref(),
     )));
     let (reply, _) = ask_usta(backend, &session.system, &history).await?;
-    let content = progress::clean_markdown_reply(&reply);
-    if content.is_empty() {
-        anyhow::bail!("model boş içerik döndürdü — dosya yazılmadı");
+    let files = progress::split_files(&reply);
+    if files.is_empty() {
+        anyhow::bail!("model dosya üretmedi — hiçbir şey yazılmadı");
     }
-    progress::write_atomic(&path, &content)?;
-    ui::notice(&format!("progress güncellendi: {}", path.display()));
+    for (name, content) in files {
+        let path = match name.as_str() {
+            "progress" => p_path.clone(),
+            "approach" => a_path.clone(),
+            "curriculum" => c_path.clone(),
+            other => {
+                ui::warn(&format!("bilinmeyen kapanış dosyası atlandı: {other}"));
+                continue;
+            }
+        };
+        if content.is_empty() {
+            ui::warn(&format!("boş içerik atlandı: {name}"));
+            continue;
+        }
+        progress::write_atomic(&path, &content)?;
+        ui::notice(&format!("güncellendi: {}", path.display()));
+    }
 
     // Global kataloğu güncelle — başarısızlık progress yazımını geri almaz,
     // sadece not düşülür (katalog konfor katmanı, hafızanın kendisi değil).

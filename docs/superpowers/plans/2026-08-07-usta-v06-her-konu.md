@@ -183,7 +183,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `progress::closing_prompt(topic, progress: Option<&str>, approach: Option<&str>, curriculum: Option<&str>) -> String` — İMZA DEĞİŞİR; v0.3 testlerindeki çağrılar `None, None, None` ile güncellenir.
 - Sözleşme: `progress` her kapanışta üretilir; `approach`/`curriculum` yalnız ilk oturumda veya değiştiğinde. Bilinmeyen dosya adı uyarıyla atlanır — asla keyfi yola yazılmaz.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/progress.rs` test modülüne ekle (v0.3'ün `closing_prompt(...)` çağrılarını `closing_prompt("rust", None, None, None)` biçimine güncelle):
 
@@ -239,7 +239,7 @@ fn closing_prompt_embeds_all_three_currents_and_delimiter() {
 Run: `cargo test progress`
 Expected: yeni testler FAIL.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `src/progress.rs`'e ekle/değiştir:
 
@@ -321,7 +321,7 @@ pub fn closing_prompt(
 }
 ```
 
-- [ ] **Step 3: `flush_progress`'i çok-dosyaya geçir**
+- [x] **Step 3: `flush_progress`'i çok-dosyaya geçir**
 
 `src/main.rs` — gövdeyi değiştir:
 
@@ -375,12 +375,12 @@ async fn flush_progress(
 
 (fonksiyonun sonundaki v0.4 katalog `index::record` bloğu OLDUĞU GİBİ kalır.)
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: yeni 5 test dahil hepsi PASS (v0.3 çağrı güncellemeleri dahil).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/progress.rs src/main.rs
