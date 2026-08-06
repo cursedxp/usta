@@ -66,9 +66,13 @@ usta start rust-takvim
 
 ## 6. Mimari — "ince kabuk, kalın beyin"
 
-- **Rust = ince kabuk:** CLI, Claude (Opus) client, dosya izleme (`notify` crate), web araştırma, sağlık denetimi.
+- **Rust = ince kabuk:** CLI, LLM backend, dosya izleme (`notify` crate), web araştırma, sağlık denetimi.
 - **Zekâ + kişilik = markdown dosyalarında** (headspace deseni). Davranış değiştirmek = markdown düzenle, Rust'a dokunma.
-- **Model:** Opus (hepsi). Config **değiştirilebilir** tutulur → ileride Haiku/Sonnet routing eklenebilir.
+- **Takılabilir LLM backend (her ikisi de destekli — kimisinde API var, kimisinde yok):**
+  - **CLI (default):** yerel `claude` CLI (Claude Code) → mevcut auth/abonelik, **API key yok, token faturası yok**. `--allowedTools WebSearch` araştırmayı açar + "dokunmaz"ı araç seviyesinde zorlar.
+  - **API (opsiyonel):** `ANTHROPIC_API_KEY` ile Anthropic Messages API (reqwest), model `claude-opus-4-8`, server-side web_search, adaptive thinking.
+  - Seçim: `USTA_BACKEND=cli|api` öncelikli; yoksa `claude` PATH'te → CLI, yoksa key varsa → API.
+- **Çağrı:** non-streaming (raw reqwest'te client timeout yok → sağlam). Streaming sonraki sürüm.
 
 ## 7. Dosya Yapısı (wiki-linkli)
 
