@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
         .unwrap_or(false);
     if has_progress {
         session.push_user(&progress::opening_prompt(&topic));
-        match backend.complete(&session.system, session.history()).await {
+        match ask_usta(&mut backend, &session.system, session.history()).await {
             Ok((reply, web)) => {
                 print_reply(&reply, web);
                 session.push_assistant(reply);
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
                     }
                     if !line.is_empty() {
                         session.push_user(&line);
-                        match backend.complete(&session.system, session.history()).await {
+                        match ask_usta(&mut backend, &session.system, session.history()).await {
                             Ok((reply, web)) => {
                                 print_reply(&reply, web);
                                 session.push_assistant(reply);
@@ -131,6 +131,18 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// LLM çağrısını spinner ile sar — kullanıcı beklerken sessizlik olmasın.
+async fn ask_usta(
+    backend: &mut Backend,
+    system: &str,
+    history: &[Message],
+) -> Result<(String, bool)> {
+    let spinner = ui::Spinner::start("Usta düşünüyor…");
+    let result = backend.complete(system, history).await;
+    spinner.stop().await;
+    result
+}
+
 /// Oturum kapanışında progress dosyasını LLM'e tam-içerik yeniden yazdır.
 /// Boş oturumda (hiç turn yok) dosyaya dokunma.
 async fn flush_progress(backend: &mut Backend, session: &Session, project_root: &Path) -> Result<()> {
@@ -145,7 +157,7 @@ async fn flush_progress(backend: &mut Backend, session: &Session, project_root: 
         &session.topic,
         existing.as_deref(),
     )));
-    let (reply, _) = backend.complete(&session.system, &history).await?;
+    let (reply, _) = ask_usta(backend, &session.system, &history).await?;
     let content = progress::clean_markdown_reply(&reply);
     if content.is_empty() {
         anyhow::bail!("model boş içerik döndürdü — dosya yazılmadı");
@@ -489,7 +501,7 @@ async fn handle_file_change(
         ));
     }
     session.push_user(&injected);
-    let (reply, web) = backend.complete(&session.system, session.history()).await?;
+    let (reply, web) = ask_usta(backend, &session.system, session.history()).await?;
     print_reply(&reply, web);
     session.push_assistant(reply);
     Ok(())

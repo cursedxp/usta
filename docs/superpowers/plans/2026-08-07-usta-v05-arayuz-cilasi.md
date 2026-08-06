@@ -210,7 +210,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `main::ask_usta(&mut Backend, &str, &[Message]) -> Result<(String, bool)>` (async)
 - Sözleşme: LLM çağrısı sürerken tek satır animasyon; yanıt basılmadan önce satır tamamen silinir (`\r` + `\x1b[2K`).
 
-- [ ] **Step 1: `Spinner`'ı ui.rs'e ekle**
+- [x] **Step 1: `Spinner`'ı ui.rs'e ekle**
 
 ```rust
 /// LLM beklerken tek satır animasyon. Düz modda hiç çizmez.
@@ -256,7 +256,7 @@ impl Spinner {
 }
 ```
 
-- [ ] **Step 2: `ask_usta` sarmalayıcısını ekle, çağrı yerlerini değiştir**
+- [x] **Step 2: `ask_usta` sarmalayıcısını ekle, çağrı yerlerini değiştir**
 
 `src/main.rs`:
 
@@ -281,12 +281,12 @@ DÖRT çağrı yerinde `backend.complete(...)` → `ask_usta(&mut backend, ...)`
 3. Açılış drilli bloğu (v0.3)
 4. `flush_progress`
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/ui.rs src/main.rs
