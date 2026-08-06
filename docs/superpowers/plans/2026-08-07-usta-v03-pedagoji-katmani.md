@@ -1,6 +1,6 @@
 # Usta v0.3 — Pedagoji Katmanı Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Usta'yı "feedback veren bot"tan "seni sınayan usta"ya çevir: oturum-açılış geri çağırma drilli (testing effect), anlat-modu (Feynman), ipucu merdiveni (fading) ve `cargo check` tahmin protokolü (hypercorrection) ekle.
 
@@ -555,7 +555,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS
-- [ ] `cargo build` — uyarısız
-- [ ] **Migrasyon:** `rm ~/.config/usta/USTA.md` çalıştır, ardından herhangi bir dizinde `usta` bir kez aç-kapa — global USTA.md yeni pedagoji kurallarıyla yeniden yazılmış olmalı (`grep "Tahmin Protokolü" ~/.config/usta/USTA.md` dolu dönmeli).
-- [ ] Manuel duman testi (backend varsa): (1) progress'li konuda oturum aç → Usta ilk sözü alıp soru sorsun. (2) Cargo projesinde bozuk kod kaydet → hata dökülmesin, tahmin sorulsun. (3) `/quit` → progress dosyasında `## Geri çağırma soruları` ve `## Hata günlüğü` bölümleri oluşsun.
+- [x] `cargo test` — tamamı PASS
+- [x] `cargo build` — uyarısız
+- [x] **Migrasyon:** `rm ~/.config/usta/USTA.md` çalıştır, ardından herhangi bir dizinde `usta` bir kez aç-kapa — global USTA.md yeni pedagoji kurallarıyla yeniden yazılmış olmalı (`grep "Tahmin Protokolü" ~/.config/usta/USTA.md` dolu dönmeli).
+- [x] Manuel duman testi (backend varsa): (1) progress'li konuda oturum aç → Usta ilk sözü alıp soru sorsun. (2) Cargo projesinde bozuk kod kaydet → hata dökülmesin, tahmin sorulsun. (3) `/quit` → progress dosyasında `## Geri çağırma soruları` ve `## Hata günlüğü` bölümleri oluşsun.
