@@ -4,10 +4,6 @@
 //! Cargo projesi değilse / check koşamazsa sessizce yok sayılır — feedback
 //! akışı asla engellenmez.
 
-// Henüz hiçbir yerden çağrılmıyor (Task 5 bağlayana kadar) — geçici olarak
-// dead_code'u sustur. Task 5 kablolayınca bu satır kaldırılır.
-#![allow(dead_code)]
-
 use std::path::Path;
 use std::time::Duration;
 

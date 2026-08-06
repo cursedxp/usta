@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
                 // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
                 println!(); // yarım kalan prompt satırını kirletme
                 for path in debouncer.flush() {
-                    if let Err(e) = handle_file_change(&mut backend, &mut session, &mut files, &path).await {
+                    if let Err(e) = handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path).await {
                         // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
                         eprintln!("(dosya feedback atlandı: {}: {e})", path.display());
                     }
@@ -313,15 +313,17 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
 }
 
 /// Kaydedilen dosyayı FileMemory'den geçir; ilk görüşte tam içerik, sonrasında
-/// diff olarak sentetik user turn'e çevir → Socratic feedback.
+/// diff olarak sentetik user turn'e çevir → Socratic feedback. Cargo projesiyse
+/// check sonucu "sadece Usta'nın gözü için" bloğuyla eklenir (tahmin protokolü).
 async fn handle_file_change(
     backend: &mut Backend,
     session: &mut Session,
     files: &mut feedback::FileMemory,
+    project_root: &Path,
     path: &Path,
 ) -> Result<()> {
     let contents = std::fs::read_to_string(path)?;
-    let injected = match files.observe(path, contents) {
+    let mut injected = match files.observe(path, contents) {
         feedback::ChangePayload::Skip => return Ok(()),
         feedback::ChangePayload::TooLarge(len) => {
             println!("(büyük dosya izleme dışı: {} — {len} bayt)", path.display());
@@ -336,6 +338,11 @@ async fn handle_file_change(
             path.display()
         ),
     };
+    if let Some(check_result) = check::run_check(project_root).await {
+        injected.push_str(&format!(
+            "\n\n[cargo check sonucu — SADECE SENİN GÖZÜN İÇİN, kullanıcıya doğrudan aktarma; tahmin protokolünü uygula]\n{check_result}"
+        ));
+    }
     session.push_user(&injected);
     let (reply, web) = backend.complete(&session.system, session.history()).await?;
     print_reply(&reply, web);

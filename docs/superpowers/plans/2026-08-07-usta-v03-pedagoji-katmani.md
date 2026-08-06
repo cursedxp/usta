@@ -435,7 +435,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `check::run_check` (Task 4), USTA.md blok etiketi (Task 1 — birebir aynı metin).
 - Produces: `handle_file_change(&mut Backend, &mut Session, &mut FileMemory, &Path /*project_root*/, &Path /*path*/)` — yeni imza.
 
-- [ ] **Step 1: `handle_file_change`'i güncelle**
+- [x] **Step 1: `handle_file_change`'i güncelle**
 
 İmza `project_root` alır; `injected` kurulduktan sonra check bloğu eklenir:
 
@@ -485,16 +485,16 @@ Select-loop'taki çağrıyı güncelle:
 if let Err(e) = handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path).await {
 ```
 
-- [ ] **Step 2: Test + build**
+- [x] **Step 2: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS, build temiz.
 
-- [ ] **Step 3: Manuel duman testi (backend varsa)**
+- [x] **Step 3: Manuel duman testi (backend varsa)**
 
 Temp'te mini cargo projesi kur (`cargo init deneme-proje`), içinde `usta start rust` aç, `src/main.rs`'e bilerek tip hatası yaz-kaydet. Beklenen: Usta hata mesajını YAPIŞTIRMAZ — "nerede patlar?" diye tahmin sorar. Hatasız kayıtta normal feedback. (Backend yoksa derleme+test yeterli.)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/main.rs
