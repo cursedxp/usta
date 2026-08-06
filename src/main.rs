@@ -170,7 +170,7 @@ async fn flush_progress(
     let c_path = progress::curriculum_path(project_root, &session.topic);
     let read = |p: &Path| std::fs::read_to_string(p).ok();
     let mut history = session.history().to_vec();
-    history.push(Message::user(&progress::closing_prompt(
+    history.push(Message::user(progress::closing_prompt(
         &session.topic,
         read(&p_path).as_deref(),
         read(&a_path).as_deref(),

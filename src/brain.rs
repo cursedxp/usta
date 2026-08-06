@@ -85,7 +85,7 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str) ->
 
     let project_usta: Option<PathBuf> = project.map(|p| p.join(".usta"));
 
-    read_all_approaches(project_usta.as_ref(), &global, &mut parts);
+    read_all_approaches(project_usta.as_ref(), global, &mut parts);
 
     if let Some(dir) = &project_usta {
         for rel in [
