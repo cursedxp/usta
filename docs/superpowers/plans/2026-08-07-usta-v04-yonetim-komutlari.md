@@ -1,6 +1,6 @@
 # Usta v0.4 — Yönetim Komutları Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Öğrenme kayıtlarını görünür ve yönetilebilir yap: global katalog otomatik güncellenir (`## Kayıtlar` upsert), `usta topics` listeler, `usta reset <konu>` tek konuyu siler, `usta reset --factory` her şeyi (bilinen tüm proje `.usta/`'ları + global brain) onaylı sıfırlar.
 
@@ -764,11 +764,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS
-- [ ] `cargo build` — uyarısız
-- [ ] Sandbox duman testi (`XDG_CONFIG_HOME` set edilmiş halde):
+- [x] `cargo test` — tamamı PASS
+- [x] `cargo build` — uyarısız
+- [x] Sandbox duman testi (`XDG_CONFIG_HOME` set edilmiş halde):
   1. Backend varsa: oturum aç-kapa → `usta topics` yeni satırı göstersin (`konu | proje | bugünün tarihi`).
   2. `usta reset <konu>` → `[e/H]` sorsun, "e" ile progress dosyası silinsin, `topics`'ten düşsün.
   3. `usta reset --factory` → listeyi bassın, "evet" ile sandbox'taki tüm `.usta` + global gitsin; sonraki `usta` sıfırdan kursun.
   4. `usta bilinmeyenkomut` → net hata mesajı.
-- [ ] **Güvenlik kontrolü:** hiçbir adımda gerçek `~/.config/usta`'ya dokunulmadı (tüm manuel testler `XDG_CONFIG_HOME` sandbox'ıyla).
+- [x] **Güvenlik kontrolü:** hiçbir adımda gerçek `~/.config/usta`'ya dokunulmadı (tüm manuel testler `XDG_CONFIG_HOME` sandbox'ıyla).
