@@ -499,7 +499,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Interfaces:** markdown — Task 2/3'ün prompt'larındaki kavramlar (`_default.md'deki üç soru`, `Kapsam Bekçiliği`, `canlı belge`) burada TANIMLANIR.
 
-- [ ] **Step 1: USTA.md'ye üç bölüm ekle**
+- [x] **Step 1: USTA.md'ye üç bölüm ekle**
 
 "Tahmin Protokolü" bölümünden sonra:
 
@@ -526,7 +526,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Sığlaşma yasak:** `oturdu` işaretlenen konu bitmez — daha zor varyantla geri gelir. Seviye arttıkça soruların haritanın derin katmanından (uç vakalar, tasarım kararları, "neden böyle") gelir. Zorluk hep mevcut seviyenin bir tık üstünde — öğrenme hazzı o dengeden gelir.
 ```
 
-- [ ] **Step 2: `approaches/_default.md`'yi yeniden yaz**
+- [x] **Step 2: `approaches/_default.md`'yi yeniden yaz**
 
 Dosyanın tüm içeriğini şununla değiştir:
 
@@ -547,7 +547,7 @@ Kurallar:
 - Ürettiğin yaklaşım canlı belgedir — bkz. USTA.md "Canlı Belgeler".
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add USTA.md approaches/_default.md

@@ -1,17 +1,14 @@
-# Yaklaşım — Default (domain-agnostik)
+# Varsayılan Yaklaşım — domain'i sen türet
 
-Her domain speklik değildir. Doğru yapılandırma-adımını **domaine göre** seç:
+Her konunun hazır yaklaşım dosyası yoktur ve olması da gerekmez: İLK oturumda şu üç soruyu cevaplayarak konuya özel yaklaşımı SEN üretirsin (kapanışta `approach` dosyası olarak kalıcılaşır):
 
-- **Yazılım** → spek + mimari (bkz. `approaches/software.md`).
-- **Marketing / içerik** → brief + hipotez + ölçüm (spek değil).
-- **Bir aracı öğrenme** (ör. git komutları) → "**spek gereksiz, direkt yap**" — deneyerek öğrenilir, plan felç yaratır.
+1. **Pratik nedir?** Bu domain'de "yaparak öğrenme" neye benzer? — kod projesi inşa etmek · senaryo/lab'da komut denemek · öğrendiğini gerçek işine uygulamak · vaka üzerinden tartışmak
+2. **Çıktı/artifact nedir?** Öğrenci ne üretir? — kod dosyası · yazılı plan/brief (`.md`) · hiçbiri (saf sohbet de geçerli)
+3. **Feedback neye bakar?** — kod kalitesi · mantık/varsayım delikleri · karar gerekçesi · uygulama doğruluğu
 
-## Kural
+Kurallar:
 
-Yapılandırma-adımının kendisi bir amaç değil, aracı. Amaç: kullanıcıyı en hızlı "suya sokan" adım hangisiyse o.
-
-- Bazı işler net bir mini-spek ister.
-- Bazıları sadece bir yön cümlesi + "başla" ister.
-- Bazıları hiç plan istemez — **"just start"**, yaparak öğren.
-
-Kararsızsan hafif taraftan başla: az yapı → hızlı başlangıç. Fazla planlama ADHD'li kullanıcıda en büyük risk.
+- **Örnekler sınırlayıcı DEĞİL** — üç soru açık uçludur. Domain hiçbir örneğe uymuyorsa (fiziksel beceri, sanat, dil, ne olursa) o domain'e uygun YENİ cevabı türet. Kullanıcının söylediği her zaman şablondan önce gelir.
+- Spek her domain'de gerekmez — "spek gereksiz, direkt yap" da geçerli bir cevaptır.
+- Artifact'lı domain'lerde kullanıcıyı düşüncesini DOSYAYA yazmaya teşvik et: dosya kaydı = proaktif feedback kancası. Marketing planı da `.md`'ye yazılır, kod gibi izlenir.
+- Ürettiğin yaklaşım canlı belgedir — bkz. USTA.md "Canlı Belgeler".
