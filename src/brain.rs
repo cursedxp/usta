@@ -39,6 +39,32 @@ fn read_approach_with_override(
     }
 }
 
+/// `approaches/` altındaki TÜM `.md` dosyalarını yükle — global ∪ proje,
+/// aynı ad proje lehine override edilir (read_approach_with_override).
+/// Alfabetik sıra: system prompt deterministik kalsın. Hangi yaklaşımın
+/// uygulanacağını kod değil USTA.md "Domaine göre yaklaşım" kuralı seçer.
+fn read_all_approaches(project_usta: Option<&PathBuf>, global: &Path, parts: &mut Vec<String>) {
+    let mut names: Vec<String> = Vec::new();
+    let mut collect = |dir: &std::path::Path| {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".md") && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+    };
+    collect(&global.join("approaches"));
+    if let Some(p) = project_usta {
+        collect(&p.join("approaches"));
+    }
+    names.sort();
+    for name in names {
+        read_approach_with_override(project_usta, global, &name, parts);
+    }
+}
+
 /// Global brain + (varsa) proje override/ilerlemesini birleştirip system
 /// prompt üret. `project`, `.usta/` İÇEREN proje kökü — proje dosyaları
 /// `project.join(".usta")` altında yaşar (`.usta`'nın kendisi değil).
@@ -59,12 +85,15 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str) ->
 
     let project_usta: Option<PathBuf> = project.map(|p| p.join(".usta"));
 
-    read_approach_with_override(project_usta.as_ref(), global, "software.md", &mut parts);
-    read_approach_with_override(project_usta.as_ref(), global, "_default.md", &mut parts);
+    read_all_approaches(project_usta.as_ref(), &global, &mut parts);
 
     if let Some(dir) = &project_usta {
-        let rel = format!("learner/progress/{topic}.md");
-        read_section(&dir.join(&rel), &rel, &mut parts);
+        for rel in [
+            format!("learner/curriculum/{topic}.md"),
+            format!("learner/progress/{topic}.md"),
+        ] {
+            read_section(&dir.join(&rel), &rel, &mut parts);
+        }
     }
 
     if parts.is_empty() {
@@ -170,6 +199,51 @@ mod tests {
         let sys = load_system_prompt(&global, None, "rust");
         assert!(sys.contains("ÇEKIRDEK"));
         assert!(!sys.contains("progress/rust.md"));
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn loads_every_approach_file_not_just_hardcoded() {
+        let (global, _project) = temp_pair("allapproaches");
+        fs::create_dir_all(global.join("approaches")).unwrap();
+        fs::write(global.join("approaches/software.md"), "YAZILIM YAKLAŞIMI").unwrap();
+        fs::write(global.join("approaches/marketing.md"), "MARKETING YAKLAŞIMI").unwrap();
+        fs::write(global.join("approaches/_default.md"), "META YAKLAŞIM").unwrap();
+
+        let sys = load_system_prompt(&global, None, "gtm");
+        assert!(sys.contains("YAZILIM YAKLAŞIMI"));
+        assert!(sys.contains("MARKETING YAKLAŞIMI"));
+        assert!(sys.contains("META YAKLAŞIM"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn project_only_approach_is_loaded_too() {
+        let (global, project) = temp_pair("projonly");
+        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        let pa = project.join(".usta/approaches");
+        fs::create_dir_all(&pa).unwrap();
+        fs::write(pa.join("linux-guvenlik.md"), "KONUYA ÖZEL YAKLAŞIM").unwrap();
+
+        let sys = load_system_prompt(&global, Some(&project), "linux-guvenlik");
+        assert!(sys.contains("KONUYA ÖZEL YAKLAŞIM"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn curriculum_included_when_present() {
+        let (global, project) = temp_pair("curriculum");
+        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        let cdir = project.join(".usta/learner/curriculum");
+        fs::create_dir_all(&cdir).unwrap();
+        fs::write(cdir.join("rust.md"), "HARITA: ownership görüldü").unwrap();
+
+        let sys = load_system_prompt(&global, Some(&project), "rust");
+        assert!(sys.contains("HARITA: ownership görüldü"));
+        assert!(sys.contains("learner/curriculum/rust.md"));
+
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }
 }

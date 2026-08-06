@@ -45,7 +45,7 @@
   2. Proje varsa `learner/curriculum/<topic>.md` de yüklenir (progress'in yanına).
 - Mevcut testler geçmeye devam etmeli (software.md override testi dahil).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/brain.rs` test modülüne ekle:
 
@@ -99,7 +99,7 @@ fn curriculum_included_when_present() {
 Run: `cargo test brain`
 Expected: 3 yeni test FAIL, mevcutlar PASS.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `load_system_prompt` içinde iki hardcoded `read_approach_with_override(...)` çağrısını şununla değiştir:
 
@@ -150,12 +150,12 @@ fn read_all_approaches(project_usta: Option<&PathBuf>, global: &Path, parts: &mu
 }
 ```
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS (override testi dahil — tarama `software.md`'yi buluyor, override mantığı aynen çalışıyor).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/brain.rs
@@ -541,6 +541,7 @@ Her konunun hazır yaklaşım dosyası yoktur ve olması da gerekmez: İLK oturu
 
 Kurallar:
 
+- **Örnekler sınırlayıcı DEĞİL** — üç soru açık uçludur. Domain hiçbir örneğe uymuyorsa (fiziksel beceri, sanat, dil, ne olursa) o domain'e uygun YENİ cevabı türet. Kullanıcının söylediği her zaman şablondan önce gelir.
 - Spek her domain'de gerekmez — "spek gereksiz, direkt yap" da geçerli bir cevaptır.
 - Artifact'lı domain'lerde kullanıcıyı düşüncesini DOSYAYA yazmaya teşvik et: dosya kaydı = proaktif feedback kancası. Marketing planı da `.md`'ye yazılır, kod gibi izlenir.
 - Ürettiğin yaklaşım canlı belgedir — bkz. USTA.md "Canlı Belgeler".
