@@ -58,9 +58,11 @@ async fn main() -> Result<()> {
         // 1) İzleyici kanalını boşalt → değişen dosyalara proaktif feedback.
         let mut changed: Vec<PathBuf> = Vec::new();
         while let Ok(p) = watch_rx.try_recv() {
-            changed.push(p);
+            if !changed.contains(&p) {
+                changed.push(p);
+            }
         }
-        for path in watcher::dedup_paths(changed) {
+        for path in changed {
             if let Err(e) = handle_file_change(&backend, &mut session, &path).await {
                 // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
                 eprintln!("(dosya feedback atlandı: {}: {e})", path.display());

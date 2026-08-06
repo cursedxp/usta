@@ -110,7 +110,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `Debouncer::flush(&mut self) -> Vec<PathBuf>` — birikeni ilk-görülme sırasıyla döndürür, deadline'ı temizler
 - Consumes: yok (saf).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/watcher.rs` test modülüne ekle (eski `dedup_*` testlerini SİL, yerlerine):
 
@@ -154,12 +154,12 @@ fn debouncer_empty_has_no_deadline() {
 }
 ```
 
-- [ ] **Step 2: Testlerin fail ettiğini gör**
+- [x] **Step 2: Testlerin fail ettiğini gör**
 
 Run: `cargo test debouncer`
 Expected: FAIL — "cannot find struct `Debouncer`" (derleme hatası da fail sayılır).
 
-- [ ] **Step 3: Debouncer'ı implemente et, `dedup_paths`'i sil**
+- [x] **Step 3: Debouncer'ı implemente et, `dedup_paths`'i sil**
 
 `src/watcher.rs`'e ekle:
 
@@ -214,12 +214,12 @@ while let Ok(p) = watch_rx.try_recv() {
 for path in changed {
 ```
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: 4 yeni debouncer testi PASS, eski dedup testleri yok, build temiz.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/watcher.rs src/main.rs

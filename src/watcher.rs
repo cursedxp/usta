@@ -4,14 +4,15 @@
 //! `notify` senkron çalışır — async'e zorlamayız. Arka plan thread'i + std mpsc
 //! doğru desen: watcher thread'de canlı tutulur, değişen yollar kanaldan akar.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use notify::{EventKind, RecursiveMode, Watcher};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::time::Instant;
 
 /// `root` altını özyinelemeli izle; modify olaylarındaki dosya yollarını gönder.
 /// Dönen alıcı select-loop'ta `recv().await` (veya `try_recv`) ile tüketilir.
@@ -64,56 +65,82 @@ pub fn is_ignored(path: &Path) -> bool {
     })
 }
 
-/// Yol listesindeki tekrarları temizle — ilk görülme sırasını koru.
-/// Saf fonksiyon: tek drain'de aynı dosyayı iki kez işlemeyi önler.
-pub fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    let mut out: Vec<PathBuf> = Vec::new();
-    for p in paths {
-        if seen.insert(p.clone()) {
-            out.push(p);
-        }
+/// Kayıt fırtınasını yatıştıran saf debounce durumu. Editörler tek kayıtta
+/// birden çok modify olayı üretir; her olay `push`lanır, son olaydan `window`
+/// sonra `deadline` dolar ve select-loop `flush` ile hepsini tek seferde işler.
+/// Henüz `main.rs`'e bağlanmadı (Task 3) — şimdilik sadece testlerden kullanılıyor.
+#[allow(dead_code)]
+pub struct Debouncer {
+    pending: Vec<PathBuf>,
+    deadline: Option<Instant>,
+    window: Duration,
+}
+
+#[allow(dead_code)]
+impl Debouncer {
+    pub fn new(window: Duration) -> Self {
+        Debouncer { pending: Vec::new(), deadline: None, window }
     }
-    out
+
+    /// Yolu biriktir (tekrarları ilk-görülme sırasını koruyarak ele) ve
+    /// deadline'ı ileri at.
+    pub fn push(&mut self, path: PathBuf, now: Instant) {
+        if !self.pending.contains(&path) {
+            self.pending.push(path);
+        }
+        self.deadline = Some(now + self.window);
+    }
+
+    pub fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+
+    /// Birikeni boşalt, deadline'ı sıfırla.
+    pub fn flush(&mut self) -> Vec<PathBuf> {
+        self.deadline = None;
+        std::mem::take(&mut self.pending)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+    use tokio::time::Instant;
 
     #[test]
-    fn dedup_removes_consecutive_and_repeated() {
-        let input = vec![
-            PathBuf::from("a.rs"),
-            PathBuf::from("a.rs"), // ardışık tekrar
-            PathBuf::from("b.rs"),
-            PathBuf::from("a.rs"), // sonradan tekrar
-            PathBuf::from("c.rs"),
-        ];
-        let out = dedup_paths(input);
-        assert_eq!(
-            out,
-            vec![
-                PathBuf::from("a.rs"),
-                PathBuf::from("b.rs"),
-                PathBuf::from("c.rs"),
-            ]
-        );
+    fn debouncer_push_dedups_and_preserves_order() {
+        let mut d = Debouncer::new(Duration::from_millis(1000));
+        let now = Instant::now();
+        d.push(PathBuf::from("a.rs"), now);
+        d.push(PathBuf::from("b.rs"), now);
+        d.push(PathBuf::from("a.rs"), now);
+        assert_eq!(d.flush(), vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
     }
 
     #[test]
-    fn dedup_empty_stays_empty() {
-        assert!(dedup_paths(vec![]).is_empty());
+    fn debouncer_push_extends_deadline() {
+        let mut d = Debouncer::new(Duration::from_millis(1000));
+        let t0 = Instant::now();
+        d.push(PathBuf::from("a.rs"), t0);
+        let t1 = t0 + Duration::from_millis(500);
+        d.push(PathBuf::from("b.rs"), t1);
+        assert_eq!(d.deadline(), Some(t1 + Duration::from_millis(1000)));
     }
 
     #[test]
-    fn dedup_preserves_order_of_first_seen() {
-        let input = vec![
-            PathBuf::from("z"),
-            PathBuf::from("y"),
-            PathBuf::from("z"),
-        ];
-        assert_eq!(dedup_paths(input), vec![PathBuf::from("z"), PathBuf::from("y")]);
+    fn debouncer_flush_clears_pending_and_deadline() {
+        let mut d = Debouncer::new(Duration::from_millis(1000));
+        d.push(PathBuf::from("a.rs"), Instant::now());
+        let _ = d.flush();
+        assert!(d.deadline().is_none());
+        assert!(d.flush().is_empty());
+    }
+
+    #[test]
+    fn debouncer_empty_has_no_deadline() {
+        let d = Debouncer::new(Duration::from_millis(1000));
+        assert!(d.deadline().is_none());
     }
 
     #[test]
