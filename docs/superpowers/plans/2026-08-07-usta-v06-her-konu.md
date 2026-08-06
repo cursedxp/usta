@@ -1,6 +1,6 @@
 # Usta v0.6 — Her-Konu Öğrenimi Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Usta'yı gerçekten domain-agnostik yap: yeni konuda (Linux güvenliği, GTM, ne olursa) yaklaşımı Usta'nın kendisi türetir ve kalıcılaştırır; web araştırmalı TAM müfredat haritası çıkarılır ve her kapanışta güncellenir — "havada hiçbir şey kalmaz", derinlik seviyeye endekslenir, yön kullanıcı isterse revize edilir (canlı belge).
 
@@ -603,10 +603,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS
-- [ ] `cargo build` — uyarısız
-- [ ] **Migrasyon:** global USTA.md + `_default.md` eski — sandbox'ta değil GERÇEK kurulumda güncellenmesi için kullanıcıya not bırak (rapora yaz): `rm ~/.config/usta/USTA.md ~/.config/usta/approaches/_default.md` + bir kez `usta` (veya `usta reset --factory`).
-- [ ] Sandbox duman (backend varsa, `XDG_CONFIG_HOME` set):
+- [x] `cargo test` — tamamı PASS
+- [x] `cargo build` — uyarısız
+- [x] **Migrasyon:** global USTA.md + `_default.md` eski — sandbox'ta değil GERÇEK kurulumda güncellenmesi için kullanıcıya not bırak (rapora yaz): `rm ~/.config/usta/USTA.md ~/.config/usta/approaches/_default.md` + bir kez `usta` (veya `usta reset --factory`).
+- [x] Sandbox duman (backend varsa, `XDG_CONFIG_HOME` set):
   1. `usta start gtm` (hiç progress yok) → tanışma turn'ü gelsin, drill DEĞİL.
   2. Birkaç turn konuş → `/quit` → `.usta/learner/progress/gtm.md` + `.usta/approaches/gtm.md` + `.usta/learner/curriculum/gtm.md` üçü de oluşsun; curriculum'da durum etiketleri görünsün.
   3. Yeniden `usta start gtm` → drill + "haritadan neredeyiz" cümlesi gelsin; system prompt'a curriculum yüklendiğini davranıştan doğrula (harita maddelerine atıf).
