@@ -6,9 +6,7 @@ use crate::anthropic::Message;
 
 /// Tek bir öğrenme oturumu.
 pub struct Session {
-    /// Aktif öğrenme başlığı (ör. "rust"). Per-topic progress persistence
-    /// (sonraki sürüm) bunu kullanacak — şimdilik oturum kimliği.
-    #[allow(dead_code)]
+    /// Aktif öğrenme başlığı (ör. "rust") — kapanışta progress dosyasını seçer.
     pub topic: String,
     /// Birleştirilmiş brain system prompt'u.
     pub system: String,

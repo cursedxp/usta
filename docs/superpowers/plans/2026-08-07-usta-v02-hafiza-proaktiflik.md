@@ -669,7 +669,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `progress::write_atomic(path: &Path, content: &str) -> Result<()>` — tmp + rename
 - Davranış sözleşmesi: `/quit`, Ctrl-C, Ctrl-D hepsinde, history boş değilse, progress dosyası oturum bilgisiyle TAM içerik olarak yeniden yazılır. Sonraki oturum bu dosyayı system prompt'a zaten yüklüyor (`brain.rs` — değişiklik gerekmez).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/progress.rs` (önce testler):
 
@@ -732,12 +732,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Fail'i gör**
+- [x] **Step 2: Fail'i gör**
 
 `src/main.rs`'e `mod progress;` ekle. Run: `cargo test progress`
 Expected: FAIL (fonksiyonlar tanımsız).
 
-- [ ] **Step 3: Implemente et**
+- [x] **Step 3: Implemente et**
 
 `src/progress.rs` başına:
 
@@ -802,12 +802,12 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
 }
 ```
 
-- [ ] **Step 4: Testlerin geçtiğini gör**
+- [x] **Step 4: Testlerin geçtiğini gör**
 
 Run: `cargo test progress`
 Expected: 6 test PASS.
 
-- [ ] **Step 5: Çıkış yoluna flush'ı bağla**
+- [x] **Step 5: Çıkış yoluna flush'ı bağla**
 
 `src/session.rs`: `topic` alanındaki `#[allow(dead_code)]` satırını ve üstündeki "şimdilik oturum kimliği" notunu sil (doc şu olur: `/// Aktif öğrenme başlığı (ör. "rust") — kapanışta progress dosyasını seçer.`).
 
@@ -847,12 +847,12 @@ async fn flush_progress(backend: &Backend, session: &Session, project_root: &Pat
 }
 ```
 
-- [ ] **Step 6: Test + build**
+- [x] **Step 6: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS, build temiz (dead_code uyarısı kalmadı).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/progress.rs src/main.rs src/session.rs

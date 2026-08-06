@@ -8,6 +8,7 @@ mod config;
 mod defaults;
 mod feedback;
 mod input;
+mod progress;
 mod session;
 mod watcher;
 
@@ -17,6 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rustyline::DefaultEditor;
 
+use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::session::Session;
 
@@ -97,7 +99,35 @@ async fn main() -> Result<()> {
         }
     }
 
+    if let Err(e) = flush_progress(&backend, &session, &project_root).await {
+        eprintln!("(progress güncellenemedi: {e})");
+    }
+
     println!("Görüşürüz — suya girmeye devam et.");
+    Ok(())
+}
+
+/// Oturum kapanışında progress dosyasını LLM'e tam-içerik yeniden yazdır.
+/// Boş oturumda (hiç turn yok) dosyaya dokunma.
+async fn flush_progress(backend: &Backend, session: &Session, project_root: &Path) -> Result<()> {
+    if session.history().is_empty() {
+        return Ok(());
+    }
+    println!("(oturum özetleniyor — progress yazılıyor…)");
+    let path = progress::progress_path(project_root, &session.topic);
+    let existing = std::fs::read_to_string(&path).ok();
+    let mut history = session.history().to_vec();
+    history.push(Message::user(progress::closing_prompt(
+        &session.topic,
+        existing.as_deref(),
+    )));
+    let (reply, _) = backend.complete(&session.system, &history).await?;
+    let content = progress::clean_markdown_reply(&reply);
+    if content.is_empty() {
+        anyhow::bail!("model boş içerik döndürdü — dosya yazılmadı");
+    }
+    progress::write_atomic(&path, &content)?;
+    println!("(progress güncellendi: {})", path.display());
     Ok(())
 }
 
