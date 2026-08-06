@@ -54,6 +54,18 @@
 - **`usta init`** → opsiyonel; sadece kurar (başlatmadan), per-dosya durum yazar. Artık zorunlu değil.
 - Konu = öğrenme başlığı/dosyalama anahtarı (`progress/<konu>.md`). **Ne inşa ettiğin** (proje/hedef) klasör + sohbette söylenir — Usta parça-başı "spek'in ne?" diye sorar.
 
+## 4.6 Pedagoji Katmanı (v0.3)
+
+Öğretim yönü değil, **geri çağırma yönü** optimize edilir — kalıcı öğrenme kullanıcıdan çıkan üretimde olur (testing/generation effect):
+
+1. **Açılış drilli:** oturum başında progress'teki "Geri çağırma soruları"ndan 2-3'ü sorulur (progress varsa shell tetikler, Usta ilk sözü alır). 2 dk ısınma — ADHD için düşük eşikli "suya girme" rampası.
+2. **Anlat-modu (Feynman):** parça kapanışında roller döner — kullanıcı yazdığını açıklar; açıklamadaki boşluk gap sinyalidir (koddan iyi).
+3. **İpucu merdiveni:** soru → kavram adı → pseudocode; kod asla (Sert Kural 1). Seviye yükseldikçe merdiven kısalır (fading); bir basamakta ~2 tur takılınca bir basamak inilir (ADHD dengesi).
+4. **Tahmin protokolü:** kayıtta `cargo check` koşar (60 sn timeout, 4KB kırpma, Rust dışı projede sessiz atlanır); hata varsa Usta sonucu söylemez, önce tahmin ettirir (hypercorrection).
+5. **Hata günlüğü:** progress'te `hata tipi | sayaç | son örnek`; 3+ tekrar = `GAP ADAYI` → curriculum'a mini-alıştırma önerisi.
+
+Kuralların tamamı USTA.md'de yaşar; Rust sadece tetikler (açılış turn'ü, check koşucusu, progress formatı).
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -127,10 +139,14 @@ usta/
 
 **Dışında (sonraki sürümler):** çoklu terminal sağlamlaştırma · model routing · marketing dışı çok-domain cilası · `tech-notes` cache · kendini-güncelleyen tech sistemi.
 
-## 11. Alınan Kararlar (v0.2)
+## 11. Alınan Kararlar
+
+**(v0.2)**
 
 - **Dosya izleme granülaritesi:** 1 sn debounce (son kayıttan itibaren). İlk görüşte tam içerik, sonraki kayıtlarda unified diff, 64KB üstü dosya izleme dışı (tek seferlik yerel uyarı).
 - **Proaktiflik:** girdi ayrı thread'de (rustyline + ready el-sıkışması), ana döngü `tokio::select!` — feedback için Enter beklenmez.
+- **Pedagoji tetikleri (v0.3):** açılış drilli shell'den tetiklenir (progress boş değilse); `cargo check` sonucu LLM'e `[... SADECE SENİN GÖZÜN İÇİN ...]` bloğuyla gider — saklama/tahmin kararı USTA.md kuralında, kodda değil.
+- **Global USTA.md güncellemesi (v0.3):** scaffold var olan dosyanın üstüne yazmaz — davranış güncellemesinden sonra `rm ~/.config/usta/USTA.md` + bir kez `usta` çalıştırmak gerekir. Bilinçli kabul; dosya versiyonlama v0.4 adayı.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 

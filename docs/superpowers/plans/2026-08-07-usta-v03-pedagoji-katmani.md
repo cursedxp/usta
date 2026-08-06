@@ -515,7 +515,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Interfaces:** yok (yalnız doküman).
 
-- [ ] **Step 1: §4.5'ten sonra yeni bölüm ekle**
+- [x] **Step 1: §4.5'ten sonra yeni bölüm ekle**
 
 `## 4.5 Başlatma / Kullanım` bölümünün SONUNA (bir sonraki `## 5` başlığından önce):
 
@@ -533,7 +533,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 Kuralların tamamı USTA.md'de yaşar; Rust sadece tetikler (açılış turn'ü, check koşucusu, progress formatı).
 ```
 
-- [ ] **Step 2: "Alınan Kararlar" bölümüne ekle**
+- [x] **Step 2: "Alınan Kararlar" bölümüne ekle**
 
 v0.2'nin eklediği `## 11. Alınan Kararlar (v0.2)` bölümünü `## 11. Alınan Kararlar` olarak yeniden adlandır, mevcut maddeleri `**(v0.2)**` altında bırak ve sonuna ekle:
 
@@ -542,7 +542,7 @@ v0.2'nin eklediği `## 11. Alınan Kararlar (v0.2)` bölümünü `## 11. Alınan
 - **Global USTA.md güncellemesi (v0.3):** scaffold var olan dosyanın üstüne yazmaz — davranış güncellemesinden sonra `rm ~/.config/usta/USTA.md` + bir kez `usta` çalıştırmak gerekir. Bilinçli kabul; dosya versiyonlama v0.4 adayı.
 ```
 
-- [ ] **Step 3: Commit + push**
+- [x] **Step 3: Commit + push**
 
 ```bash
 git add SPEC.md
