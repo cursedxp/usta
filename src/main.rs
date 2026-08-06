@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     }
 
     // Backend seçimi (CLI default, API opsiyonel) — net hata mesajıyla.
-    let backend = backend::select()?;
+    let mut backend = backend::select()?;
 
     // `.usta/` yoksa sessizce kur — `usta init` artık zorunlu ön-adım değil,
     // `start` kendi kendini bootstrap eder (bkz. ensure_scaffold).
@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
                 // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
                 println!(); // yarım kalan prompt satırını kirletme
                 for path in debouncer.flush() {
-                    if let Err(e) = handle_file_change(&backend, &mut session, &mut files, &path).await {
+                    if let Err(e) = handle_file_change(&mut backend, &mut session, &mut files, &path).await {
                         // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
                         eprintln!("(dosya feedback atlandı: {}: {e})", path.display());
                     }
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    if let Err(e) = flush_progress(&backend, &session, &project_root).await {
+    if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
         eprintln!("(progress güncellenemedi: {e})");
     }
 
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
 
 /// Oturum kapanışında progress dosyasını LLM'e tam-içerik yeniden yazdır.
 /// Boş oturumda (hiç turn yok) dosyaya dokunma.
-async fn flush_progress(backend: &Backend, session: &Session, project_root: &Path) -> Result<()> {
+async fn flush_progress(backend: &mut Backend, session: &Session, project_root: &Path) -> Result<()> {
     if session.history().is_empty() {
         return Ok(());
     }
@@ -296,7 +296,7 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
 /// Kaydedilen dosyayı FileMemory'den geçir; ilk görüşte tam içerik, sonrasında
 /// diff olarak sentetik user turn'e çevir → Socratic feedback.
 async fn handle_file_change(
-    backend: &Backend,
+    backend: &mut Backend,
     session: &mut Session,
     files: &mut feedback::FileMemory,
     path: &Path,

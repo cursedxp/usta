@@ -879,7 +879,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `backend::parse_cli_output(stdout: &str) -> (String, Option<String>)` — saf, test edilebilir
 - Davranış sözleşmesi: ilk CLI çağrısı tam transcript + `--output-format json` → `session_id` saklanır. Sonraki çağrılar SADECE son user mesajını `--resume <id>` ile yollar. Resume çağrısı hata verirse bir kez tam-transcript'e düşülür (stale session toparlama), `session_id` sıfırlanır.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/backend.rs` test modülüne ekle:
 
@@ -918,12 +918,12 @@ fn last_user_text_empty_history_is_empty() {
 }
 ```
 
-- [ ] **Step 2: Fail'i gör**
+- [x] **Step 2: Fail'i gör**
 
 Run: `cargo test backend`
 Expected: FAIL (`parse_cli_output`, `last_user_text` tanımsız; `Cli` varyantında `session_id` yok).
 
-- [ ] **Step 3: Implemente et**
+- [x] **Step 3: Implemente et**
 
 `src/backend.rs` değişiklikleri:
 
@@ -1057,7 +1057,7 @@ async fn run_claude_cli(
     Ok(parse_cli_output(&String::from_utf8_lossy(&output.stdout)))
 ```
 
-- [ ] **Step 4: Çağrı yerlerini `&mut`'a geçir**
+- [x] **Step 4: Çağrı yerlerini `&mut`'a geçir**
 
 `src/main.rs`:
 - `let backend = backend::select()?;` → `let mut backend = backend::select()?;`
@@ -1065,12 +1065,12 @@ async fn run_claude_cli(
 - `handle_file_change(backend: &Backend, ...)` → `backend: &mut Backend`; çağrı `handle_file_change(&mut backend, &mut session, &mut files, &path)`.
 - `flush_progress(backend: &Backend, ...)` → `backend: &mut Backend`; çağrı `flush_progress(&mut backend, &session, &project_root)`.
 
-- [ ] **Step 5: Test + build**
+- [x] **Step 5: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: yeni 4 test dahil hepsi PASS, build temiz.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/backend.rs src/main.rs

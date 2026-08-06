@@ -21,7 +21,12 @@ pub const DEFAULT_CLI_MODEL: &str = "opus";
 /// Kullanılabilir LLM backend'leri.
 pub enum Backend {
     /// Yerel `claude` CLI'a shell'ler — Claude Code auth'u, key yok.
-    Cli { model: String },
+    /// `session_id`: ilk yanıttan yakalanır, sonraki turn'ler `--resume` ile
+    /// sürdürülür → tam transcript her seferinde yeniden gönderilmez.
+    Cli {
+        model: String,
+        session_id: Option<String>,
+    },
     /// Anthropic Messages API — reqwest, key gerektirir.
     Api {
         client: anthropic::Client,
@@ -60,6 +65,7 @@ pub fn select() -> Result<Backend> {
 fn cli_backend() -> Backend {
     Backend::Cli {
         model: DEFAULT_CLI_MODEL.to_string(),
+        session_id: None,
     }
 }
 
@@ -85,15 +91,59 @@ fn claude_on_path() -> bool {
 impl Backend {
     /// Seçilen backend'e göre tamamlama iste. `(metin, web_arandı_mı)` döner.
     /// CLI modunda web kullanımı metinden tespit edilemez → `false`.
-    pub async fn complete(&self, system: &str, history: &[Message]) -> Result<(String, bool)> {
+    pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<(String, bool)> {
         match self {
             Backend::Api { client, model } => client.complete(model, system, history).await,
-            Backend::Cli { model } => {
-                let transcript = render_transcript(history);
-                let text = run_claude_cli(model, system, &transcript).await?;
+            Backend::Cli { model, session_id } => {
+                let resume = session_id.clone();
+                let input = match &resume {
+                    Some(_) => last_user_text(history),
+                    None => render_transcript(history),
+                };
+                let attempt = run_claude_cli(model, system, &input, resume.as_deref()).await;
+                let (text, new_sid) = match attempt {
+                    Ok(v) => v,
+                    // Stale/silinmiş oturum — bir kez tam transcript'le baştan dene.
+                    Err(_) if resume.is_some() => {
+                        *session_id = None;
+                        run_claude_cli(model, system, &render_transcript(history), None).await?
+                    }
+                    Err(e) => return Err(e),
+                };
+                if new_sid.is_some() {
+                    *session_id = new_sid;
+                }
                 Ok((text, false))
             }
         }
+    }
+}
+
+/// History'deki SON user mesajının düz metnini döndür — resume çağrısında
+/// sunucu taraflı oturum bağlamı zaten var, sadece yeni turn gönderilir.
+fn last_user_text(history: &[Message]) -> String {
+    history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| match &m.content {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default()
+}
+
+/// `claude -p --output-format json` çıktısını ayrıştır. JSON değilse (eski
+/// sürüm / beklenmedik çıktı) ham metne düş — session id'siz devam edilir.
+pub fn parse_cli_output(stdout: &str) -> (String, Option<String>) {
+    #[derive(serde::Deserialize)]
+    struct CliJson {
+        result: Option<String>,
+        session_id: Option<String>,
+    }
+    match serde_json::from_str::<CliJson>(stdout) {
+        Ok(j) => (j.result.unwrap_or_default(), j.session_id),
+        Err(_) => (stdout.trim().to_string(), None),
     }
 }
 
@@ -120,30 +170,42 @@ fn render_transcript(history: &[Message]) -> String {
     out.trim_end().to_string()
 }
 
-/// `claude -p` alt sürecini çalıştır: transcript stdin'e yazılır, stdout okunur.
-async fn run_claude_cli(model: &str, system: &str, transcript: &str) -> Result<String> {
-    let mut child = Command::new("claude")
-        .arg("-p")
+/// `claude -p` alt sürecini çalıştır: girdi stdin'e yazılır, JSON çıktı okunur.
+/// `resume` verilirse `--resume <id>` ile sunucu taraflı oturum sürdürülür.
+async fn run_claude_cli(
+    model: &str,
+    system: &str,
+    input: &str,
+    resume: Option<&str>,
+) -> Result<(String, Option<String>)> {
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
+        .arg("--output-format")
+        .arg("json")
         .arg("--append-system-prompt")
         .arg(system)
         .arg("--model")
         .arg(model)
         .arg("--allowedTools")
-        .arg("WebSearch")
+        .arg("WebSearch");
+    if let Some(id) = resume {
+        cmd.arg("--resume").arg(id);
+    }
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("`claude` CLI başlatılamadı — PATH'te mi?")?;
 
-    // Transcript'i stdin'e yaz, sonra kapat (EOF).
+    // Girdiyi stdin'e yaz, sonra kapat (EOF).
     {
         let mut stdin = child
             .stdin
             .take()
             .context("claude CLI stdin'i alınamadı")?;
         stdin
-            .write_all(transcript.as_bytes())
+            .write_all(input.as_bytes())
             .await
             .context("claude CLI stdin'ine yazılamadı")?;
         stdin.shutdown().await.ok();
@@ -159,7 +221,7 @@ async fn run_claude_cli(model: &str, system: &str, transcript: &str) -> Result<S
         bail!("claude CLI hata döndü ({}): {}", output.status, stderr.trim());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(parse_cli_output(&String::from_utf8_lossy(&output.stdout)))
 }
 
 #[cfg(test)]
@@ -184,5 +246,38 @@ mod tests {
     #[test]
     fn transcript_empty_history_is_empty() {
         assert_eq!(render_transcript(&[]), "");
+    }
+
+    #[test]
+    fn parse_cli_output_reads_json_result_and_session() {
+        let out = r#"{"type":"result","result":"merhaba","session_id":"abc-123","is_error":false}"#;
+        let (text, sid) = parse_cli_output(out);
+        assert_eq!(text, "merhaba");
+        assert_eq!(sid, Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn parse_cli_output_falls_back_to_plain_text() {
+        let (text, sid) = parse_cli_output("  düz metin yanıt  ");
+        assert_eq!(text, "düz metin yanıt");
+        assert_eq!(sid, None);
+    }
+
+    #[test]
+    fn last_user_text_takes_final_user_message() {
+        let history = vec![
+            Message::user("ilk"),
+            Message {
+                role: "assistant".into(),
+                content: serde_json::Value::String("yanıt".into()),
+            },
+            Message::user("son soru"),
+        ];
+        assert_eq!(last_user_text(&history), "son soru");
+    }
+
+    #[test]
+    fn last_user_text_empty_history_is_empty() {
+        assert_eq!(last_user_text(&[]), "");
     }
 }
