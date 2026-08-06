@@ -1,33 +1,74 @@
-//! Brain yükleyici: markdown dosyalarını birleştirip system prompt üretir.
+//! Brain yükleyici: global (paylaşılan) + proje (özel/ilerleme) markdown
+//! dosyalarını birleştirip system prompt üretir.
 //! "İnce kabuk, kalın beyin" — davranış burada değil, markdown'da yaşar.
+//!
+//! Hibrit model: `global` = `~/.config/usta` (çekirdek kurallar + öğrenci
+//! profili, bir kere kurulur), `project` = `.usta/` içeren proje kökü
+//! (yaklaşım override'ları + konu bazlı ilerleme, `git`in `.git` bulması gibi
+//! yukarı doğru aranır — bkz. `config::find_project_root`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Birleştirilecek dosyalar (brain kökünden görece). Eksik olan sessizce atlanır.
-fn brain_files(topic: &str) -> Vec<String> {
-    vec![
-        "USTA.md".to_string(),
-        "learner/profile.md".to_string(),
-        "approaches/software.md".to_string(),
-        "approaches/_default.md".to_string(),
-        format!("learner/progress/{topic}.md"),
-    ]
-}
-
-/// Brain dosyalarını oku, birleştir. Eksik dosyalar atlanır.
-pub fn load_system_prompt(root: &Path, topic: &str) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    for rel in brain_files(topic) {
-        let path = root.join(&rel);
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            let text = text.trim();
-            if !text.is_empty() {
-                parts.push(format!("===== {rel} =====\n{text}"));
-            }
+/// Bir dosyayı oku; boş değilse etiketli bölüm olarak `parts`'a ekle.
+/// Eksik/boş dosya sessizce atlanır.
+fn read_section(path: &Path, label: &str, parts: &mut Vec<String>) {
+    if let Ok(text) = std::fs::read_to_string(path) {
+        let text = text.trim();
+        if !text.is_empty() {
+            parts.push(format!("===== {label} =====\n{text}"));
         }
     }
+}
+
+/// `.usta` altındaki proje-özel yaklaşım dosyası varsa onu, yoksa global
+/// karşılığını oku — override kazanır.
+fn read_approach_with_override(
+    project_usta: Option<&PathBuf>,
+    global: &Path,
+    rel: &str,
+    parts: &mut Vec<String>,
+) {
+    let override_path = project_usta.map(|d| d.join("approaches").join(rel));
+    match override_path.as_deref().filter(|p| p.exists()) {
+        Some(p) => read_section(p, &format!("approaches/{rel} (proje override)"), parts),
+        None => read_section(
+            &global.join("approaches").join(rel),
+            &format!("approaches/{rel}"),
+            parts,
+        ),
+    }
+}
+
+/// Global brain + (varsa) proje override/ilerlemesini birleştirip system
+/// prompt üret. `project`, `.usta/` İÇEREN proje kökü — proje dosyaları
+/// `project.join(".usta")` altında yaşar (`.usta`'nın kendisi değil).
+pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    read_section(&global.join("USTA.md"), "USTA.md", &mut parts);
+    read_section(
+        &global.join("learner/profile.md"),
+        "learner/profile.md",
+        &mut parts,
+    );
+    read_section(
+        &global.join("learner/index.md"),
+        "learner/index.md",
+        &mut parts,
+    );
+
+    let project_usta: Option<PathBuf> = project.map(|p| p.join(".usta"));
+
+    read_approach_with_override(project_usta.as_ref(), global, "software.md", &mut parts);
+    read_approach_with_override(project_usta.as_ref(), global, "_default.md", &mut parts);
+
+    if let Some(dir) = &project_usta {
+        let rel = format!("learner/progress/{topic}.md");
+        read_section(&dir.join(&rel), &rel, &mut parts);
+    }
+
     if parts.is_empty() {
-        // Brain dosyaları bulunamazsa çekirdek kural gömülü fallback.
+        // Brain dosyaları hiç bulunamazsa çekirdek kural gömülü fallback.
         return FALLBACK_SYSTEM.to_string();
     }
     parts.join("\n\n")
@@ -45,32 +86,90 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Her testin kendi izole global/proje dizin çiftini kurmasını sağlar.
+    fn temp_pair(name: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("usta_brain_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let global = base.join("global");
+        let project = base.join("project");
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        (global, project)
+    }
+
     #[test]
     fn concatenates_existing_files_skips_missing() {
-        let dir = std::env::temp_dir().join(format!("usta_brain_test_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("learner/progress")).unwrap();
-        fs::create_dir_all(dir.join("approaches")).unwrap();
-        fs::write(dir.join("USTA.md"), "ÇEKIRDEK KURAL").unwrap();
-        fs::write(dir.join("learner/profile.md"), "ANIL PROFILI").unwrap();
-        // approaches/software.md ve progress/rust.md bilerek yok.
+        let (global, _project) = temp_pair("concat");
+        fs::create_dir_all(global.join("learner")).unwrap();
+        fs::write(global.join("USTA.md"), "ÇEKIRDEK KURAL").unwrap();
+        fs::write(global.join("learner/profile.md"), "ANIL PROFILI").unwrap();
+        // approaches/software.md ve proje/progress bilerek yok.
 
-        let sys = load_system_prompt(&dir, "rust");
+        let sys = load_system_prompt(&global, None, "rust");
         assert!(sys.contains("ÇEKIRDEK KURAL"));
         assert!(sys.contains("ANIL PROFILI"));
         assert!(sys.contains("USTA.md"));
         assert!(!sys.contains("software.md"));
 
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(global.parent().unwrap());
     }
 
     #[test]
     fn falls_back_when_no_files() {
-        let dir = std::env::temp_dir().join(format!("usta_brain_empty_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let sys = load_system_prompt(&dir, "rust");
+        let (global, _project) = temp_pair("empty");
+        let sys = load_system_prompt(&global, None, "rust");
         assert!(sys.contains("Usta"));
-        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn project_approach_override_wins_over_global() {
+        let (global, project) = temp_pair("override");
+        fs::create_dir_all(global.join("approaches")).unwrap();
+        fs::write(
+            global.join("approaches/software.md"),
+            "GLOBAL SOFTWARE YAKLAŞIMI",
+        )
+        .unwrap();
+
+        let project_usta = project.join(".usta/approaches");
+        fs::create_dir_all(&project_usta).unwrap();
+        fs::write(
+            project_usta.join("software.md"),
+            "PROJE ÖZEL SOFTWARE YAKLAŞIMI",
+        )
+        .unwrap();
+
+        let sys = load_system_prompt(&global, Some(&project), "rust");
+        assert!(sys.contains("PROJE ÖZEL SOFTWARE YAKLAŞIMI"));
+        assert!(!sys.contains("GLOBAL SOFTWARE YAKLAŞIMI"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn project_progress_included_when_present() {
+        let (global, project) = temp_pair("progress");
+        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+
+        let progress_dir = project.join(".usta/learner/progress");
+        fs::create_dir_all(&progress_dir).unwrap();
+        fs::write(progress_dir.join("rust.md"), "SEVIYE: başlangıç").unwrap();
+
+        let sys = load_system_prompt(&global, Some(&project), "rust");
+        assert!(sys.contains("SEVIYE: başlangıç"));
+        assert!(sys.contains("learner/progress/rust.md"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn project_none_skips_progress_without_panicking() {
+        let (global, _project) = temp_pair("noproject");
+        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        let sys = load_system_prompt(&global, None, "rust");
+        assert!(sys.contains("ÇEKIRDEK"));
+        assert!(!sys.contains("progress/rust.md"));
+        let _ = fs::remove_dir_all(global.parent().unwrap());
     }
 }
