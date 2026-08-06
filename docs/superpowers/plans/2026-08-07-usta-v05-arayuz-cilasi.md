@@ -402,7 +402,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `SPEC.md`
 
-- [ ] **Step 1: "Alınan Kararlar" bölümüne ekle**
+- [x] **Step 1: "Alınan Kararlar" bölümüne ekle**
 
 `## 11. Alınan Kararlar` sonuna:
 
@@ -411,7 +411,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Konu girişi (v0.5):** TTY promptunda tek kelime zorunlu — cümle girilirse yeniden sorulur (3 deneme, sonra ilk kelime açık bildirimle alınır). `usta start <konu>` ve pipe davranışı değişmedi.
 ```
 
-- [ ] **Step 2: Commit + push**
+- [x] **Step 2: Commit + push**
 
 ```bash
 git add SPEC.md

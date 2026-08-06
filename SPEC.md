@@ -156,6 +156,8 @@ usta/
 - **Global USTA.md güncellemesi (v0.3):** scaffold var olan dosyanın üstüne yazmaz — davranış güncellemesinden sonra `rm ~/.config/usta/USTA.md` + bir kez `usta` çalıştırmak gerekir. Bilinçli kabul; dosya versiyonlama v0.4 adayı.
 - **Katalog formatı (v0.4):** `learner/index.md` sonunda `## Kayıtlar`; satır `- konu | proje-yolu | YYYY-MM-DD`; bölüm-üstü serbest metin korunur; tarih `chrono` ile yerel saat.
 - **Reset onayları (v0.4):** konu reseti `[e/H]`, factory reset kelime onayı ("evet"); stdin kapalı/boş = hayır (güvenli varsayılan). Reset komutları backend'siz çalışır.
+- **Sunum katmanı (v0.5):** roller ikonla ayrılır — `●` (turuncu 208) Usta bloğu, `■` kullanıcı promptu, soluk `·`/`!` sistem bildirimi. Usta yanıtları termimad ile markdown render edilir; LLM beklerken spinner. TTY değilse veya `NO_COLOR` set'liyse düz çıktı (pipe/test uyumu). Davranış katmanına dokunulmadı.
+- **Konu girişi (v0.5):** TTY promptunda tek kelime zorunlu — cümle girilirse yeniden sorulur (3 deneme, sonra ilk kelime açık bildirimle alınır). `usta start <konu>` ve pipe davranışı değişmedi.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
