@@ -1,15 +1,6 @@
 //! Yapılandırma: API key + model + brain kökü çözümleme.
 
 use anyhow::Result;
-use std::path::PathBuf;
-
-use crate::anthropic::DEFAULT_MODEL;
-
-pub struct Config {
-    pub api_key: String,
-    pub model: String,
-    pub root: PathBuf,
-}
 
 /// API key'i çevreden çöz. Saf fonksiyon — test edilebilir.
 pub fn resolve_key(env_value: Option<String>) -> Result<String> {
@@ -18,13 +9,6 @@ pub fn resolve_key(env_value: Option<String>) -> Result<String> {
         _ => anyhow::bail!(
             "ANTHROPIC_API_KEY tanımlı değil. Şunu çalıştır:\n  export ANTHROPIC_API_KEY=sk-ant-..."
         ),
-    }
-}
-
-impl Config {
-    pub fn load(root: PathBuf) -> Result<Config> {
-        let api_key = resolve_key(std::env::var("ANTHROPIC_API_KEY").ok())?;
-        Ok(Config { api_key, model: DEFAULT_MODEL.to_string(), root })
     }
 }
 

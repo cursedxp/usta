@@ -35,6 +35,9 @@ pub fn spawn(root: &Path) -> Result<Receiver<PathBuf>> {
             let Ok(event) = res else { continue };
             if matches!(event.kind, EventKind::Modify(_)) {
                 for path in event.paths {
+                    if is_ignored(&path) {
+                        continue;
+                    }
                     // REPL alıcısı kapandıysa thread'i bitir.
                     if out_tx.send(path).is_err() {
                         return;
@@ -45,6 +48,19 @@ pub fn spawn(root: &Path) -> Result<Receiver<PathBuf>> {
     });
 
     Ok(out_rx)
+}
+
+/// Build/VCS/gizli dizin gürültüsünü ele — yol bileşenlerinden biri `target`,
+/// `node_modules` ise veya `.` ile başlıyorsa (örn. `.git`, `.venv`) yok say.
+/// Dil-agnostik: uzantıya göre filtrelemiyoruz, Usta çok alanlı çalışır.
+pub fn is_ignored(path: &Path) -> bool {
+    path.components().any(|c| match c {
+        std::path::Component::Normal(s) => {
+            let s = s.to_string_lossy();
+            s == "target" || s == "node_modules" || s.starts_with('.')
+        }
+        _ => false,
+    })
 }
 
 /// Yol listesindeki tekrarları temizle — ilk görülme sırasını koru.
@@ -97,5 +113,30 @@ mod tests {
             PathBuf::from("z"),
         ];
         assert_eq!(dedup_paths(input), vec![PathBuf::from("z"), PathBuf::from("y")]);
+    }
+
+    #[test]
+    fn is_ignored_flags_target_dir() {
+        assert!(is_ignored(Path::new("target/debug/x.rs")));
+    }
+
+    #[test]
+    fn is_ignored_flags_hidden_dir() {
+        assert!(is_ignored(Path::new(".git/HEAD")));
+    }
+
+    #[test]
+    fn is_ignored_flags_node_modules() {
+        assert!(is_ignored(Path::new("node_modules/foo/index.js")));
+    }
+
+    #[test]
+    fn is_ignored_allows_src_file() {
+        assert!(!is_ignored(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn is_ignored_allows_arbitrary_extension() {
+        assert!(!is_ignored(Path::new("foo.py")));
     }
 }
