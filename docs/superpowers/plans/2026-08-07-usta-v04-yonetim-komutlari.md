@@ -46,13 +46,13 @@
   - `index::record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<()>`
   - (`index::remove` Task 3'te eklenir — burada EKLEME, dead-code uyarısı olur)
 
-- [ ] **Step 1: Cargo.toml'a chrono ekle**
+- [x] **Step 1: Cargo.toml'a chrono ekle**
 
 ```toml
 chrono = "0.4"
 ```
 
-- [ ] **Step 2: Failing testleri yaz**
+- [x] **Step 2: Failing testleri yaz**
 
 `src/index.rs`'i test modülüyle oluştur, `src/main.rs`'e `mod index;` ekle:
 
@@ -108,12 +108,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Fail'i gör**
+- [x] **Step 3: Fail'i gör**
 
 Run: `cargo test index`
 Expected: FAIL (fonksiyonlar tanımsız — derleme hatası).
 
-- [ ] **Step 4: Implemente et**
+- [x] **Step 4: Implemente et**
 
 `src/index.rs` gövdesi:
 
@@ -201,12 +201,12 @@ pub fn record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<
 }
 ```
 
-- [ ] **Step 5: Testlerin geçtiğini gör**
+- [x] **Step 5: Testlerin geçtiğini gör**
 
 Run: `cargo test index`
 Expected: 6 test PASS.
 
-- [ ] **Step 6: Kapanış flush'ına bağla**
+- [x] **Step 6: Kapanış flush'ına bağla**
 
 `src/main.rs` — `flush_progress` içinde, `println!("(progress güncellendi: ...)")` satırından SONRA:
 
@@ -232,12 +232,12 @@ fn today() -> String {
 }
 ```
 
-- [ ] **Step 7: Test + build**
+- [x] **Step 7: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS, uyarı yok (`record` flush'tan çağrılıyor — dead code yok).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock src/index.rs src/main.rs

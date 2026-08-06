@@ -8,6 +8,7 @@ mod check;
 mod config;
 mod defaults;
 mod feedback;
+mod index;
 mod input;
 mod progress;
 mod session;
@@ -147,7 +148,24 @@ async fn flush_progress(backend: &mut Backend, session: &Session, project_root: 
     }
     progress::write_atomic(&path, &content)?;
     println!("(progress güncellendi: {})", path.display());
+
+    // Global kataloğu güncelle — başarısızlık progress yazımını geri almaz,
+    // sadece not düşülür (katalog konfor katmanı, hafızanın kendisi değil).
+    match config::global_root() {
+        Ok(global) => {
+            if let Err(e) = index::record(&global, &session.topic, project_root, &today()) {
+                eprintln!("(katalog güncellenemedi: {e})");
+            }
+        }
+        Err(e) => eprintln!("(katalog güncellenemedi: {e})"),
+    }
+
     Ok(())
+}
+
+/// Bugünün yerel tarihi — katalog satırlarının tarih alanı.
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 /// Deadline varsa ona kadar uyu; yoksa asla dönmeyen future (select guard'ı
