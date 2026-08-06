@@ -1091,7 +1091,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Interfaces:** yok (yalnız doküman).
 
-- [ ] **Step 1: SPEC.md'yi v0.2 kararlarıyla güncelle**
+- [x] **Step 1: SPEC.md'yi v0.2 kararlarıyla güncelle**
 
 Şu üç düzenlemeyi yap:
 
@@ -1118,7 +1118,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 (eski `## 11. Açık Karar Noktaları` başlığı `## 12. Açık Karar Noktaları` olur, kalan maddeleri korunur.)
 
-- [ ] **Step 2: Commit + push**
+- [x] **Step 2: Commit + push**
 
 ```bash
 git add SPEC.md

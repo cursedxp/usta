@@ -79,7 +79,7 @@ usta start rust-takvim
   - **CLI (default):** yerel `claude` CLI (Claude Code) → mevcut auth/abonelik, **API key yok, token faturası yok**. `--allowedTools WebSearch` araştırmayı açar + "dokunmaz"ı araç seviyesinde zorlar.
   - **API (opsiyonel):** `ANTHROPIC_API_KEY` ile Anthropic Messages API (reqwest), model `claude-opus-4-8`, server-side web_search, adaptive thinking.
   - Seçim: `USTA_BACKEND=cli|api` öncelikli; yoksa `claude` PATH'te → CLI, yoksa key varsa → API.
-- **Çağrı:** non-streaming (raw reqwest'te client timeout yok → sağlam). Streaming sonraki sürüm.
+- **Çağrı:** non-streaming (raw reqwest'te client timeout yok → sağlam). Streaming sonraki sürüm. CLI backend oturumu `--resume <session_id>` ile sürdürür — ilk çağrı `--output-format json`'dan id yakalar, sonraki turn'ler yalnız yeni mesajı gönderir (stale oturumda tam transcript'e düşülür).
 
 ## 7. Dosya Yapısı (wiki-linkli)
 
@@ -118,7 +118,7 @@ usta/
 
 ## 9. Hafıza & Durum
 
-- **Kalıcı.** `progress/` seviyeyi tutar, oturumlar arası hatırlar → tekrar anlatmaz.
+- **Kalıcı (v0.2'de gerçeklendi).** Oturum kapanışında (`/quit`, Ctrl-C, Ctrl-D) Usta oturumu özetleyip `.usta/learner/progress/<konu>.md`'yi tam içerik olarak yeniden yazar (atomik: tmp+rename). Sonraki oturum bu dosyayı system prompt'a yükler → tekrar anlatmaz. Boş oturum dosyaya dokunmaz.
 - **Çoklu terminal (MVP sonrası):** ortak beyin, eşzamanlı yazım nadir → sağlamlaştırma sonraya.
 
 ## 10. MVP Sınırı
@@ -127,9 +127,13 @@ usta/
 
 **Dışında (sonraki sürümler):** çoklu terminal sağlamlaştırma · model routing · marketing dışı çok-domain cilası · `tech-notes` cache · kendini-güncelleyen tech sistemi.
 
-## 11. Açık Karar Noktaları (implementasyon planında netleşir)
+## 11. Alınan Kararlar (v0.2)
+
+- **Dosya izleme granülaritesi:** 1 sn debounce (son kayıttan itibaren). İlk görüşte tam içerik, sonraki kayıtlarda unified diff, 64KB üstü dosya izleme dışı (tek seferlik yerel uyarı).
+- **Proaktiflik:** girdi ayrı thread'de (rustyline + ready el-sıkışması), ana döngü `tokio::select!` — feedback için Enter beklenmez.
+
+## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
 - `approaches/*` şablonlarının tam formatı (domaine göre yapılandırma-adımı temsili).
 - Örnek/pseudocode sınırı: "kavramı gösteren minik illüstrasyon OK, projene çözüm yazmak yasak" — pratikte nasıl zorlanır (prompt kuralı).
-- Dosya izleme granülaritesi: her kayıtta mı, debounce mı, kullanıcı tetikli mi.
 - Araştırma aracı: hangi web arama/fetch mekanizması.
