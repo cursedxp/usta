@@ -4,6 +4,7 @@
 mod anthropic;
 mod backend;
 mod brain;
+mod check;
 mod config;
 mod defaults;
 mod feedback;

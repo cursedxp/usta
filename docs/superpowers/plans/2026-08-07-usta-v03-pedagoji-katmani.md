@@ -285,7 +285,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `check::run_check(root: &Path) -> Option<String>` (async) — Cargo projesi değilse / cargo koşamazsa / 60 sn'de bitmezse `None`; temizse `"TEMİZ — cargo check hatasız geçti."`, hatalıysa kırpılmış stderr.
 - Consumes: yok.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/check.rs` (önce testler):
 
@@ -343,12 +343,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Fail'i gör**
+- [x] **Step 2: Fail'i gör**
 
 `src/main.rs`'e `mod check;` ekle. Run: `cargo test check`
 Expected: FAIL (fonksiyonlar tanımsız).
 
-- [ ] **Step 3: Implemente et**
+- [x] **Step 3: Implemente et**
 
 `src/check.rs` başına:
 
@@ -408,12 +408,12 @@ pub async fn run_check(root: &Path) -> Option<String> {
 }
 ```
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: 5 yeni test dahil hepsi PASS. (`run_check` unit-test edilmez — IO kabuğu; Task 5 duman testiyle doğrulanır.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/check.rs src/main.rs
