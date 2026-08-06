@@ -1,6 +1,6 @@
 # Usta v0.5 — Arayüz Cilası Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Konuşan tarafları görsel olarak ayır (● Usta turuncu blok, ■ kullanıcı promptu), Usta yanıtlarını terminalde gerçek markdown olarak çiz (termimad), LLM beklerken spinner göster, konu sorusunu tek-kelime kuralıyla düzelt.
 
@@ -424,8 +424,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS
-- [ ] `cargo build` — uyarısız
-- [ ] Düz mod: `echo "" | cargo run -- start deneme` → çıktıda ANSI escape YOK (`grep -c $'\x1b'` 0 olmalı)
-- [ ] TTY duman (backend varsa): oturum aç → banner tek satır soluk; mesaj yaz → spinner dönsün, yanıt `●` bloğu + render'lı markdown (madde işaretleri, bold görünür); `■ ` promptu ayrışsın; konu sorusuna cümle yaz → yeniden sorsun
-- [ ] `usta topics` / `reset` çıktıları değişmemiş (komut modu düz kaldı)
+- [x] `cargo test` — tamamı PASS
+- [x] `cargo build` — uyarısız
+- [x] Düz mod: `echo "" | cargo run -- start deneme` → çıktıda ANSI escape YOK (`grep -c $'\x1b'` 0 olmalı)
+- [x] TTY duman (backend varsa): oturum aç → banner tek satır soluk; mesaj yaz → spinner dönsün, yanıt `●` bloğu + render'lı markdown (madde işaretleri, bold görünür); `■ ` promptu ayrışsın; konu sorusuna cümle yaz → yeniden sorsun
+- [x] `usta topics` / `reset` çıktıları değişmemiş (komut modu düz kaldı)
