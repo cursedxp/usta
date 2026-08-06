@@ -27,10 +27,11 @@ use crate::session::Session;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-
-    if is_init(&args) {
-        return run_init();
-    }
+    let topic_arg = match parse_command(&args)? {
+        Command::Init => return run_init(),
+        Command::Topics => return run_topics(),
+        Command::Start(t) => t,
+    };
 
     // Backend seçimi (CLI default, API opsiyonel) — net hata mesajıyla.
     let mut backend = backend::select()?;
@@ -44,7 +45,7 @@ async fn main() -> Result<()> {
         println!("(.usta/ kuruldu)");
     }
 
-    let topic = resolve_topic(&args)?;
+    let topic = resolve_topic(topic_arg)?;
 
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
     // model — bkz. brain.rs).
@@ -177,23 +178,36 @@ async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     }
 }
 
-/// Komut satırında açık bir konu verilmiş mi? — sadece `usta start <konu>`
-/// biçimini tanır. Bare `usta` veya argümansız `usta start` için `None` döner;
-/// o durumda konu `resolve_topic` içinde TTY promptu veya "genel" default'uyla
-/// çözülür.
-fn explicit_topic(args: &[String]) -> Option<String> {
+/// Komut satırı komutu — argüman ayrıştırma tek yerde, saf ve test edilebilir.
+#[derive(Debug, PartialEq)]
+pub enum Command {
+    /// `usta init` — iskelet kur, per-dosya durum yazdır.
+    Init,
+    /// `usta topics` — global katalogdan konu listesi.
+    Topics,
+    /// `usta` / `usta start [konu]` — öğrenme oturumu.
+    Start(Option<String>),
+}
+
+/// Argümanları komuta çevir. Bilinmeyen komut net hata — sessiz sürpriz yok.
+pub fn parse_command(args: &[String]) -> Result<Command> {
     let mut rest = args.iter().skip(1);
     match rest.next().map(String::as_str) {
-        Some("start") => rest.next().cloned(),
-        _ => None,
+        None => Ok(Command::Start(None)),
+        Some("start") => Ok(Command::Start(rest.next().cloned())),
+        Some("init") => Ok(Command::Init),
+        Some("topics") => Ok(Command::Topics),
+        Some(other) => anyhow::bail!(
+            "bilinmeyen komut: '{other}'. Komutlar: start [konu], init, topics"
+        ),
     }
 }
 
 /// Konuyu çöz: açık argüman > TTY promptu > sessiz "genel" default'u.
 /// Stdin pipe'lanmışsa (TTY değilse) cevaplanamayacak bir prompt'a takılmadan
 /// direkt "genel" döner.
-fn resolve_topic(args: &[String]) -> Result<String> {
-    if let Some(raw) = explicit_topic(args) {
+fn resolve_topic(topic_arg: Option<String>) -> Result<String> {
+    if let Some(raw) = topic_arg {
         return Ok(slugify_topic(&raw));
     }
     if !std::io::stdin().is_terminal() {
@@ -222,11 +236,6 @@ pub fn slugify_topic(input: &str) -> String {
     } else {
         slug
     }
-}
-
-/// `args[1] == "init"` mi? — `main`'in en başında `start` akışından ayırmak için.
-fn is_init(args: &[String]) -> bool {
-    args.get(1).map(String::as_str) == Some("init")
 }
 
 /// `.usta/` iskeletini tembel kurar — `start`'ın kendi kendini bootstrap
@@ -266,6 +275,23 @@ fn run_init() -> Result<()> {
     }
 
     println!("Hazır. 'usta start <konu>' ile başla.");
+    Ok(())
+}
+
+/// `usta topics` — global katalogdaki kayıtları listele. LLM gerekmez.
+fn run_topics() -> Result<()> {
+    let global = config::global_root()?;
+    let content =
+        std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
+    let list = index::entries(&content);
+    if list.is_empty() {
+        println!("Kayıtlı konu yok — 'usta start <konu>' ile başla.");
+        return Ok(());
+    }
+    println!("Konu | Proje | Son oturum");
+    for e in list {
+        println!("{} | {} | {}", e.topic, e.project.display(), e.date);
+    }
     Ok(())
 }
 
@@ -411,32 +437,41 @@ mod tests {
     }
 
     #[test]
-    fn explicit_topic_none_for_bare_invocation() {
+    fn parse_bare_is_start_without_topic() {
         let args = vec!["usta".to_string()];
-        assert_eq!(explicit_topic(&args), None);
+        assert_eq!(parse_command(&args).unwrap(), Command::Start(None));
     }
 
     #[test]
-    fn explicit_topic_none_for_start_without_arg() {
-        let args = vec!["usta".to_string(), "start".to_string()];
-        assert_eq!(explicit_topic(&args), None);
+    fn parse_start_keeps_topic_arg() {
+        let args = vec!["usta".into(), "start".into(), "javascript".into()];
+        assert_eq!(
+            parse_command(&args).unwrap(),
+            Command::Start(Some("javascript".to_string()))
+        );
     }
 
     #[test]
-    fn explicit_topic_some_for_start_with_arg() {
-        let args = vec![
-            "usta".to_string(),
-            "start".to_string(),
-            "javascript".to_string(),
-        ];
-        assert_eq!(explicit_topic(&args), Some("javascript".to_string()));
+    fn parse_start_without_arg_is_start_none() {
+        let args = vec!["usta".into(), "start".into()];
+        assert_eq!(parse_command(&args).unwrap(), Command::Start(None));
     }
 
     #[test]
-    fn is_init_true_only_for_init_subcommand() {
-        assert!(is_init(&["usta".to_string(), "init".to_string()]));
-        assert!(!is_init(&["usta".to_string(), "start".to_string()]));
-        assert!(!is_init(&["usta".to_string()]));
+    fn parse_init_and_topics() {
+        assert_eq!(
+            parse_command(&["usta".into(), "init".into()]).unwrap(),
+            Command::Init
+        );
+        assert_eq!(
+            parse_command(&["usta".into(), "topics".into()]).unwrap(),
+            Command::Topics
+        );
+    }
+
+    #[test]
+    fn parse_unknown_command_errors() {
+        assert!(parse_command(&["usta".into(), "rust".into()]).is_err());
     }
 
     /// `write_project_scaffold` bir temp dizinde `.usta/` iskeletini kurar —

@@ -263,7 +263,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `resolve_topic(topic_arg: Option<String>) -> Result<String>` (eski `args` parametresi yerine)
 - Davranış değişikliği (bilinçli): `usta <bilinmeyen>` artık net hata verir (eskiden sessizce konu promptuna düşüyordu).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/main.rs` test modülünde `explicit_topic_*` ve `is_init_*` testlerini SİL, yerlerine:
 
@@ -307,12 +307,12 @@ fn parse_unknown_command_errors() {
 }
 ```
 
-- [ ] **Step 2: Fail'i gör**
+- [x] **Step 2: Fail'i gör**
 
 Run: `cargo test parse`
 Expected: FAIL (`Command`/`parse_command` tanımsız).
 
-- [ ] **Step 3: Implemente et**
+- [x] **Step 3: Implemente et**
 
 `src/main.rs`'e ekle; `is_init` ve `explicit_topic` fonksiyonlarını sil:
 
@@ -395,12 +395,12 @@ fn run_topics() -> Result<()> {
 }
 ```
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: yeni 5 test dahil hepsi PASS; `is_init`/`explicit_topic` kalıntısı yok, uyarı yok.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/main.rs
