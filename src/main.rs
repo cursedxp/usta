@@ -81,6 +81,16 @@ async fn main() -> Result<()> {
             // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
             Err(e) => ui::warn(&format!("açılış drilli atlandı: {e}")),
         }
+    } else {
+        // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
+        session.push_user(&progress::onboarding_prompt(&topic));
+        match ask_usta(&mut backend, &session.system, session.history()).await {
+            Ok((reply, web)) => {
+                print_reply(&reply, web);
+                session.push_assistant(reply);
+            }
+            Err(e) => ui::warn(&format!("tanışma turu atlandı: {e}")),
+        }
     }
 
     let _ = ready_tx.send(()); // ilk prompt

@@ -404,7 +404,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Produces: `progress::onboarding_prompt(topic: &str) -> String`
 - Davranış: progress VARSA drill (v0.3 aynen); YOKSA tanışma turn'ü — Usta ilk sözü alır, açık sohbetle konuyu tanır. Her iki durumda hata oturumu engellemez.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/progress.rs` test modülüne:
 
@@ -427,7 +427,7 @@ fn opening_prompt_mentions_curriculum_position() {
 Run: `cargo test prompt`
 Expected: FAIL.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `src/progress.rs`:
 
@@ -454,7 +454,7 @@ pub fn onboarding_prompt(topic: &str) -> String {
  Drill bitince haritadan tek cümle söyle: neredeyiz, sırada ne var (curriculum dosyan system prompt'ta).
 ```
 
-- [ ] **Step 3: Açılış bloğuna else dalı ekle**
+- [x] **Step 3: Açılış bloğuna else dalı ekle**
 
 `src/main.rs` — v0.3'ün `if has_progress { ... }` bloğuna else ekle:
 
@@ -472,12 +472,12 @@ pub fn onboarding_prompt(topic: &str) -> String {
     }
 ```
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/progress.rs src/main.rs

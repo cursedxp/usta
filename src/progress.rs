@@ -95,7 +95,23 @@ pub fn opening_prompt(topic: &str) -> String {
          Konu: {topic}. Progress dosyandaki 'Geri çağırma soruları'ndan 2-3 tanesini seç \
          ve bana SOR — cevaplarını verme, anlatma. Kısa tut: 2 dakikalık ısınma, sonra \
          günün işine geçeriz. Progress'te soru yoksa seviyeme uygun 2 küçük hatırlama \
-         sorusu üret."
+         sorusu üret. Drill bitince haritadan tek cümle söyle: neredeyiz, sırada ne var \
+         (curriculum dosyan system prompt'ta)."
+    )
+}
+
+/// Yeni konu tanışma turn'ü: yaklaşım + müfredat haritası henüz yok — Usta
+/// açık sohbetle türetir (USTA.md "Yeni Konu Tanışması"). Sabit form değil:
+/// kullanıcının söylediğinden türetilir, yön kullanıcıda kalır.
+pub fn onboarding_prompt(topic: &str) -> String {
+    format!(
+        "[YENİ KONU — TANIŞMA]\n\
+         Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n\
+         Kısa bir tanışma başlat: ne öğrenmek istiyorum, neden, hedefim ne, elimde ne \
+         var? Bu bir form değil — AÇIK sohbet; ben ne söylersem oradan türet, başka bir \
+         şey istiyorsam onu takip et. Alanı yeterince bilmiyorsan web'de araştır. \
+         Oturum kapanışında yaklaşımı ve TAM müfredat haritasını dosyalara yazacaksın — \
+         tanışmayı buna göre derinleştir ama derse çevirme, kısa tut."
     )
 }
 
@@ -214,6 +230,20 @@ mod tests {
         assert!(s.contains("rust"));
         assert!(s.contains("GERİ ÇAĞIRMA DRİLLİ"));
         assert!(s.contains("SOR"));
+    }
+
+    #[test]
+    fn onboarding_prompt_embeds_topic_and_open_conversation() {
+        let s = onboarding_prompt("linux-guvenlik");
+        assert!(s.contains("linux-guvenlik"));
+        assert!(s.contains("TANIŞMA"));
+        assert!(s.contains("form"));
+    }
+
+    #[test]
+    fn opening_prompt_mentions_curriculum_position() {
+        let s = opening_prompt("rust");
+        assert!(s.contains("harita"));
     }
 
     #[test]
