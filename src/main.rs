@@ -26,6 +26,7 @@ use rustyline::DefaultEditor;
 use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::session::Session;
+use crate::transcript::Recorder;
 
 
 /// Bu orana ulaşınca ara-kayıt + kompaksiyon tetiklenir.
@@ -67,11 +68,8 @@ async fn main() -> Result<()> {
     let topic = resolve_topic(&mut backend, topic_arg).await?;
 
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
-    // model — bkz. brain.rs).
+    // model — bkz. brain.rs). build_session bunu kullanır.
     let global = config::global_root()?;
-    let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
-
-    let mut session = Session::new(topic.clone(), system);
 
     // Dosya izleyici — TEK kez spawn edilir (thread başlatır), sonra çalışan
     // yola (&mut) geçirilir. Girdi thread'i + debounce durumu yola özgü:
@@ -82,6 +80,8 @@ async fn main() -> Result<()> {
         ui::warn(&format!("yarım oturum kaydı bulundu (flush edilememiş olabilir): {}", p.display()));
     }
 
+    // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi lock'unu
+    // yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile yapılır — Task 4.)
     let lock = lock_path(&project_root, &topic);
     if lock.exists() {
         let pid = std::fs::read_to_string(&lock).unwrap_or_default();
@@ -99,19 +99,9 @@ async fn main() -> Result<()> {
             ui::warn("kalıntı konu kilidi bulundu — pipe modunda devam ediliyor");
         }
     }
-    if let Err(e) = std::fs::write(&lock, std::process::id().to_string()) {
-        ui::warn(&format!("konu kilidi yazılamadı: {e}"));
-    }
 
-    let recorder = transcript::Recorder::new(transcript::session_path(
-        &project_root, &topic, &now_stamp(),
-    ));
-
-    // Açılış drilli için önce progress var mı bak (her iki yol da kullanır):
-    // önceki oturumlardan progress varsa Usta ilk sözü alır (testing effect).
-    let has_progress = std::fs::read_to_string(progress::progress_path(&project_root, &topic))
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
+    let (mut session, recorder, lock, has_progress) =
+        build_session(&global, &project_root, &topic, &today())?;
 
     // TUI yolu: etkileşimli terminal → ratatui inline viewport (alt-ekran yok,
     // scrollback korunur). Plain yol (TTY yok / NO_COLOR) mevcut satır REPL'i —
@@ -292,6 +282,33 @@ async fn ask_usta(
     result
 }
 
+/// Konu belli olduktan sonra oturum kurulumu — system prompt + Session + kendi
+/// kilidini yaz + recorder + has_progress. Lock-ÇAKIŞMASI onayı burada DEĞİL
+/// (çağıran yola göre halleder: plain stdin, TUI tek-tuş). Döner:
+/// `(session, recorder, lock_yolu, has_progress)`.
+fn build_session(
+    global: &Path,
+    project_root: &Path,
+    topic: &str,
+    today: &str,
+) -> Result<(Session, Recorder, PathBuf, bool)> {
+    let system = brain::load_system_prompt(global, Some(project_root), topic, today);
+    let session = Session::new(topic.to_string(), system);
+
+    let lock = lock_path(project_root, topic);
+    if let Err(e) = std::fs::write(&lock, std::process::id().to_string()) {
+        ui::warn(&format!("konu kilidi yazılamadı: {e}"));
+    }
+
+    let recorder = Recorder::new(transcript::session_path(project_root, topic, &now_stamp()));
+
+    let has_progress = std::fs::read_to_string(progress::progress_path(project_root, topic))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    Ok((session, recorder, lock, has_progress))
+}
+
 /// Oturum kapanışında progress/approach/curriculum dosyalarını LLM'e üretir.
 /// Boş oturumda dokunmaz; bilinmeyen dosya adı uyarıyla atlanır (keyfi yola
 /// asla yazılmaz).
@@ -397,7 +414,7 @@ fn now_stamp() -> String {
 
 /// Konu kilidi: `.usta/.lock-<konu>` — eşzamanlı iki oturumun aynı progress'i
 /// sessizce ezmesini önler. İçerik: pid (teşhis için).
-fn lock_path(project_root: &Path, topic: &str) -> PathBuf {
+pub(crate) fn lock_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root.join(".usta").join(format!(".lock-{topic}"))
 }
 
