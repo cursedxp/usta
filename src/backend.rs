@@ -15,6 +15,16 @@ use tokio::process::Command;
 
 use crate::anthropic::{self, Message};
 
+/// Tek tamamlama sonucu — metin + web ipucu + bağlam doluluğu.
+pub struct Reply {
+    pub text: String,
+    pub web: bool,
+    /// Son çağrının toplam bağlam token'ı (input + cache) — gösterge için.
+    /// Bu görevde sadece toplanır; tüketimi (gösterge) v0.7 Task 2'de gelir.
+    #[allow(dead_code)]
+    pub context_tokens: Option<u64>,
+}
+
 /// CLI backend'i için default model. `claude -p --model opus`.
 pub const DEFAULT_CLI_MODEL: &str = "opus";
 
@@ -89,11 +99,14 @@ fn claude_on_path() -> bool {
 }
 
 impl Backend {
-    /// Seçilen backend'e göre tamamlama iste. `(metin, web_arandı_mı)` döner.
+    /// Seçilen backend'e göre tamamlama iste, `Reply` döner.
     /// CLI modunda web kullanımı metinden tespit edilemez → `false`.
-    pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<(String, bool)> {
+    pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<Reply> {
         match self {
-            Backend::Api { client, model } => client.complete(model, system, history).await,
+            Backend::Api { client, model } => {
+                let (text, web, tokens) = client.complete(model, system, history).await?;
+                Ok(Reply { text, web, context_tokens: tokens })
+            }
             Backend::Cli { model, session_id } => {
                 let resume = session_id.clone();
                 let input = match &resume {
@@ -101,7 +114,7 @@ impl Backend {
                     None => render_transcript(history),
                 };
                 let attempt = run_claude_cli(model, system, &input, resume.as_deref()).await;
-                let (text, new_sid) = match attempt {
+                let (text, new_sid, tokens) = match attempt {
                     Ok(v) => v,
                     // Stale/silinmiş oturum — bir kez tam transcript'le baştan dene.
                     Err(_) if resume.is_some() => {
@@ -113,7 +126,7 @@ impl Backend {
                 if new_sid.is_some() {
                     *session_id = new_sid;
                 }
-                Ok((text, false))
+                Ok(Reply { text, web: false, context_tokens: tokens })
             }
         }
     }
@@ -135,15 +148,19 @@ fn last_user_text(history: &[Message]) -> String {
 
 /// `claude -p --output-format json` çıktısını ayrıştır. JSON değilse (eski
 /// sürüm / beklenmedik çıktı) ham metne düş — session id'siz devam edilir.
-pub fn parse_cli_output(stdout: &str) -> (String, Option<String>) {
+pub fn parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>) {
     #[derive(serde::Deserialize)]
     struct CliJson {
         result: Option<String>,
         session_id: Option<String>,
+        usage: Option<serde_json::Value>,
     }
     match serde_json::from_str::<CliJson>(stdout) {
-        Ok(j) => (j.result.unwrap_or_default(), j.session_id),
-        Err(_) => (stdout.trim().to_string(), None),
+        Ok(j) => {
+            let tokens = j.usage.as_ref().and_then(anthropic::sum_context_tokens);
+            (j.result.unwrap_or_default(), j.session_id, tokens)
+        }
+        Err(_) => (stdout.trim().to_string(), None, None),
     }
 }
 
@@ -177,7 +194,7 @@ async fn run_claude_cli(
     system: &str,
     input: &str,
     resume: Option<&str>,
-) -> Result<(String, Option<String>)> {
+) -> Result<(String, Option<String>, Option<u64>)> {
     let mut cmd = Command::new("claude");
     cmd.arg("-p")
         .arg("--output-format")
@@ -251,16 +268,30 @@ mod tests {
     #[test]
     fn parse_cli_output_reads_json_result_and_session() {
         let out = r#"{"type":"result","result":"merhaba","session_id":"abc-123","is_error":false}"#;
-        let (text, sid) = parse_cli_output(out);
+        let (text, sid, _) = parse_cli_output(out);
         assert_eq!(text, "merhaba");
         assert_eq!(sid, Some("abc-123".to_string()));
     }
 
     #[test]
     fn parse_cli_output_falls_back_to_plain_text() {
-        let (text, sid) = parse_cli_output("  düz metin yanıt  ");
+        let (text, sid, _) = parse_cli_output("  düz metin yanıt  ");
         assert_eq!(text, "düz metin yanıt");
         assert_eq!(sid, None);
+    }
+
+    #[test]
+    fn parse_cli_output_reads_usage_tokens() {
+        let out = r#"{"result":"m","session_id":"s1","usage":{"input_tokens":100,"cache_read_input_tokens":900}}"#;
+        let (_, _, tokens) = parse_cli_output(out);
+        assert_eq!(tokens, Some(1000));
+    }
+
+    #[test]
+    fn parse_cli_output_tokens_none_when_usage_missing() {
+        let out = r#"{"result":"m","session_id":"s1"}"#;
+        let (_, _, tokens) = parse_cli_output(out);
+        assert_eq!(tokens, None);
     }
 
     #[test]

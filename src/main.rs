@@ -74,9 +74,9 @@ async fn main() -> Result<()> {
     if has_progress {
         session.push_user(&progress::opening_prompt(&topic));
         match ask_usta(&mut backend, &session.system, session.history()).await {
-            Ok((reply, web)) => {
-                print_reply(&reply, web);
-                session.push_assistant(reply);
+            Ok(reply) => {
+                print_reply(&reply);
+                session.push_assistant(reply.text);
             }
             // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
             Err(e) => ui::warn(&format!("açılış drilli atlandı: {e}")),
@@ -85,9 +85,9 @@ async fn main() -> Result<()> {
         // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
         session.push_user(&progress::onboarding_prompt(&topic));
         match ask_usta(&mut backend, &session.system, session.history()).await {
-            Ok((reply, web)) => {
-                print_reply(&reply, web);
-                session.push_assistant(reply);
+            Ok(reply) => {
+                print_reply(&reply);
+                session.push_assistant(reply.text);
             }
             Err(e) => ui::warn(&format!("tanışma turu atlandı: {e}")),
         }
@@ -106,9 +106,9 @@ async fn main() -> Result<()> {
                     if !line.is_empty() {
                         session.push_user(&line);
                         match ask_usta(&mut backend, &session.system, session.history()).await {
-                            Ok((reply, web)) => {
-                                print_reply(&reply, web);
-                                session.push_assistant(reply);
+                            Ok(reply) => {
+                                print_reply(&reply);
+                                session.push_assistant(reply.text);
                             }
                             Err(e) => ui::warn(&format!("hata: {e}")),
                         }
@@ -146,7 +146,7 @@ async fn ask_usta(
     backend: &mut Backend,
     system: &str,
     history: &[Message],
-) -> Result<(String, bool)> {
+) -> Result<backend::Reply> {
     let spinner = ui::Spinner::start("Usta düşünüyor…");
     let result = backend.complete(system, history).await;
     spinner.stop().await;
@@ -176,8 +176,8 @@ async fn flush_progress(
         read(&a_path).as_deref(),
         read(&c_path).as_deref(),
     )));
-    let (reply, _) = ask_usta(backend, &session.system, &history).await?;
-    let files = progress::split_files(&reply);
+    let reply = ask_usta(backend, &session.system, &history).await?;
+    let files = progress::split_files(&reply.text);
     if files.is_empty() {
         anyhow::bail!("model dosya üretmedi — hiçbir şey yazılmadı");
     }
@@ -565,15 +565,15 @@ async fn handle_file_change(
         ));
     }
     session.push_user(&injected);
-    let (reply, web) = ask_usta(backend, &session.system, session.history()).await?;
-    print_reply(&reply, web);
-    session.push_assistant(reply);
+    let reply = ask_usta(backend, &session.system, session.history()).await?;
+    print_reply(&reply);
+    session.push_assistant(reply.text);
     Ok(())
 }
 
 /// Usta yanıtını sunum katmanına devret.
-fn print_reply(reply: &str, web: bool) {
-    ui::print_usta_reply(reply, web);
+fn print_reply(reply: &backend::Reply) {
+    ui::print_usta_reply(&reply.text, reply.web);
 }
 
 #[cfg(test)]

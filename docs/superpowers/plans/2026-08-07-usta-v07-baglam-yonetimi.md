@@ -65,7 +65,7 @@ Hedef görünüm:
   - `backend::parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>)` — v0.4 testleri 3'lü tuple'a UYARLANIR
 - `main::ask_usta` → `Result<Reply>`; `print_reply(reply: &backend::Reply)` (gövdesi şimdilik `ui::print_usta_reply(&reply.text, reply.web)` — gösterge Task 2'de eklenir).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/anthropic.rs` test modülüne:
 
@@ -114,7 +114,7 @@ fn parse_cli_output_tokens_none_when_usage_missing() {
 Run: `cargo test 'tokens'`
 Expected: FAIL (fonksiyon/alanlar yok).
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `src/anthropic.rs`:
 
@@ -212,12 +212,12 @@ pub fn parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>) {
 - Tüm `Ok((reply, web)) => { print_reply(&reply, web); session.push_assistant(reply); }` desenleri şuna döner: `Ok(reply) => { print_reply(&reply); session.push_assistant(reply.text); }` (select-loop, `handle_file_change`, drill, tanışma).
 - `flush_progress` içindeki `let (reply, _) = ask_usta(...)` → `let reply = ask_usta(...)?;` + `progress::split_files(&reply.text)`.
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build`
 Expected: yeni 5 test dahil hepsi PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/anthropic.rs src/backend.rs src/main.rs

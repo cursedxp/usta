@@ -77,6 +77,7 @@ impl MessageRequest {
 struct MessageResponse {
     content: Vec<Value>,
     stop_reason: Option<String>,
+    usage: Option<Value>,
 }
 
 /// Yanıt content dizisinden görünür metni çıkar (type == "text").
@@ -99,6 +100,17 @@ pub fn used_web_search(content: &[Value]) -> bool {
     })
 }
 
+/// usage bloğundan toplam bağlam token'ı: input + cache okuma + cache yazma.
+/// `input_tokens` yoksa None — gösterge sessizce atlanır.
+pub fn sum_context_tokens(usage: &Value) -> Option<u64> {
+    let get = |k: &str| usage.get(k).and_then(Value::as_u64);
+    Some(
+        get("input_tokens")?
+            + get("cache_read_input_tokens").unwrap_or(0)
+            + get("cache_creation_input_tokens").unwrap_or(0),
+    )
+}
+
 pub struct Client {
     http: reqwest::Client,
     api_key: String,
@@ -112,13 +124,13 @@ impl Client {
     /// İsteği tamamla. İstek gövdesi model/system/history'den kurulur.
     /// `pause_turn` dönerse assistant içeriğini geri ekleyip devam et.
     /// `pause_turn`'ün ham content juggling'i burada kalır — session'a sızmaz.
-    /// Nihai yanıtın (metin, web_arandı_mı) çiftini döndür.
+    /// Nihai yanıtın (metin, web_arandı_mı, bağlam_token'ı) üçlüsünü döndür.
     pub async fn complete(
         &self,
         model: &str,
         system: &str,
         history: &[Message],
-    ) -> Result<(String, bool)> {
+    ) -> Result<(String, bool, Option<u64>)> {
         let mut req = MessageRequest::new(model.to_string(), system.to_string(), history.to_vec());
         let mut web = false;
         for _ in 0..MAX_CONTINUATIONS {
@@ -151,7 +163,8 @@ impl Client {
                 continue;
             }
 
-            return Ok((extract_text(&parsed.content), web));
+            let tokens = parsed.usage.as_ref().and_then(sum_context_tokens);
+            return Ok((extract_text(&parsed.content), web, tokens));
         }
         bail!("çok fazla pause_turn devamı — döngü kesildi");
     }
@@ -193,5 +206,25 @@ mod tests {
     fn used_web_search_detects_tool_blocks() {
         assert!(used_web_search(&[json!({"type": "web_search_tool_result"})]));
         assert!(!used_web_search(&[json!({"type": "text", "text": "x"})]));
+    }
+
+    #[test]
+    fn sum_context_tokens_adds_all_categories() {
+        let usage = json!({
+            "input_tokens": 1000,
+            "cache_read_input_tokens": 30000,
+            "cache_creation_input_tokens": 500
+        });
+        assert_eq!(sum_context_tokens(&usage), Some(31500));
+    }
+
+    #[test]
+    fn sum_context_tokens_works_with_only_input() {
+        assert_eq!(sum_context_tokens(&json!({"input_tokens": 42})), Some(42));
+    }
+
+    #[test]
+    fn sum_context_tokens_none_without_input_tokens() {
+        assert_eq!(sum_context_tokens(&json!({"output_tokens": 5})), None);
     }
 }
