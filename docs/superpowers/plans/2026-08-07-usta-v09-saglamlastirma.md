@@ -47,7 +47,7 @@
   - `transcript::find_unfinished(project_root: &Path) -> Vec<PathBuf>` — `sessions/` altındaki `.done.jsonl` OLMAYAN `.jsonl` dosyaları
 - Sözleşme: her turn diske anında iner; flush/proses ölse bile oturum ham olarak durur. Kayıt hatası oturumu engellemez.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/transcript.rs` (önce testler):
 
@@ -110,7 +110,7 @@ mod tests {
 `src/main.rs`'e `mod transcript;` ekle. Run: `cargo test transcript`
 Expected: FAIL.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 ```rust
 //! Ham oturum kaydı: her turn anında `.usta/sessions/<konu>-<zaman>.jsonl`'e
@@ -204,7 +204,7 @@ impl Recorder {
 }
 ```
 
-- [ ] **Step 3: main.rs'e bağla**
+- [x] **Step 3: main.rs'e bağla**
 
 1. Zaman damgası yardımcısı (`today()` yanına):
 
@@ -242,12 +242,12 @@ fn now_stamp() -> String {
 
 (`maybe_compact` içindeki ara-flush `mark_done` ÇAĞIRMAZ — oturum devam ediyor.)
 
-- [ ] **Step 4: Test + build**
+- [x] **Step 4: Test + build**
 
 Run: `cargo test && cargo build && cargo clippy`
 Expected: yeni 4 test dahil hepsi PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transcript.rs src/main.rs

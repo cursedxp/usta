@@ -12,6 +12,7 @@ mod index;
 mod input;
 mod progress;
 mod session;
+mod transcript;
 mod ui;
 mod watcher;
 
@@ -75,6 +76,13 @@ async fn main() -> Result<()> {
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
 
+    for p in transcript::find_unfinished(&project_root) {
+        ui::warn(&format!("yarım oturum kaydı bulundu (flush edilememiş olabilir): {}", p.display()));
+    }
+    let recorder = transcript::Recorder::new(transcript::session_path(
+        &project_root, &topic, &now_stamp(),
+    ));
+
     ui::banner(&topic, &backend.label());
 
     // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
@@ -83,10 +91,13 @@ async fn main() -> Result<()> {
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
     if has_progress {
-        session.push_user(&progress::opening_prompt(&topic));
+        let opening = progress::opening_prompt(&topic);
+        session.push_user(&opening);
+        recorder.user(&opening);
         match ask_usta(&mut backend, &session.system, session.history()).await {
             Ok(reply) => {
                 print_reply(&reply, backend.context_window());
+                recorder.assistant(&reply.text);
                 session.push_assistant(reply.text);
             }
             // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
@@ -94,10 +105,13 @@ async fn main() -> Result<()> {
         }
     } else {
         // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
-        session.push_user(&progress::onboarding_prompt(&topic));
+        let onboarding = progress::onboarding_prompt(&topic);
+        session.push_user(&onboarding);
+        recorder.user(&onboarding);
         match ask_usta(&mut backend, &session.system, session.history()).await {
             Ok(reply) => {
                 print_reply(&reply, backend.context_window());
+                recorder.assistant(&reply.text);
                 session.push_assistant(reply.text);
             }
             Err(e) => ui::warn(&format!("tanışma turu atlandı: {e}")),
@@ -116,10 +130,12 @@ async fn main() -> Result<()> {
                     }
                     if !line.is_empty() {
                         session.push_user(&line);
+                        recorder.user(&line);
                         match ask_usta(&mut backend, &session.system, session.history()).await {
                             Ok(reply) => {
                                 print_reply(&reply, backend.context_window());
                                 let tokens = reply.context_tokens;
+                                recorder.assistant(&reply.text);
                                 session.push_assistant(reply.text);
                                 maybe_compact(&mut backend, &mut session, &project_root, tokens).await;
                             }
@@ -137,7 +153,7 @@ async fn main() -> Result<()> {
                 // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
                 println!(); // yarım kalan prompt satırını kirletme
                 for path in debouncer.flush() {
-                    match handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path).await {
+                    match handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path, &recorder).await {
                         Ok(tokens) => maybe_compact(&mut backend, &mut session, &project_root, tokens).await,
                         // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
                         Err(e) => ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display())),
@@ -148,7 +164,11 @@ async fn main() -> Result<()> {
     }
 
     if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
-        ui::warn(&format!("progress güncellenemedi: {e}"));
+        ui::warn(&format!("progress güncellenemedi: {e} — ham kayıt duruyor: {}", recorder.path().display()));
+    } else if session.history().is_empty() {
+        // Boş oturum: dosya hiç oluşmadı, işaretlenecek şey yok.
+    } else if let Err(e) = transcript::mark_done(recorder.path()) {
+        ui::warn(&format!("oturum kaydı işaretlenemedi: {e}"));
     }
 
     ui::notice("Görüşürüz — suya girmeye devam et.");
@@ -263,6 +283,11 @@ async fn maybe_compact(
 /// Bugünün yerel tarihi — katalog satırlarının tarih alanı.
 fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+/// Oturum dosya adı damgası — yerel saat.
+fn now_stamp() -> String {
+    chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
 /// Deadline varsa ona kadar uyu; yoksa asla dönmeyen future (select guard'ı
@@ -589,6 +614,7 @@ async fn handle_file_change(
     files: &mut feedback::FileMemory,
     project_root: &Path,
     path: &Path,
+    recorder: &transcript::Recorder,
 ) -> Result<Option<u64>> {
     let contents = std::fs::read_to_string(path)?;
     let mut injected = match files.observe(path, contents) {
@@ -612,9 +638,11 @@ async fn handle_file_change(
         ));
     }
     session.push_user(&injected);
+    recorder.user(&injected);
     let reply = ask_usta(backend, &session.system, session.history()).await?;
     let tokens = reply.context_tokens;
     print_reply(&reply, backend.context_window());
+    recorder.assistant(&reply.text);
     session.push_assistant(reply.text);
     Ok(tokens)
 }
