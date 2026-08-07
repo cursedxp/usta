@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        let topic = resolve_topic(&mut backend, topic_arg).await?;
+        let topic = resolve_topic(&mut backend, topic_arg, &project_root, &global).await?;
 
         // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi
         // lock'unu yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile.)
@@ -479,12 +479,25 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
 /// Stdin pipe'lanmışsa (TTY değilse) cevaplanamayacak bir prompt'a takılmadan
 /// direkt "genel" döner. Kısa girdi yerel slug'lanır; cümle yazılırsa NE
 /// öğrenmek istediğini modele çıkartıp en mantıklı slug'ı ona seçtiririz.
-async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Result<String> {
+async fn resolve_topic(
+    backend: &mut Backend,
+    topic_arg: Option<String>,
+    project_root: &Path,
+    global: &Path,
+) -> Result<String> {
     if let Some(raw) = topic_arg {
         return Ok(slugify_topic(&raw));
     }
+    // Boş-stdin / pipe yolu DOKUNULMAZ: cevaplanamayacak prompt'a takılmadan "genel".
     if !std::io::stdin().is_terminal() {
         return Ok("genel".to_string());
+    }
+    // Bu projede devam edilebilir konuları göster — Enter = en sonuncusuna devam.
+    let index_content =
+        std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
+    let local = index::local_topics(project_root, &index_content);
+    if !local.is_empty() {
+        println!("kayıtlı: {} — Enter = {}'e devam", local.join(", "), local[0]);
     }
     let mut rl = DefaultEditor::new()?;
     let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
@@ -493,17 +506,22 @@ async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Resu
         Err(_) => return Ok("genel".to_string()),
     };
     let raw = line.trim();
-    if raw.is_empty() {
-        return Ok("genel".to_string());
+    // Konu girişi yorumu: devam mı, yeni konu mu? (spec K1). Plain yolda devam/yeni
+    // ayrımı yalnız slug'a yansır — TUI'deki görsel notice farkı burada yok.
+    match interpret_topic_input(raw, &local) {
+        None => Ok("genel".to_string()),
+        Some(TopicChoice::Resume(t)) => Ok(t),
+        Some(TopicChoice::New(raw)) => {
+            // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
+            if raw.split_whitespace().count() <= 2 {
+                return Ok(slugify_topic(&raw));
+            }
+            // Cümle → model ne istediğini çıkarıp slug seçsin (yerel konular K2 için).
+            let slug = derive_slug(backend, &raw, &local).await;
+            ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
+            Ok(slug)
+        }
     }
-    // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
-    if raw.split_whitespace().count() <= 2 {
-        return Ok(slugify_topic(raw));
-    }
-    // Cümle → model ne istediğini çıkarıp slug seçsin.
-    let slug = derive_slug(backend, raw).await;
-    ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
-    Ok(slug)
 }
 
 /// Cümleden konu slug'ı çıkaran system prompt — hem plain (`derive_slug`) hem
@@ -513,6 +531,20 @@ pub(crate) const SLUG_SYSTEM: &str = "Kullanıcının öğrenmek/yapmak istediğ
     EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
     SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
     Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
+
+/// Slug sistem promptu — kayıtlı konular varsa devam-farkındalığı eklenir
+/// (spec K2): model devam niyetini mevcut slug'a çevirir, akış Resume sayar.
+pub(crate) fn slug_system(known: &[String]) -> String {
+    if known.is_empty() {
+        return SLUG_SYSTEM.to_string();
+    }
+    format!(
+        "{SLUG_SYSTEM}\n\nMevcut konular: {list}. Kullanıcının yazdığı bu konulardan \
+         birine DEVAM ETME isteğiyse (aynı işin sürdürülmesi, 'kaldığımız yer', önceki \
+         çalışmaya atıf) SADECE o konunun slug'ını AYNEN döndür. Yeni bir konuysa yeni slug üret.",
+        list = known.join(", ")
+    )
+}
 
 /// Model slug cevabını nihai slug'a çevir — tireleri boşluğa çevirip `slugify_topic`
 /// ile garantile; "genel"e düşerse ham girdiden yerel slug türet. Saf.
@@ -525,12 +557,53 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     }
 }
 
+/// Konu girişi yorumu: devam mı, yeni konu mu? (spec K1)
+#[derive(Debug)]
+pub(crate) enum TopicChoice {
+    /// Mevcut proje-yerel konuya devam.
+    Resume(String),
+    /// Yeni konu akışı — ham girdi (slug'lama çağıranda).
+    New(String),
+}
+
+/// Deterministik seçim kuralları — sıra spec §3/K1 tablosu. `None` = girdiyi
+/// yut (boş + devam edilecek konu yok). LLM'siz; cümleler `New` döner, K2
+/// (slug_system) orada devreye girer.
+pub(crate) fn interpret_topic_input(raw: &str, local: &[String]) -> Option<TopicChoice> {
+    let raw = raw.trim();
+    // 1-2: boş Enter.
+    if raw.is_empty() {
+        return local.first().map(|t| TopicChoice::Resume(t.clone()));
+    }
+    // 3: rakam seçimi.
+    if let Ok(n) = raw.parse::<usize>() {
+        if n >= 1 && n <= local.len() {
+            return Some(TopicChoice::Resume(local[n - 1].clone()));
+        }
+    }
+    // 4: slug eşleşmesi.
+    let slug = slugify_topic(raw);
+    if let Some(t) = local.iter().find(|t| **t == slug) {
+        return Some(TopicChoice::Resume(t.clone()));
+    }
+    // 5: kısa devam-kalıbı (deasciify sonrası substring).
+    if !local.is_empty() && raw.split_whitespace().count() <= 4 {
+        let d: String = raw.chars().map(deasciify).collect::<String>().to_lowercase();
+        const RESUME_WORDS: &[&str] = &["devam", "kaldigimiz", "kaldigim", "continue", "resume"];
+        if RESUME_WORDS.iter().any(|w| d.contains(w)) {
+            return Some(TopicChoice::Resume(local[0].clone()));
+        }
+    }
+    // 6: yeni konu.
+    Some(TopicChoice::New(raw.to_string()))
+}
+
 /// Cümleden konu slug'ını modele çıkart (plain yol). Hata → yerel slug.
 /// Çağrı sonrası CLI oturumu KOŞULSUZ sıfırlanır — slug mini-oturumu
 /// öğrenme oturumuna resume edilip bağlamı kirletmesin (spec B1).
-async fn derive_slug(backend: &mut Backend, raw: &str) -> String {
+async fn derive_slug(backend: &mut Backend, raw: &str, known: &[String]) -> String {
     let history = [Message::user(raw)];
-    let out = match ask_usta(backend, SLUG_SYSTEM, &history).await {
+    let out = match ask_usta(backend, &slug_system(known), &history).await {
         Ok(reply) => finalize_slug(raw, &reply.text),
         Err(_) => slugify_topic(raw),
     };
@@ -1030,5 +1103,64 @@ mod tests {
     fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
         // Model "genel" derse ham girdiden yerel slug türet.
         assert_eq!(finalize_slug("temel linux güvenliği", "genel"), "temel-linux-guvenligi");
+    }
+
+    #[test]
+    fn slug_system_injects_known_topics() {
+        let s = slug_system(&["linux-guvenlik".to_string(), "rust".to_string()]);
+        assert!(s.contains("linux-guvenlik, rust"));
+        assert!(s.contains("DEVAM"));
+    }
+
+    #[test]
+    fn slug_system_without_topics_is_base_only() {
+        let s = slug_system(&[]);
+        assert!(s.contains("slug"));
+        assert!(!s.contains("Mevcut konular"));
+    }
+
+    #[test]
+    fn interpret_empty_resumes_latest_or_swallows() {
+        let local = vec!["son-konu".to_string(), "eski".to_string()];
+        assert!(matches!(interpret_topic_input("", &local), Some(TopicChoice::Resume(t)) if t == "son-konu"));
+        assert!(interpret_topic_input("  ", &[]).is_none()); // konu yok → yut
+    }
+
+    #[test]
+    fn interpret_digit_selects_from_list_out_of_range_is_new() {
+        let local = vec!["a".to_string(), "b".to_string()];
+        assert!(matches!(interpret_topic_input("2", &local), Some(TopicChoice::Resume(t)) if t == "b"));
+        assert!(matches!(interpret_topic_input("5", &local), Some(TopicChoice::New(r)) if r == "5"));
+    }
+
+    #[test]
+    fn interpret_existing_slug_match_resumes() {
+        let local = vec!["linux-guvenlik".to_string()];
+        // Slugify eşleşmesi: Türkçe yazım da yakalanır.
+        assert!(matches!(
+            interpret_topic_input("Linux Güvenlik", &local),
+            Some(TopicChoice::Resume(t)) if t == "linux-guvenlik"
+        ));
+    }
+
+    #[test]
+    fn interpret_resume_phrases_short_input_only() {
+        let local = vec!["son-konu".to_string()];
+        for s in ["devam", "devam edelim", "kaldığımız yerden devam", "continue", "resume"] {
+            assert!(matches!(interpret_topic_input(s, &local), Some(TopicChoice::Resume(t)) if t == "son-konu"), "{s}");
+        }
+        // >4 kelime → LLM'e/yeni akışa (K2 yakalar).
+        assert!(matches!(
+            interpret_topic_input("devam edelim ama bu sefer docker öğrenelim", &local),
+            Some(TopicChoice::New(_))
+        ));
+        // Devam kalıbı ama hiç konu yok → yeni konu.
+        assert!(matches!(interpret_topic_input("devam", &[]), Some(TopicChoice::New(_))));
+    }
+
+    #[test]
+    fn interpret_other_input_is_new() {
+        let local = vec!["son-konu".to_string()];
+        assert!(matches!(interpret_topic_input("docker compose", &local), Some(TopicChoice::New(r)) if r == "docker compose"));
     }
 }

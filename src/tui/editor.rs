@@ -36,7 +36,6 @@ impl InputBox {
 
     // Editör kamu API'si — döngü satırı Action::Submit'ten alır, imleci editör
     // kendi çizer, bu yüzden şu an çağrılmıyorlar (value() testlerde kullanılır).
-    #[allow(dead_code)]
     pub fn value(&self) -> &str { self.input.value() }
     #[allow(dead_code)]
     pub fn visual_cursor(&self) -> usize { self.input.visual_cursor() }

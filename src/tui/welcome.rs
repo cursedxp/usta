@@ -143,37 +143,42 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
     left.push((format!("  {}", fit(&d.model, left_w - 2)), false));
     left.push((format!("  {}", fit(&d.dir, left_w - 2)), false));
 
-    let mut right: Vec<String> = Vec::new();
+    let mut right: Vec<(String, Style)> = Vec::new();
     if d.first_session {
-        right.push("Öğrenme Durumu".to_string());
-        right.push(String::new());
-        right.push(fit("İlk oturum — tanışmayla başlarız.", right_w));
+        right.push(("Öğrenme Durumu".to_string(), Style::default()));
+        right.push((String::new(), Style::default()));
+        right.push((fit("İlk oturum — tanışmayla başlarız.", right_w), Style::default()));
     } else {
-        right.push("Öğrenme Durumu".to_string());
+        right.push(("Öğrenme Durumu".to_string(), Style::default()));
         let konu = match &d.level {
             Some(l) => format!("Konu: {} · {}", d.topic, l),
             None => format!("Konu: {}", d.topic),
         };
-        right.push(fit(&konu, right_w));
-        if let Some(p) = d.map_percent { right.push(format!("Harita: %{p}")); }
-        right.push("─".repeat(right_w));
-        right.push("Sırada".to_string());
-        if let Some(n) = &d.next_item { right.push(fit(n, right_w)); }
-        if d.drill_count > 0 { right.push(format!("Drill: {} soru hazır", d.drill_count)); }
+        right.push((fit(&konu, right_w), Style::default()));
+        if let Some(p) = d.map_percent { right.push((format!("Harita: %{p}"), Style::default())); }
+        right.push(("─".repeat(right_w), Style::default()));
+        right.push(("Sırada".to_string(), Style::default()));
+        if let Some(n) = &d.next_item { right.push((fit(n, right_w), Style::default())); }
+        if d.drill_count > 0 { right.push((format!("Drill: {} soru hazır", d.drill_count), Style::default())); }
     }
 
     render_box(d.version, left, right, width)
 }
 
 /// Kimlik modu: konu YOK. Sol kolon logo + selam + model + dizin; sağ kolon
-/// "Ne öğrenmek istiyorsun?" + kayıtlı konular (veya ilk-oturum mesajı).
-/// Konu seçilmeden gösterilir (Claude tarzı: welcome üstte, soru altta).
-/// run.rs konu girişinde (`ask_topic`) bağlı.
+/// "Ne öğrenmek istiyorsun?" + devam edilebilecek yerel konular (veya
+/// ilk-oturum mesajı). Konu seçilmeden gösterilir (Claude tarzı: welcome
+/// üstte, soru altta). run.rs konu girişinde (`ask_topic`) bağlı.
+///
+/// `local`: bu projede kayıtlı konular — boş değilse `Enter → <ilk>'e devam`
+/// satırı ve numaralı liste (≤6) gösterilir. `other`: başka projelerde
+/// kayıtlı konular — sadece bilgi amaçlı, seçilemez, soluk bir satırda özetlenir.
 pub fn render_welcome_identity(
     name: Option<&str>,
     model: &str,
     dir: &str,
-    topics: &[String],
+    local: &[String],
+    other: &[String],
     width: u16,
 ) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
@@ -192,22 +197,40 @@ pub fn render_welcome_identity(
     left.push((format!("  {}", fit(model, left_w - 2)), false));
     left.push((format!("  {}", fit(dir, left_w - 2)), false));
 
-    let mut right: Vec<String> = vec!["Ne öğrenmek istiyorsun?".to_string(), String::new()];
-    if topics.is_empty() {
-        right.push(fit("İlk oturum — bir konu yaz.", right_w));
+    // Diğer projelerdeki konular sadece bilgi amaçlı — soluk (DIM) gösterilir.
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let mut right: Vec<(String, Style)> = vec![
+        ("Ne öğrenmek istiyorsun?".to_string(), Style::default()),
+        (String::new(), Style::default()),
+    ];
+    if let Some(first) = local.first() {
+        right.push((fit(&format!("Enter → {first}'e devam"), right_w), Style::default()));
+        for (i, t) in local.iter().take(6).enumerate() {
+            right.push((fit(&format!("{}) {t}", i + 1), right_w), Style::default()));
+        }
+        right.push((String::new(), Style::default()));
+        right.push((fit("Yeni konu için yaz.", right_w), Style::default()));
+        if !other.is_empty() {
+            right.push((fit(&format!("Diğer projelerde: {}", other.join(", ")), right_w), dim));
+        }
     } else {
-        right.push(fit("Kısa yaz ya da cümleyle anlat.", right_w));
-        right.push(String::new());
-        let list = format!("Kayıtlı: {}", topics.join(" · "));
-        right.push(fit(&list, right_w));
+        // Spec §3: yerel konu yokken ilk-oturum mesajı AYNEN korunur.
+        right.push((fit("İlk oturum — bir konu yaz.", right_w), Style::default()));
+        // mevcut "Kayıtlı:" satırı KALKAR — yerine other bilgi satırı (varsa).
+        if !other.is_empty() {
+            right.push((String::new(), Style::default()));
+            right.push((fit(&format!("Diğer projelerde: {}", other.join(", ")), right_w), dim));
+        }
     }
 
     render_box(env!("CARGO_PKG_VERSION"), left, right, width)
 }
 
 /// Çift kolonlu kutuyu çiz — kenar + " │ " ayracı + eşit-genişlik padding.
-/// `left`: (metin, logo-mu). `right`: düz satırlar (ilk dolu satır başlık stili).
-fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<String>, width: u16) -> Text<'static> {
+/// `left`: (metin, logo-mu). `right`: (metin, stil) — 0. satır ayrıca
+/// otomatik kalın+turuncu başlık stiline büründürülür (satırın kendi stili
+/// boşsa bile), diğer satırlar taşıdıkları stille (ör. DIM) basılır.
+fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<(String, Style)>, width: u16) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
     let inner = total - 2;                      // kenarlar
     let left_w = 34usize;
@@ -224,14 +247,14 @@ fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<String>, widt
     let mut lines: Vec<Line> = vec![Line::from(top)];
     for i in 0..rows {
         let (ltxt, is_logo) = left.get(i).cloned().unwrap_or_default();
-        let rtxt = right.get(i).cloned().unwrap_or_default();
+        let (rtxt, rtxt_style) = right.get(i).cloned().unwrap_or_default();
         let lspan = Span::styled(
             pad(&ltxt, left_w),
             if is_logo { Style::default().fg(ORANGE) } else { Style::default() },
         );
         let rstyle = if i == 0 && !rtxt.is_empty() {
             Style::default().add_modifier(Modifier::BOLD).fg(ORANGE)
-        } else { Style::default() };
+        } else { rtxt_style };
         lines.push(Line::from(vec![
             Span::raw("│"),
             lspan,
@@ -329,8 +352,8 @@ mod tests {
     #[test]
     fn render_identity_with_topics_lists_them_and_equal_width() {
         use unicode_width::UnicodeWidthStr;
-        let topics = vec!["rust".to_string(), "gtm".to_string()];
-        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &topics, 80);
+        let local = vec!["rust".to_string(), "gtm".to_string()];
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], 80);
         let lines = plain_lines(&t);
         let w = lines[0].width();
         assert!(lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
@@ -343,10 +366,52 @@ mod tests {
 
     #[test]
     fn render_identity_no_topics_shows_first_session_and_no_name() {
-        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], 80);
+        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], 80);
         let joined = plain_lines(&t).join("\n");
-        assert!(joined.contains("İlk oturum"));
+        assert!(joined.contains("Ne öğrenmek istiyorsun?"));
         assert!(joined.contains("Merhaba!"));       // isim yok → jenerik
         assert!(!joined.contains("Merhaba,"));      // "Merhaba, X!" biçimi yok
+        assert!(!joined.contains("Enter →"));       // konu yok → devam satırı yok
+    }
+
+    #[test]
+    fn identity_welcome_lists_local_topics_with_enter_hint() {
+        let local = vec!["brainstorm-ilk-adim".to_string(), "linux-guvenlik".to_string()];
+        let other = vec!["rust".to_string()];
+        let t = render_welcome_identity(Some("Anil"), "opus · cli", "~/x", &local, &other, 80);
+        let joined = plain_lines(&t).join("\n");
+        assert!(joined.contains("Enter"));
+        assert!(joined.contains("brainstorm-ilk-adim"));
+        assert!(joined.contains("1)"));
+        assert!(joined.contains("2)"));
+        assert!(joined.contains("Diğer projelerde"));
+        // Hizalama korunur.
+        use unicode_width::UnicodeWidthStr;
+        let lines = plain_lines(&t);
+        let w = lines[0].width();
+        assert!(lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
+    }
+
+    #[test]
+    fn identity_welcome_without_local_topics_keeps_first_run_look() {
+        let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], 80);
+        let joined = plain_lines(&t).join("\n");
+        assert!(joined.contains("Ne öğrenmek istiyorsun"));
+        assert!(joined.contains("İlk oturum"));
+        assert!(!joined.contains("Enter →"));
+    }
+
+    #[test]
+    fn identity_welcome_other_projects_line_is_dim() {
+        let local = vec!["rust".to_string()];
+        let other = vec!["gtm".to_string()];
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &other, 80);
+        let span = t
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .find(|s| s.content.contains("Diğer projelerde"))
+            .expect("Diğer projelerde satırı bulunamalı");
+        assert!(span.style.add_modifier.contains(Modifier::DIM), "stil DIM içermiyor: {:?}", span.style);
     }
 }

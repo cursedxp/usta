@@ -155,32 +155,37 @@ async fn ask_topic(
     tui: &mut Tui,
     editor: &mut InputBox,
     events: &mut EventStream,
-    global: &Path,
     profile: Option<&str>,
     model: &str,
     dir: &str,
+    local: &[String],
+    other: &[String],
 ) -> Result<Option<String>> {
-    // Kayıtlı konular (global katalog) — boşsa ilk-oturum mesajı.
-    let idx = std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
-    let topics: Vec<String> = {
-        let mut t: Vec<String> = crate::index::entries(&idx).into_iter().map(|e| e.topic).collect();
-        t.dedup();
-        t.truncate(6);
-        t
-    };
+    // Konu listeleri (proje-yerel + diğer projeler) çağıran tarafından hesaplanır
+    // ve buraya geçirilir — burada global katalog okunmaz (bkz. `run`).
     let name = profile.and_then(welcome::extract_name);
     let width = current_width(tui);
-    page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, &topics, width))?;
+    page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, width))?;
     page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
 
     loop {
         draw(tui, editor, &Status::Idle, None, 0)?;
         match events.next().await {
-            Some(Ok(Event::Key(k))) => match editor.handle_key(k) {
-                Action::Submit(line) => return Ok(Some(line)),
-                Action::Exit => return Ok(None),
-                Action::None => {}
-            },
+            Some(Ok(Event::Key(k))) => {
+                // Boş Enter = devam sentineli (yalnız devam edilecek konu varsa) —
+                // editör boş satırı yutmadan biz yakalarız (spec K1 kural 1).
+                if matches!(k.code, KeyCode::Enter)
+                    && editor.value().trim().is_empty()
+                    && !local.is_empty()
+                {
+                    return Ok(Some(String::new()));
+                }
+                match editor.handle_key(k) {
+                    Action::Submit(line) => return Ok(Some(line)),
+                    Action::Exit => return Ok(None),
+                    Action::None => {}
+                }
+            }
             Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
             Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
             None => return Ok(None), // stream bitti — sıcak döngüye girme (spec B4)
@@ -232,50 +237,92 @@ pub async fn run(
     // Konu belirle: argüman verildiyse yerel slug'la (`usta start "JavaScript
     // Basics"` çalışsın). Argüman yoksa kimlik welcome + girdi kutusundan sor.
     let had_topic_arg = topic_arg.is_some();
+    let mut resumed = false; // devam (resume) akışı seçildi mi — tam-mod welcome'ı tetikler
     let topic = match topic_arg {
         Some(t) => crate::slugify_topic(&t),
         None => {
+            // Konu listeleri burada hesaplanır ve ask_topic'e geçirilir:
+            //  - `local`: bu projede devam edilebilir konular (yeni → eski, [0]=son)
+            //  - `other`: diğer projelerdeki konular (yalnız bilgi amaçlı, en çok 4)
+            let index_content =
+                std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
+            let local = crate::index::local_topics(project_root, &index_content);
+            let other: Vec<String> = {
+                let mut o: Vec<String> = crate::index::entries(&index_content)
+                    .into_iter()
+                    .filter(|e| e.project != project_root)
+                    .map(|e| e.topic)
+                    .collect();
+                o.dedup();
+                o.truncate(4);
+                o
+            };
             let raw = match ask_topic(
                 &mut tui,
                 &mut editor,
                 &mut events,
-                global,
                 read(global.join("learner/profile.md")).as_deref(),
                 &backend.label(),
                 &short_dir(project_root),
+                &local,
+                &other,
             )
             .await?
             {
                 Some(line) => line,
                 None => return Ok(None), // konu vermeden çıktı
             };
-            // Kısa girdi → yerel slug; cümle → LLM slug (spinner), hata → yerel.
-            if raw.split_whitespace().count() <= 2 {
-                crate::slugify_topic(&raw)
-            } else {
-                let slug = match ask_live(
-                    &mut tui,
-                    &mut editor,
-                    &mut events,
-                    backend,
-                    crate::SLUG_SYSTEM,
-                    &[Message::user(raw.as_str())],
-                    None,
-                )
-                .await
-                {
-                    Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
-                    Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
-                };
-                // Slug mini-oturumu öğrenme oturumuna taşınmasın (spec B1).
-                backend.reset_session();
-                slug
+            match crate::interpret_topic_input(&raw, &local) {
+                // GÜVENLİ FALLBACK (spec/brief zorunlu): interpret yalnız
+                // (boş girdi + local boş) durumunda None döner; ask_topic boş-Enter
+                // sentinelini yalnız local doluyken üretir, yani buraya normalde
+                // düşülmez. Yine de `unreachable!` panik riski taşır — girdiyi
+                // "genel"e düşürüp güvenli kalırız (yeni konu gibi, notice ile).
+                None => {
+                    page_notice(&mut tui, "konu: genel — detayı sohbette anlatırsın")?;
+                    "genel".to_string()
+                }
+                Some(crate::TopicChoice::Resume(t)) => {
+                    page_notice(&mut tui, &format!("devam: {t}"))?;
+                    resumed = true; // aşağıda tam-mod welcome için
+                    t
+                }
+                Some(crate::TopicChoice::New(raw)) => {
+                    // Yeni-konu akışı: ≤2 kelime yerel slug; cümle → LLM slug (spinner).
+                    let slug = if raw.split_whitespace().count() <= 2 {
+                        crate::slugify_topic(&raw)
+                    } else {
+                        let slug = match ask_live(
+                            &mut tui,
+                            &mut editor,
+                            &mut events,
+                            backend,
+                            &crate::slug_system(&local),
+                            &[Message::user(raw.as_str())],
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
+                            Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
+                        };
+                        // Slug mini-oturumu öğrenme oturumuna taşınmasın (spec B1).
+                        backend.reset_session();
+                        slug
+                    };
+                    // LLM/kısa slug yerel bir konuya denk düştüyse bu da DEVAM sayılır
+                    // (spec K2): notice devam olur, tam-mod welcome basılır.
+                    if local.contains(&slug) {
+                        page_notice(&mut tui, &format!("devam: {slug}"))?;
+                        resumed = true;
+                    } else {
+                        page_notice(&mut tui, &format!("konu: {slug} — detayı sohbette anlatırsın"))?;
+                    }
+                    slug
+                }
             }
         }
     };
-    if !had_topic_arg {
-        page_notice(&mut tui, &format!("konu: {topic} — detayı sohbette anlatırsın"))?;
-    }
 
     // Lock-çakışma onayı (TUI tek-tuş) — build_session'dan ÖNCE, kendi kilidini
     // yazmadan. Reddedilirse session/kilit yok → Tui drop restore.
@@ -311,9 +358,11 @@ pub async fn run(
         }
     }
 
-    // Welcome: konu baştan belliyse (arg verilmişti) tam-mod öğrenme durumu
-    // basılır. Aksi halde kimlik welcome ask_topic içinde zaten basıldı — tek welcome.
-    if had_topic_arg {
+    // Welcome: konu baştan belliyse (arg verilmişti) VEYA devam seçildiyse tam-mod
+    // öğrenme durumu basılır. Devamda kimlik welcome zaten ask_topic içinde basıldı;
+    // üstüne öğrenme-durumu kutusu gelir (iki kutu üst üste — Claude Code akışına benzer).
+    // Salt yeni konuda ise yalnız kimlik welcome kalır.
+    if had_topic_arg || resumed {
         let data = welcome::gather(
             read(global.join("learner/profile.md")).as_deref(),
             read(progress::progress_path(project_root, &topic)).as_deref(),
