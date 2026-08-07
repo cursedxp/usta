@@ -36,6 +36,9 @@ const COMPACT_KEEP_LAST: usize = 4;
 const COMPACT_NOTE: &str = "[ARA KAYIT] Bağlam sıkıştırıldı. Önceki konuşmanın özü \
 system prompt'taki progress/curriculum/approach dosyalarına yazıldı — güncel durum \
 orada. Kaldığımız yerden devam et; kullanıcıya kompaksiyonu anlatma.";
+/// Tek debounce penceresinde feedback verilecek azami dosya sayısı — üstü
+/// "toplu değişiklik" sayılır (git checkout, format-all): LLM çağrısı yok.
+const MAX_FEEDBACK_BATCH: usize = 5;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -152,11 +155,26 @@ async fn main() -> Result<()> {
             _ = sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
                 println!(); // yarım kalan prompt satırını kirletme
-                for path in debouncer.flush() {
-                    match handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path, &recorder).await {
-                        Ok(tokens) => maybe_compact(&mut backend, &mut session, &project_root, tokens).await,
-                        // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
-                        Err(e) => ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display())),
+                let batch = debouncer.flush();
+                if batch.len() > MAX_FEEDBACK_BATCH {
+                    ui::notice(&format!(
+                        "toplu değişiklik ({} dosya) — feedback atlandı, izleme sürüyor",
+                        batch.len()
+                    ));
+                    // FileMemory'yi sessizce senkronla: sonraki tekil kayıt
+                    // bu yığına karşı dev diff üretmesin.
+                    for path in batch {
+                        if let Ok(c) = std::fs::read_to_string(&path) {
+                            let _ = files.observe(&path, c);
+                        }
+                    }
+                } else {
+                    for path in batch {
+                        match handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path, &recorder).await {
+                            Ok(tokens) => maybe_compact(&mut backend, &mut session, &project_root, tokens).await,
+                            // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
+                            Err(e) => ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display())),
+                        }
                     }
                 }
             }

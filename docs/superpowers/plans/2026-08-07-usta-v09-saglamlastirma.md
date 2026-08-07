@@ -270,7 +270,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Produces: `main::MAX_FEEDBACK_BATCH: usize = 5`
 - Sözleşme: debounce batch'i tavanı aşarsa (git checkout, toplu formatlama) LLM feedback ATLANIR ama `FileMemory` sessizce senkronlanır — sonraki tekil kayıt, atlanmış yığına karşı dev diff üretmez. Tek bildirim satırı basılır.
 
-- [ ] **Step 1: Implemente et**
+- [x] **Step 1: Implemente et**
 
 ```rust
 /// Tek debounce penceresinde feedback verilecek azami dosya sayısı — üstü
@@ -309,12 +309,12 @@ Select-loop'un deadline kolunu değiştir:
 
 (`handle_file_change` imzasındaki `recorder` parametresi Task 1'den geliyor — parametre sırası oradakiyle aynı tutulur.)
 
-- [ ] **Step 2: Test + build + duman**
+- [x] **Step 2: Test + build + duman**
 
 Run: `cargo test && cargo build && cargo clippy`
 Expected: hepsi PASS. Duman (backend gerekmez): izlenen temp dizinde `for i in $(seq 1 20); do echo x > f$i.txt; done` → tek "toplu değişiklik (20 dosya)" bildirimi, LLM çağrısı yok.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/main.rs
