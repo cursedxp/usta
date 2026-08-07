@@ -48,6 +48,12 @@ fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
     page(tui, ansi_to_text(&format!("\x1b[2m· {msg}\x1b[0m")))
 }
 
+/// Anlık terminal genişliği — resize sonrası sarma doğru kalsın (spec B3).
+/// Ölçüm başarısızsa 80'e düş (sarma bozulmaz, sadece dar olur).
+fn current_width(tui: &Tui) -> u16 {
+    tui.terminal.size().map(|s| s.width).unwrap_or(80)
+}
+
 /// Alt bölgeyi çiz: girdi kutusu (üstte) + durum satırı (altta).
 fn draw(
     tui: &mut Tui,
@@ -150,7 +156,6 @@ async fn ask_topic(
     profile: Option<&str>,
     model: &str,
     dir: &str,
-    width: u16,
 ) -> Result<Option<String>> {
     // Kayıtlı konular (global katalog) — boşsa ilk-oturum mesajı.
     let idx = std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
@@ -161,6 +166,7 @@ async fn ask_topic(
         t
     };
     let name = profile.and_then(welcome::extract_name);
+    let width = current_width(tui);
     page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, &topics, width))?;
     page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
 
@@ -213,7 +219,6 @@ pub async fn run(
     let mut tui = crate::tui::term::setup()?;
     let mut editor = InputBox::new();
     let mut events = EventStream::new();
-    let width = tui.terminal.size()?.width;
     let read = |p: PathBuf| std::fs::read_to_string(p).ok();
 
     // Konu belirle: argüman verildiyse yerel slug'la (`usta start "JavaScript
@@ -230,7 +235,6 @@ pub async fn run(
                 read(global.join("learner/profile.md")).as_deref(),
                 &backend.label(),
                 &short_dir(project_root),
-                width,
             )
             .await?
             {
@@ -310,7 +314,8 @@ pub async fn run(
             &backend.label(),
             &short_dir(project_root),
         );
-        page(&mut tui, welcome::render_welcome(&data, width))?;
+        let w = current_width(&tui);
+        page(&mut tui, welcome::render_welcome(&data, w))?;
     }
 
     // Açılış drilli / tanışma (main.rs plain yolunun TUI karşılığı).
@@ -334,7 +339,8 @@ pub async fn run(
     {
         Ok(AskOutcome::Reply(reply)) => {
             last_tokens = reply.context_tokens;
-            page_reply(&mut tui, &reply.text, width)?;
+            let w = current_width(&tui);
+            page_reply(&mut tui, &reply.text, w)?;
             recorder.assistant(&reply.text);
             session.push_assistant(reply.text);
         }
@@ -370,7 +376,8 @@ pub async fn run(
                         ).await {
                             Ok(AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
-                                page_reply(&mut tui, &reply.text, width)?;
+                                let w = current_width(&tui);
+                                page_reply(&mut tui, &reply.text, w)?;
                                 recorder.assistant(&reply.text);
                                 session.push_assistant(reply.text);
                                 crate::maybe_compact(backend, &mut session, project_root, last_tokens).await;
@@ -409,7 +416,8 @@ pub async fn run(
                             Ok(crate::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
                             Ok(crate::FileFeedback::Yanit { tokens, reply }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
-                                page_reply(&mut tui, &reply.text, width)?;
+                                let w = current_width(&tui);
+                                page_reply(&mut tui, &reply.text, w)?;
                                 crate::maybe_compact(backend, &mut session, project_root, tokens).await;
                             }
                             Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,
