@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        let topic = resolve_topic(&mut backend, topic_arg).await?;
+        let topic = resolve_topic(&mut backend, topic_arg, &project_root, &global).await?;
 
         // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi
         // lock'unu yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile.)
@@ -479,12 +479,25 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
 /// Stdin pipe'lanmışsa (TTY değilse) cevaplanamayacak bir prompt'a takılmadan
 /// direkt "genel" döner. Kısa girdi yerel slug'lanır; cümle yazılırsa NE
 /// öğrenmek istediğini modele çıkartıp en mantıklı slug'ı ona seçtiririz.
-async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Result<String> {
+async fn resolve_topic(
+    backend: &mut Backend,
+    topic_arg: Option<String>,
+    project_root: &Path,
+    global: &Path,
+) -> Result<String> {
     if let Some(raw) = topic_arg {
         return Ok(slugify_topic(&raw));
     }
+    // Boş-stdin / pipe yolu DOKUNULMAZ: cevaplanamayacak prompt'a takılmadan "genel".
     if !std::io::stdin().is_terminal() {
         return Ok("genel".to_string());
+    }
+    // Bu projede devam edilebilir konuları göster — Enter = en sonuncusuna devam.
+    let index_content =
+        std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
+    let local = index::local_topics(project_root, &index_content);
+    if !local.is_empty() {
+        println!("kayıtlı: {} — Enter = {}'e devam", local.join(", "), local[0]);
     }
     let mut rl = DefaultEditor::new()?;
     let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
@@ -493,18 +506,22 @@ async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Resu
         Err(_) => return Ok("genel".to_string()),
     };
     let raw = line.trim();
-    if raw.is_empty() {
-        return Ok("genel".to_string());
+    // Konu girişi yorumu: devam mı, yeni konu mu? (spec K1). Plain yolda devam/yeni
+    // ayrımı yalnız slug'a yansır — TUI'deki görsel notice farkı burada yok.
+    match interpret_topic_input(raw, &local) {
+        None => Ok("genel".to_string()),
+        Some(TopicChoice::Resume(t)) => Ok(t),
+        Some(TopicChoice::New(raw)) => {
+            // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
+            if raw.split_whitespace().count() <= 2 {
+                return Ok(slugify_topic(&raw));
+            }
+            // Cümle → model ne istediğini çıkarıp slug seçsin (yerel konular K2 için).
+            let slug = derive_slug(backend, &raw, &local).await;
+            ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
+            Ok(slug)
+        }
     }
-    // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
-    if raw.split_whitespace().count() <= 2 {
-        return Ok(slugify_topic(raw));
-    }
-    // Cümle → model ne istediğini çıkarıp slug seçsin.
-    // TODO(Task 5): gerçek yerel konu listesi bağlanacak — şimdilik boş.
-    let slug = derive_slug(backend, raw, &[]).await;
-    ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
-    Ok(slug)
 }
 
 /// Cümleden konu slug'ı çıkaran system prompt — hem plain (`derive_slug`) hem
@@ -541,8 +558,6 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
 }
 
 /// Konu girişi yorumu: devam mı, yeni konu mu? (spec K1)
-/// Task 5'te çağrıcı eklenecek.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum TopicChoice {
     /// Mevcut proje-yerel konuya devam.
@@ -553,8 +568,7 @@ pub(crate) enum TopicChoice {
 
 /// Deterministik seçim kuralları — sıra spec §3/K1 tablosu. `None` = girdiyi
 /// yut (boş + devam edilecek konu yok). LLM'siz; cümleler `New` döner, K2
-/// (slug_system) orada devreye girer. Task 5'te çağrıcı eklenecek.
-#[allow(dead_code)]
+/// (slug_system) orada devreye girer.
 pub(crate) fn interpret_topic_input(raw: &str, local: &[String]) -> Option<TopicChoice> {
     let raw = raw.trim();
     // 1-2: boş Enter.
