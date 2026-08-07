@@ -67,4 +67,21 @@ mod tests {
             assert_eq!(ownership, expected, "yanlış sahiplik: {rel}");
         }
     }
+
+    /// Gömülü default profil kişisel isim TAŞIMAMALI — uygulama herkese açık,
+    /// yeni kullanıcı yabancı bir isimle karşılanmamalı (TUI selamı bu değeri
+    /// okur). Regresyon bekçisi: birileri seed'e tekrar isim eklerse kırılır.
+    #[test]
+    fn shipped_profile_carries_no_personal_name() {
+        let profile = global_defaults()
+            .into_iter()
+            .find(|(rel, _, _)| *rel == "learner/profile.md")
+            .map(|(_, content, _)| content)
+            .expect("learner/profile.md gömülü default'larda olmalı");
+        assert_eq!(
+            crate::tui::welcome::extract_name(profile),
+            None,
+            "gömülü profil kişisel isim taşıyor — jenerik olmalı"
+        );
+    }
 }

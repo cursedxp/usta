@@ -37,7 +37,7 @@ fn section<'a>(md: &'a str, header: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
-/// `# Öğrenci Profili — Anil` → `Anil` (em-dash veya tire sonrası).
+/// `# Öğrenci Profili — Ada` → `Ada` (em-dash veya tire sonrası).
 pub fn extract_name(profile: &str) -> Option<String> {
     let h1 = profile.lines().find(|l| l.starts_with("# "))?;
     let name = h1.rsplit(['—', '-']).next()?.trim();
@@ -202,13 +202,13 @@ mod tests {
         t.lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
     }
 
-    const PROFILE: &str = "# Öğrenci Profili — Anil\n\n## Kim\n- test";
+    const PROFILE: &str = "# Öğrenci Profili — Ada\n\n## Kim\n- test";
     const PROGRESS: &str = "# rust — İlerleme\n## Seviye\n- Orta: ownership oturdu\n## Geri çağırma soruları\n- Soru 1? — cevap\n- Soru 2? — cevap\n- Soru 3? — cevap\n";
     const CURRICULUM: &str = "# rust haritası\n- Ownership: oturdu\n- Borrowing: görüldü\n- Lifetimes: görülmedi\n- Traits: görülmedi\n";
 
     #[test]
     fn extract_name_reads_h1_after_dash() {
-        assert_eq!(extract_name(PROFILE), Some("Anil".to_string()));
+        assert_eq!(extract_name(PROFILE), Some("Ada".to_string()));
         assert_eq!(extract_name("# Başlıksız"), None);
         assert_eq!(extract_name(""), None);
     }
@@ -242,7 +242,7 @@ mod tests {
     fn gather_full_and_first_session() {
         let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/x");
         assert!(!d.first_session);
-        assert_eq!(d.name.as_deref(), Some("Anil"));
+        assert_eq!(d.name.as_deref(), Some("Ada"));
         assert_eq!(d.map_percent, Some(50));
         let d2 = gather(None, None, None, "gtm", "opus · cli", "~/x");
         assert!(d2.first_session);

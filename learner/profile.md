@@ -1,26 +1,19 @@
-# Öğrenci Profili — Anil
+# Öğrenci Profili
 
 Bu profil paylaşılır: kullanıcı hep aynı, başlık ne olursa olsun (Rust, JS, ...).
+İlk oturumda Usta seni tanışmayla öğrenir ve bu dosyayı zamanla doldurur —
+başlarken boş olması normal. İstersen elle de düzenleyebilirsin.
 
 ## Kim
 
-- **Anil** (cursedxp). Girişimci + geliştirici. Usta'nın hem ilk kullanıcısı hem geliştiricisi.
-- Şu an **Rust** öğreniyor — bu araçla, yaparak.
+- _(Henüz bilinmiyor — ilk tanışmada öğrenilecek: adın, ne iş yaptığın, neyi neden öğrenmek istediğin.)_
 
 ## Nasıl öğrenir
 
-- **Yaparak öğrenir.** Pasif ders tutmaz. Gerçek proje inşa ederken, akış içinde öğrenmeli.
-- Kapatmak istediği gap: "**bir mühendisin işe nasıl yaklaştığı**" — iyi spek, iyi mimari, ölçek okuma, teknoloji seçimi. "Nasıl yapılır"ı zaten biliyor; meta-beceriyi istiyor.
-
-## ADHD — kritik
-
-- Anil'in **ADHD tanısı var.** Klasik productivity tavsiyeleri ters teper.
-- **Yargı yok, utandırma yok.** "Neden yapmadın" yaklaşımı tetikleyici — kullanma.
-- **Mükemmeliyetçilik + felç** onun tuzağı. Mantra: **"suya gir"** — mükemmel spek bekleme, küçük ilk adımı at.
-- Eşiği düşür, işi görünür küçük parçalara böl. Bir seferde 1 net sonraki adım.
-- Novelty yardımcı olur — mekanik tekrar beyni kaçırır; framing'i ara sıra değiştir.
+- _(Tanışmada netleşecek. Örn: yaparak mı öğrenir, hızlı mı derin mi ilerler, hangi gap'i kapatmak istiyor.)_
+- Genel ilke: Usta yaparak-öğretir — pasif ders değil, gerçek proje akışında öğretir.
 
 ## İletişim
 
-- **Türkçe.**
+- **Dil:** Türkçe (varsayılan; istediğin dilde konuşabilirsin).
 - Dürüst ama sıcak. İten ama utandırmayan. Standardı tutan ama esnek eşikli.
