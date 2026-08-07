@@ -1,6 +1,6 @@
 # Usta v0.7 — Bağlam Yönetimi + Görsel Cila Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Bağlam doluluğunu her turn sonrası görsel göster (▓░ bar + k token), %70 eşiğinde otomatik ara-kayıt + kompaksiyon yap (oturum kesintisiz devam eder), banner'da kullanılan modeli göster, görünümü Claude Code hissine yaklaştır (`❯` kullanıcı promptu + Usta bloğuna padding).
 
@@ -554,8 +554,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS
-- [ ] `cargo build` — uyarısız, `cargo clippy` temiz
-- [ ] Düz mod: `echo "" | cargo run -- start deneme` → ANSI yok, gösterge yok
-- [ ] TTY duman (backend varsa, sandbox): banner'da `model: opus · cli` görünsün; mesaj at → yanıt altında `▓░ bağlam Xk/200k` satırı; prompt `❯ ` olsun; Usta bloğu girintili sarsın
-- [ ] Kompaksiyon smoke (backend varsa): `COMPACT_THRESHOLD`'u geçici `0.01` yapıp derle → ilk yanıttan sonra "ara kayıt alınıyor… / bağlam sıkıştırıldı" notları düşsün, dosyalar güncellensin, sohbet devam etsin → eşiği `0.70`'e GERİ AL, yeniden derle-commit'e dahil etme (test-only değişiklik)
+- [x] `cargo test` — tamamı PASS
+- [x] `cargo build` — uyarısız, `cargo clippy` temiz
+- [x] Düz mod: `echo "" | cargo run -- start deneme` → ANSI yok, gösterge yok
+- [x] TTY duman (backend varsa, sandbox): banner'da `model: opus · cli` görünsün; mesaj at → yanıt altında `▓░ bağlam Xk/200k` satırı; prompt `❯ ` olsun; Usta bloğu girintili sarsın
+- [x] Kompaksiyon smoke (backend varsa): `COMPACT_THRESHOLD`'u geçici `0.01` yapıp derle → ilk yanıttan sonra "ara kayıt alınıyor… / bağlam sıkıştırıldı" notları düşsün, dosyalar güncellensin, sohbet devam etsin → eşiği `0.70`'e GERİ AL, yeniden derle-commit'e dahil etme (test-only değişiklik)
