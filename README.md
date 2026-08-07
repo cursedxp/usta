@@ -27,7 +27,7 @@ Domain-agnostik — Rust, JavaScript, marketing, ne öğreniyorsan. İlk kullan�
 | 🎓 **Pedagoji katmanı** | Açılış drilli (geri çağırma), anlat-modu (Feynman), ipucu merdiveni (fading), tahmin protokolü (`cargo check` sonucunu söylemez — önce tahmin ettirir). |
 | 🔎 **Araştırma** | Bilmediğini web'de arar (WebSearch) — uydurma yok. |
 | 🌍 **Her konu** | Rust'a özgü değil. Yeni konuda (Linux güvenliği, GTM, ne olursa) Usta yaklaşımı **tanışmayla türetir**, web-araştırmalı **müfredat haritası** çıkarır (`görülmedi → görüldü → oturdu → derinleşildi`). Kapsam bekçiliği: havada hiçbir şey kalmaz. |
-| 🎨 **Terminal arayüzü** | `●` Usta / `■` sen — kim konuşuyor tek bakışta belli; yanıtlar gerçek markdown render, beklerken spinner. Pipe/`NO_COLOR`'da düz çıktı (script'ler bozulmaz). |
+| 🎨 **Terminal arayüzü** | Claude Code tarzı inline TUI (ratatui): açılışta çift kolonlu hoş-geldin kutusu (öğrenme durumu + sırada ne var), canlı dört-kenarlı girdi kutusu, yapışık durum satırı (spinner + bağlam göstergesi). Akış normal scrollback'te kalır — yukarı kaydır, kopyala. Pipe/`NO_COLOR`'da otomatik düz mod (script'ler bozulmaz). |
 | 🗂️ **Yönetim** | `usta topics` nerede ne öğrendiğini gösterir; `reset` konuyu veya her şeyi sıfırlar. |
 
 ## Kurulum
@@ -69,6 +69,12 @@ usta start gtm            # rust olabilir, gtm olabilir, ne olursa
   → /quit → progress + approach + curriculum güncellenir, katalog yenilenir
 ```
 
+## Arayüz
+
+Etkileşimli terminalde Usta **ratatui inline-viewport TUI**'si açar: alt bölgede canlı girdi kutusu + durum satırı yaşar, kalıcı akış (Usta yanıtları, dosya feedback'i) normal **scrollback**'e basılır — yukarı kaydırıp geçmişi okuyabilir/kopyalayabilirsin. Alternate screen kullanılmaz; terminal geçmişin korunur.
+
+TTY yoksa veya `NO_COLOR=1` ise TUI hiç açılmaz — mevcut düz satır moduna düşer (pipe/CI/script güvenli).
+
 ## Nasıl çalışır — "ince kabuk, kalın beyin"
 
 Rust yalnızca kabuk: CLI, LLM client, dosya izleyici (`notify`), `cargo check` koşucusu, markdown yükleyici. **Zekâ ve kişilik markdown'da** yaşar:
@@ -90,6 +96,6 @@ Davranışı değiştirmek = markdown'ı düzenle, Rust'a dokunma. (Global davra
 
 ## Durum
 
-v0.6 · Rust 2021 · 85 birim test. Tasarım kararları: [`SPEC.md`](SPEC.md). Çekirdek davranış: [`USTA.md`](USTA.md).
+v0.6 · Rust 2021 · 125 birim test. Tasarım kararları: [`SPEC.md`](SPEC.md). Çekirdek davranış: [`USTA.md`](USTA.md).
 
 Yol haritası fikirleri: streaming, çoklu terminal sağlamlaştırma, kendi-sağlık-denetimi (link/tutarlılık), tech-notes cache.

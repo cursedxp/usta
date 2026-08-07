@@ -16,3 +16,19 @@ dirs = "5"
 similar = "2"
 chrono = "0.4"
 termimad = "0.30"
+ratatui = "0.29"
+tui-input = "0.11"
+ansi-to-tui = "7"
+unicode-width = "0.2"
+crossterm = { version = "0.28", features = ["event-stream"] }
+# coolor/crokey doğrudan kullanılmıyor — termimad'in transitive bağımlılığı.
+# crossterm tekilliğini manifest seviyesinde koru: coolor 1.1+/crokey 1.5+ crossterm ^0.29'a geçiyor,
+# bu da 0.28 + 0.29 ikili crossterm ağacına yol açar. Bare `cargo update` lockfile pinini yok sayabildiği
+# için tavanı burada, manifest'te sabitliyoruz.
+coolor = "=1.0.0"
+crokey = "=1.1.1"
+crokey-proc_macros = "=1.1.1"
+# Yalnız `StreamExt::next` için (crossterm EventStream.next()). default-features
+# kapalı: `async-await` özelliği futures-macro'yu çeker (bu ortamda 0.3.33 yok),
+# `std` StreamExt için yeterli.
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }

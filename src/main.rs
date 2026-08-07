@@ -13,6 +13,7 @@ mod input;
 mod progress;
 mod session;
 mod transcript;
+mod tui;
 mod ui;
 mod watcher;
 
@@ -72,12 +73,10 @@ async fn main() -> Result<()> {
 
     let mut session = Session::new(topic.clone(), system);
 
-    // Dosya izleyici + girdi thread'i + debounce durumu.
+    // Dosya izleyici — TEK kez spawn edilir (thread başlatır), sonra çalışan
+    // yola (&mut) geçirilir. Girdi thread'i + debounce durumu yola özgü:
+    // plain yol rustyline kullanır, TUI yol crossterm EventStream.
     let mut watch_rx = watcher::spawn(&project_root)?;
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
-    let mut input_rx = input::spawn("❯ ", ready_rx);
-    let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
-    let mut files = feedback::FileMemory::new();
 
     for p in transcript::find_unfinished(&project_root) {
         ui::warn(&format!("yarım oturum kaydı bulundu (flush edilememiş olabilir): {}", p.display()));
@@ -108,18 +107,86 @@ async fn main() -> Result<()> {
         &project_root, &topic, &now_stamp(),
     ));
 
-    ui::banner(&topic, &backend.label());
-
-    // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
-    // 2-3 geri çağırma sorusuyla ısındırır (testing effect — USTA.md kuralı).
+    // Açılış drilli için önce progress var mı bak (her iki yol da kullanır):
+    // önceki oturumlardan progress varsa Usta ilk sözü alır (testing effect).
     let has_progress = std::fs::read_to_string(progress::progress_path(&project_root, &topic))
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
+
+    // TUI yolu: etkileşimli terminal → ratatui inline viewport (alt-ekran yok,
+    // scrollback korunur). Plain yol (TTY yok / NO_COLOR) mevcut satır REPL'i —
+    // davranış birebir korunur.
+    if !ui::is_plain() {
+        // TUI aktifken notice/warn/Spinner ham ANSI basmasın diye bayrağı
+        // aç — run() dönünce (hata dahil) mutlaka kapat, sonra hatayı fırlat.
+        ui::set_tui_active(true);
+        let tui_result = tui::run::run(
+            &mut backend,
+            &mut session,
+            &recorder,
+            &project_root,
+            &global,
+            &topic,
+            has_progress,
+            MAX_FEEDBACK_BATCH,
+            &mut watch_rx,
+        )
+        .await;
+        ui::set_tui_active(false);
+        tui_result?;
+    } else {
+        ui::banner(&topic, &backend.label());
+        run_plain_loop(
+            &mut backend,
+            &mut session,
+            &recorder,
+            &project_root,
+            &topic,
+            has_progress,
+            &mut watch_rx,
+        )
+        .await?;
+    }
+
+    if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
+        ui::warn(&format!("progress güncellenemedi: {e} — ham kayıt duruyor: {}", recorder.path().display()));
+    } else if session.history().is_empty() {
+        // Boş oturum: dosya hiç oluşmadı, işaretlenecek şey yok.
+    } else if let Err(e) = transcript::mark_done(recorder.path()) {
+        ui::warn(&format!("oturum kaydı işaretlenemedi: {e}"));
+    }
+
+    let _ = std::fs::remove_file(&lock);
+
+    ui::notice("Görüşürüz — suya girmeye devam et.");
+    Ok(())
+}
+
+/// Plain (satır tabanlı) REPL döngüsü: rustyline girdi thread'i + watcher +
+/// debounce tek select!'te. TTY yoksa / NO_COLOR'da koşar — davranış eski
+/// main döngüsüyle birebir (banner main'de basılır, drill + loop burada).
+async fn run_plain_loop(
+    backend: &mut Backend,
+    session: &mut Session,
+    recorder: &transcript::Recorder,
+    project_root: &Path,
+    topic: &str,
+    has_progress: bool,
+    watch_rx: &mut tokio::sync::mpsc::UnboundedReceiver<PathBuf>,
+) -> Result<()> {
+    // Girdi thread'i + debounce durumu — plain yola özgü (rustyline).
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+    let mut input_rx = input::spawn("❯ ", ready_rx);
+    let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
+    let mut files = feedback::FileMemory::new();
+
+    // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
+    // 2-3 geri çağırma sorusuyla ısındırır (testing effect — USTA.md kuralı).
     if has_progress {
-        let opening = progress::opening_prompt(&topic);
+        let opening = progress::opening_prompt(topic);
         session.push_user(&opening);
         recorder.user(&opening);
-        match ask_usta(&mut backend, &session.system, session.history()).await {
+        match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
                 print_reply(&reply, backend.context_window());
                 recorder.assistant(&reply.text);
@@ -130,10 +197,10 @@ async fn main() -> Result<()> {
         }
     } else {
         // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
-        let onboarding = progress::onboarding_prompt(&topic);
+        let onboarding = progress::onboarding_prompt(topic);
         session.push_user(&onboarding);
         recorder.user(&onboarding);
-        match ask_usta(&mut backend, &session.system, session.history()).await {
+        match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
                 print_reply(&reply, backend.context_window());
                 recorder.assistant(&reply.text);
@@ -156,13 +223,13 @@ async fn main() -> Result<()> {
                     if !line.is_empty() {
                         session.push_user(&line);
                         recorder.user(&line);
-                        match ask_usta(&mut backend, &session.system, session.history()).await {
+                        match ask_usta(backend, &session.system, session.history()).await {
                             Ok(reply) => {
                                 print_reply(&reply, backend.context_window());
                                 let tokens = reply.context_tokens;
                                 recorder.assistant(&reply.text);
                                 session.push_assistant(reply.text);
-                                maybe_compact(&mut backend, &mut session, &project_root, tokens).await;
+                                maybe_compact(backend, session, project_root, tokens).await;
                             }
                             Err(e) => ui::warn(&format!("hata: {e}")),
                         }
@@ -192,8 +259,15 @@ async fn main() -> Result<()> {
                     }
                 } else {
                     for path in batch {
-                        match handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path, &recorder).await {
-                            Ok(tokens) => maybe_compact(&mut backend, &mut session, &project_root, tokens).await,
+                        match handle_file_change(backend, session, &mut files, project_root, &path, recorder).await {
+                            // handle_file_change artık basmaz — plain yol kendi
+                            // sunum dilini uygular (print_reply: web + gauge).
+                            Ok(FileFeedback::Sessiz) => {}
+                            Ok(FileFeedback::Bildirim(m)) => println!("{m}"),
+                            Ok(FileFeedback::Yanit { tokens, reply }) => {
+                                print_reply(&reply, backend.context_window());
+                                maybe_compact(backend, session, project_root, tokens).await;
+                            }
                             // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
                             Err(e) => ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display())),
                         }
@@ -203,17 +277,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
-        ui::warn(&format!("progress güncellenemedi: {e} — ham kayıt duruyor: {}", recorder.path().display()));
-    } else if session.history().is_empty() {
-        // Boş oturum: dosya hiç oluşmadı, işaretlenecek şey yok.
-    } else if let Err(e) = transcript::mark_done(recorder.path()) {
-        ui::warn(&format!("oturum kaydı işaretlenemedi: {e}"));
-    }
-
-    let _ = std::fs::remove_file(&lock);
-
-    ui::notice("Görüşürüz — suya girmeye devam et.");
     Ok(())
 }
 
@@ -292,7 +355,7 @@ async fn flush_progress(
 /// Eşik aşıldıysa: ara-flush → system prompt'u taze dosyalarla yeniden yükle →
 /// history'yi kırp → CLI oturumunu sıfırla. Flush başarısızsa kompaksiyon
 /// İPTAL — veri diske inmeden history atılmaz.
-async fn maybe_compact(
+pub(crate) async fn maybe_compact(
     backend: &mut Backend,
     session: &mut Session,
     project_root: &Path,
@@ -340,7 +403,7 @@ fn lock_path(project_root: &Path, topic: &str) -> PathBuf {
 
 /// Deadline varsa ona kadar uyu; yoksa asla dönmeyen future (select guard'ı
 /// zaten bu kolu deadline'sız poll etmez — bu sadece tip güvenliği).
-async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
+pub(crate) async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(d) => tokio::time::sleep_until(d).await,
         None => std::future::pending().await,
@@ -693,23 +756,44 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
     Ok(results)
 }
 
+/// Dosya değişikliği feedback sonucu — çağıran (plain/TUI) kendi basar.
+/// `handle_file_change` hiçbir şey println! etmez (raw-mode'da stdout
+/// bozulmasın); tam `Reply` taşınır ki `web` bayrağı ve context gauge
+/// çağıran tarafta orijinal davranışla (print_reply) yeniden üretilebilsin.
+pub(crate) enum FileFeedback {
+    /// Skip — çıktı yok.
+    Sessiz,
+    /// Büyük dosya bildirimi — çağıran kendi yolunda gösterir
+    /// (plain: `println!`, TUI: `page_notice`).
+    Bildirim(String),
+    /// Gerçek yanıt — bağlam token'ı + tam `Reply` (web bayrağı korunur).
+    Yanit {
+        tokens: Option<u64>,
+        reply: backend::Reply,
+    },
+}
+
 /// Kaydedilen dosyayı FileMemory'den geçir; ilk görüşte tam içerik, sonrasında
 /// diff olarak sentetik user turn'e çevir → Socratic feedback. Cargo projesiyse
 /// check sonucu "sadece Usta'nın gözü için" bloğuyla eklenir (tahmin protokolü).
-async fn handle_file_change(
+/// Çıktı BASMAZ — hem plain hem TUI yolu dönen `FileFeedback`'i kendi sunum
+/// diliyle basar (raw-mode'da stdout bozulmasın).
+pub(crate) async fn handle_file_change(
     backend: &mut Backend,
     session: &mut Session,
     files: &mut feedback::FileMemory,
     project_root: &Path,
     path: &Path,
     recorder: &transcript::Recorder,
-) -> Result<Option<u64>> {
+) -> Result<FileFeedback> {
     let contents = std::fs::read_to_string(path)?;
     let mut injected = match files.observe(path, contents) {
-        feedback::ChangePayload::Skip => return Ok(None),
+        feedback::ChangePayload::Skip => return Ok(FileFeedback::Sessiz),
         feedback::ChangePayload::TooLarge(len) => {
-            println!("(büyük dosya izleme dışı: {} — {len} bayt)", path.display());
-            return Ok(None);
+            return Ok(FileFeedback::Bildirim(format!(
+                "(büyük dosya izleme dışı: {} — {len} bayt)",
+                path.display()
+            )));
         }
         feedback::ChangePayload::FirstSight(full) => format!(
             "[Dosya kaydedildi: {}]\n{full}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver.",
@@ -729,10 +813,9 @@ async fn handle_file_change(
     recorder.user(&injected);
     let reply = ask_usta(backend, &session.system, session.history()).await?;
     let tokens = reply.context_tokens;
-    print_reply(&reply, backend.context_window());
     recorder.assistant(&reply.text);
-    session.push_assistant(reply.text);
-    Ok(tokens)
+    session.push_assistant(reply.text.clone());
+    Ok(FileFeedback::Yanit { tokens, reply })
 }
 
 /// Usta yanıtını sunum katmanına devret.
