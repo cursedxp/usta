@@ -1,6 +1,6 @@
 # Usta v0.9 — Sağlamlaştırma Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Mutlu-yol dışındaki beş gerçek riski kapat: (1) flush ölürse oturum kaybolmasın (ham transcript kaydı + kurtarma bildirimi), (2) watcher olay seli LLM çağrı bombasına dönmesin (git checkout senaryosu — batch tavanı), (3) aynı konuda iki terminal sessizce veri ezmesin (lockfile + onay), (4) kötü model çıktısı geri alınabilsin (`.bak`), (5) dosyalar şişmesin + sır dosyaları LLM'e gitmesin.
 
@@ -578,12 +578,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS; `cargo build` + `cargo clippy` temiz
-- [ ] Sandbox duman:
+- [x] `cargo test` — tamamı PASS; `cargo build` + `cargo clippy` temiz
+- [x] Sandbox duman:
   1. Oturum aç, 2 turn konuş → `.usta/sessions/*.jsonl` büyüsün; `/quit` → `.done.jsonl` olsun.
   2. Oturum aç, terminali öldür (pencereyi kapat) → yeni oturumda "yarım oturum kaydı bulundu" uyarısı gelsin.
   3. İzlenen dizinde 20 dosya birden değiştir → tek "toplu değişiklik" bildirimi, LLM çağrısı yok.
   4. Aynı konuda ikinci terminal → onay sorusu; "H" → temiz çıkış; ilk oturum kapanınca lock silinsin.
   5. İki kez `/quit`'li oturum → `progress/rust.md.bak` önceki sürümü tutsun.
   6. `echo x > sunucu.pem` → feedback GELMESİN (sır filtresi).
-- [ ] Düz mod regresyonu: `echo "" | cargo run -- start deneme` → ANSI yok, lock uyarısı pipe'ta engel olmamış.
+- [x] Düz mod regresyonu: `echo "" | cargo run -- start deneme` → ANSI yok, lock uyarısı pipe'ta engel olmamış.
