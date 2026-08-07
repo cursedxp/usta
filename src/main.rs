@@ -399,42 +399,19 @@ fn resolve_topic(topic_arg: Option<String>) -> Result<String> {
         return Ok("genel".to_string());
     }
     let mut rl = DefaultEditor::new()?;
-    let mut last = String::new();
-    for attempt in 0..3 {
-        match rl.readline("Konu (1-3 kelime, ör. rust, linux güvenliği): ") {
-            Ok(line) => {
-                let t = line.trim().to_string();
-                if t.is_empty() {
-                    return Ok("genel".to_string());
-                }
-                if let Some(slug) = short_topic(&t) {
-                    return Ok(slug);
-                }
-                last = t;
-                if attempt < 2 {
-                    println!("Konu kısa olmalı — 1-3 kelimelik dosyalama anahtarı (ör. rust, linux güvenliği). Detayı sohbette anlatırsın.");
-                }
-            }
-            // Ctrl-D / Ctrl-C promptta → engellemeden "genel"e düş.
-            Err(_) => return Ok("genel".to_string()),
-        }
+    // Ret yok: kısa yaz ya da cümleyle anlat — stopword'ler atılıp ilk 3
+    // içerik kelimesinden slug üretilir. Detay zaten sohbette derinleşir.
+    let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
+        Ok(l) => l,
+        // Ctrl-D / Ctrl-C → engellemeden "genel"e düş.
+        Err(_) => return Ok("genel".to_string()),
+    };
+    let slug = slugify_topic(line.trim());
+    // Cümle yazdıysa neyi slug aldığımızı göster (şeffaflık).
+    if line.split_whitespace().count() > 3 {
+        ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
     }
-    // Üç denemede kısalmadı — ilk 3 kelimeden slug üret, açıkça bildir.
-    let slug = slugify_topic(&last);
-    ui::notice(&format!("konu kısaltıldı: {slug}"));
     Ok(slug)
-}
-
-/// Girdi kısa bir öbekse (≤3 kelime) konu slug'ını döndür; uzun cümleyse
-/// `None` — konu bir dosyalama anahtarıdır, uzun cümleden slug üretmek çirkin.
-/// "temel Linux güvenliği" kabul edilir → `temel-linux-guvenligi`.
-pub fn short_topic(input: &str) -> Option<String> {
-    let count = input.split_whitespace().count();
-    if count == 0 || count > 3 {
-        None
-    } else {
-        Some(slugify_topic(input))
-    }
 }
 
 /// Türkçe harfi ascii'ye indir + küçük harfe çevir; diğerlerini küçült.
@@ -456,16 +433,23 @@ fn deasciify(c: char) -> char {
 /// kelimeleri tire ile birleştir. Sonuç boşsa `"genel"`.
 /// "temel Linux güvenliği" → `temel-linux-guvenligi`.
 pub fn slugify_topic(input: &str) -> String {
+    // Deasciified (ç→c…) haliyle karşılaştırılan dolgu kelimeleri — slug'a
+    // girmez ki "ben rust ile bir todo yapmak istiyorum" → "rust-todo".
+    const STOPWORDS: &[&str] = &[
+        "ben", "bir", "ile", "ve", "icin", "bu", "su", "yapmak", "yapmayi",
+        "istiyorum", "ogrenmek", "ogreniyorum", "istiyor", "bana", "de", "da",
+        "the", "a", "an", "to", "learn", "want", "make", "build",
+    ];
     let words: Vec<String> = input
         .split_whitespace()
-        .take(3)
         .map(|w| {
             w.chars()
                 .map(deasciify)
                 .filter(|c| c.is_ascii_alphanumeric())
                 .collect::<String>()
         })
-        .filter(|w| !w.is_empty())
+        .filter(|w| !w.is_empty() && !STOPWORDS.contains(&w.as_str()))
+        .take(3)
         .collect();
     if words.is_empty() {
         "genel".to_string()
@@ -735,7 +719,6 @@ mod tests {
     fn slugify_hyphenates_short_phrase_and_deasciifies() {
         assert_eq!(slugify_topic("temel Linux güvenliği"), "temel-linux-guvenligi");
         assert_eq!(slugify_topic("todo app"), "todo-app");
-        assert_eq!(slugify_topic("Rust öğreniyorum"), "rust-ogreniyorum");
     }
 
     #[test]
@@ -744,31 +727,24 @@ mod tests {
     }
 
     #[test]
-    fn slugify_caps_at_three_words() {
-        assert_eq!(slugify_topic("a b c d e"), "a-b-c");
+    fn slugify_caps_at_three_content_words() {
+        assert_eq!(slugify_topic("alfa beta gama delta"), "alfa-beta-gama");
+    }
+
+    #[test]
+    fn slugify_strips_stopwords_from_sentence() {
+        // "ben ... ile bir ... yapmak istiyorum" dolgu kelimeleri düşer.
+        assert_eq!(
+            slugify_topic("ben rust ile bir todo uygulaması yapmak istiyorum"),
+            "rust-todo-uygulamasi"
+        );
+        assert_eq!(slugify_topic("Rust öğreniyorum"), "rust");
     }
 
     #[test]
     fn slugify_blank_input_falls_back_to_genel() {
         assert_eq!(slugify_topic("   "), "genel");
         assert_eq!(slugify_topic(""), "genel");
-    }
-
-    #[test]
-    fn short_topic_accepts_up_to_three_words() {
-        assert_eq!(short_topic("Rust"), Some("rust".to_string()));
-        assert_eq!(short_topic("  C++  "), Some("c".to_string()));
-        assert_eq!(short_topic("temel Linux güvenliği"), Some("temel-linux-guvenligi".to_string()));
-    }
-
-    #[test]
-    fn short_topic_rejects_long_sentence() {
-        assert_eq!(short_topic("aklimda bir proje var elimde"), None);
-    }
-
-    #[test]
-    fn short_topic_rejects_empty() {
-        assert_eq!(short_topic("   "), None);
     }
 
     #[test]
