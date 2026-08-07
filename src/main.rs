@@ -525,6 +525,50 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     }
 }
 
+/// Konu girişi yorumu: devam mı, yeni konu mu? (spec K1)
+/// Task 5'te çağrıcı eklenecek.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) enum TopicChoice {
+    /// Mevcut proje-yerel konuya devam.
+    Resume(String),
+    /// Yeni konu akışı — ham girdi (slug'lama çağıranda).
+    New(String),
+}
+
+/// Deterministik seçim kuralları — sıra spec §3/K1 tablosu. `None` = girdiyi
+/// yut (boş + devam edilecek konu yok). LLM'siz; cümleler `New` döner, K2
+/// (slug_system) orada devreye girer. Task 5'te çağrıcı eklenecek.
+#[allow(dead_code)]
+pub(crate) fn interpret_topic_input(raw: &str, local: &[String]) -> Option<TopicChoice> {
+    let raw = raw.trim();
+    // 1-2: boş Enter.
+    if raw.is_empty() {
+        return local.first().map(|t| TopicChoice::Resume(t.clone()));
+    }
+    // 3: rakam seçimi.
+    if let Ok(n) = raw.parse::<usize>() {
+        if n >= 1 && n <= local.len() {
+            return Some(TopicChoice::Resume(local[n - 1].clone()));
+        }
+    }
+    // 4: slug eşleşmesi.
+    let slug = slugify_topic(raw);
+    if let Some(t) = local.iter().find(|t| **t == slug) {
+        return Some(TopicChoice::Resume(t.clone()));
+    }
+    // 5: kısa devam-kalıbı (deasciify sonrası substring).
+    if !local.is_empty() && raw.split_whitespace().count() <= 4 {
+        let d: String = raw.chars().map(deasciify).collect::<String>().to_lowercase();
+        const RESUME_WORDS: &[&str] = &["devam", "kaldigimiz", "kaldigim", "continue", "resume"];
+        if RESUME_WORDS.iter().any(|w| d.contains(w)) {
+            return Some(TopicChoice::Resume(local[0].clone()));
+        }
+    }
+    // 6: yeni konu.
+    Some(TopicChoice::New(raw.to_string()))
+}
+
 /// Cümleden konu slug'ını modele çıkart (plain yol). Hata → yerel slug.
 /// Çağrı sonrası CLI oturumu KOŞULSUZ sıfırlanır — slug mini-oturumu
 /// öğrenme oturumuna resume edilip bağlamı kirletmesin (spec B1).
@@ -1030,5 +1074,50 @@ mod tests {
     fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
         // Model "genel" derse ham girdiden yerel slug türet.
         assert_eq!(finalize_slug("temel linux güvenliği", "genel"), "temel-linux-guvenligi");
+    }
+
+    #[test]
+    fn interpret_empty_resumes_latest_or_swallows() {
+        let local = vec!["son-konu".to_string(), "eski".to_string()];
+        assert!(matches!(interpret_topic_input("", &local), Some(TopicChoice::Resume(t)) if t == "son-konu"));
+        assert!(interpret_topic_input("  ", &[]).is_none()); // konu yok → yut
+    }
+
+    #[test]
+    fn interpret_digit_selects_from_list_out_of_range_is_new() {
+        let local = vec!["a".to_string(), "b".to_string()];
+        assert!(matches!(interpret_topic_input("2", &local), Some(TopicChoice::Resume(t)) if t == "b"));
+        assert!(matches!(interpret_topic_input("5", &local), Some(TopicChoice::New(r)) if r == "5"));
+    }
+
+    #[test]
+    fn interpret_existing_slug_match_resumes() {
+        let local = vec!["linux-guvenlik".to_string()];
+        // Slugify eşleşmesi: Türkçe yazım da yakalanır.
+        assert!(matches!(
+            interpret_topic_input("Linux Güvenlik", &local),
+            Some(TopicChoice::Resume(t)) if t == "linux-guvenlik"
+        ));
+    }
+
+    #[test]
+    fn interpret_resume_phrases_short_input_only() {
+        let local = vec!["son-konu".to_string()];
+        for s in ["devam", "devam edelim", "kaldığımız yerden devam", "continue", "resume"] {
+            assert!(matches!(interpret_topic_input(s, &local), Some(TopicChoice::Resume(t)) if t == "son-konu"), "{s}");
+        }
+        // >4 kelime → LLM'e/yeni akışa (K2 yakalar).
+        assert!(matches!(
+            interpret_topic_input("devam edelim ama bu sefer docker öğrenelim", &local),
+            Some(TopicChoice::New(_))
+        ));
+        // Devam kalıbı ama hiç konu yok → yeni konu.
+        assert!(matches!(interpret_topic_input("devam", &[]), Some(TopicChoice::New(_))));
+    }
+
+    #[test]
+    fn interpret_other_input_is_new() {
+        let local = vec!["son-konu".to_string()];
+        assert!(matches!(interpret_topic_input("docker compose", &local), Some(TopicChoice::New(r)) if r == "docker compose"));
     }
 }
