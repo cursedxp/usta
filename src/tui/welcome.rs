@@ -162,8 +162,61 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
         if d.drill_count > 0 { right.push(format!("Drill: {} soru hazır", d.drill_count)); }
     }
 
+    render_box(d.version, left, right, width)
+}
+
+/// Kimlik modu: konu YOK. Sol kolon logo + selam + model + dizin; sağ kolon
+/// "Ne öğrenmek istiyorsun?" + kayıtlı konular (veya ilk-oturum mesajı).
+/// Konu seçilmeden gösterilir (Claude tarzı: welcome üstte, soru altta).
+// NOT: run.rs açılış akışına henüz bağlanmadı (ayrı bir task) — şimdilik
+// sadece testlerden çağrılıyor, bu yüzden dead_code uyarısı bastırılıyor.
+#[allow(dead_code)]
+pub fn render_welcome_identity(
+    name: Option<&str>,
+    model: &str,
+    dir: &str,
+    topics: &[String],
+    width: u16,
+) -> Text<'static> {
+    let total = (width as usize).clamp(60, 100);
+    let inner = total - 2;
+    let left_w = 34usize;
+    let right_w = inner - left_w - 3;
+
+    let greet = match name {
+        Some(n) => format!("Merhaba, {n}!"),
+        None => "Merhaba!".to_string(),
+    };
+    let mut left: Vec<(String, bool)> = vec![(String::new(), false)];
+    for l in LOGO { left.push((format!("  {l}"), true)); }
+    left.push((String::new(), false));
+    left.push((format!("  {}", fit(&greet, left_w - 2)), false));
+    left.push((format!("  {}", fit(model, left_w - 2)), false));
+    left.push((format!("  {}", fit(dir, left_w - 2)), false));
+
+    let mut right: Vec<String> = vec!["Ne öğrenmek istiyorsun?".to_string(), String::new()];
+    if topics.is_empty() {
+        right.push(fit("İlk oturum — bir konu yaz.", right_w));
+    } else {
+        right.push(fit("Kısa yaz ya da cümleyle anlat.", right_w));
+        right.push(String::new());
+        let list = format!("Kayıtlı: {}", topics.join(" · "));
+        right.push(fit(&list, right_w));
+    }
+
+    render_box(env!("CARGO_PKG_VERSION"), left, right, width)
+}
+
+/// Çift kolonlu kutuyu çiz — kenar + " │ " ayracı + eşit-genişlik padding.
+/// `left`: (metin, logo-mu). `right`: düz satırlar (ilk dolu satır başlık stili).
+fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<String>, width: u16) -> Text<'static> {
+    let total = (width as usize).clamp(60, 100);
+    let inner = total - 2;                      // kenarlar
+    let left_w = 34usize;
+    let right_w = inner - left_w - 3;           // " │ " ayracı
+
     let rows = left.len().max(right.len());
-    let title = format!(" Usta v{} ", d.version);
+    let title = format!(" Usta v{version} ");
     // NOT: dashes = inner - (4 + title_genişliği) olmalı — "╭─── " öneki 5 char,
     // kapanış "╮" 1 char, toplam sabit 6; inner = total-2 olduğundan 6-2=4 kalır.
     // Brifingdeki "5 +" formülü satırı 1 char kısa bırakıyordu (equal-width testini kırıyordu).
@@ -273,5 +326,29 @@ mod tests {
     fn fit_truncates_by_display_width_with_ellipsis() {
         assert_eq!(fit("çğşöü-uzun-metin", 8), "çğşöü-u…");
         assert_eq!(fit("kısa", 10), "kısa");
+    }
+
+    #[test]
+    fn render_identity_with_topics_lists_them_and_equal_width() {
+        use unicode_width::UnicodeWidthStr;
+        let topics = vec!["rust".to_string(), "gtm".to_string()];
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &topics, 80);
+        let lines = plain_lines(&t);
+        let w = lines[0].width();
+        assert!(lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
+        let joined = lines.join("\n");
+        assert!(joined.contains("Ne öğrenmek istiyorsun?"));
+        assert!(joined.contains("rust"));
+        assert!(joined.contains("Merhaba, Ada!"));
+        assert!(lines[0].starts_with('╭') && lines.last().unwrap().starts_with('╰'));
+    }
+
+    #[test]
+    fn render_identity_no_topics_shows_first_session_and_no_name() {
+        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], 80);
+        let joined = plain_lines(&t).join("\n");
+        assert!(joined.contains("İlk oturum"));
+        assert!(joined.contains("Merhaba!"));       // isim yok → jenerik
+        assert!(!joined.contains("Merhaba,"));      // "Merhaba, X!" biçimi yok
     }
 }
