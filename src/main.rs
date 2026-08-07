@@ -489,8 +489,8 @@ pub fn slugify_topic(input: &str) -> String {
 
 /// `.usta/` iskeletini tembel kurar — `start`'ın kendi kendini bootstrap
 /// etmesini sağlar, `usta init`'i opsiyonel yapar. (1) global brain kökünü
-/// (`~/.config/usta`) ve eksik varsayılan dosyalarını tamamlar (var olanın
-/// üstüne yazmaz). (2) proje kökü yukarı doğru aranıp bulunamazsa `cwd`'de
+/// (`~/.config/usta`) tamamlar: kod-sahipli dosyalar gömülüyle senkronlanır,
+/// kullanıcı-sahipliler korunur. (2) proje kökü yukarı doğru aranıp bulunamazsa `cwd`'de
 /// yeni bir proje `.usta/` kurar ve `cwd`'yi döndürür; bulunursa onu olduğu
 /// gibi döndürür.
 fn ensure_scaffold(cwd: &Path) -> Result<PathBuf> {
@@ -506,9 +506,9 @@ fn ensure_scaffold(cwd: &Path) -> Result<PathBuf> {
     }
 }
 
-/// `usta init` — global brain'i (`~/.config/usta`) ilk-kez varsayılanlarla
-/// doldurur (var olan dosyaların üstüne YAZMAZ) ve CWD'de proje `.usta/`
-/// iskeletini kurar. Global brain "bir kere kurulur, tüm projelerde paylaşılır";
+/// `usta init` — global brain'i (`~/.config/usta`) varsayılanlarla doldurur
+/// (kod-sahipliler senkronlanır, kullanıcı-sahiplilerin üstüne YAZMAZ) ve
+/// CWD'de proje `.usta/` iskeletini kurar. Global brain "bir kere kurulur, tüm projelerde paylaşılır";
 /// proje `.usta/` her projede ayrı, override + ilerleme kaydı için.
 /// Yazma mantığı `ensure_scaffold`'la paylaşılır (`write_global_defaults` /
 /// `write_project_scaffold`) — tek fark burada per-dosya durum yazdırılması.
@@ -629,23 +629,29 @@ fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
 /// `usta init`'in per-dosya/dizin durum satırı.
 fn print_scaffold_status(path: &Path, wrote: bool) {
     if wrote {
-        println!("oluşturuldu: {}", path.display());
+        println!("yazıldı: {}", path.display());
     } else {
         println!("zaten var, atlandı: {}", path.display());
     }
 }
 
-/// Global brain kökünü oluşturup eksik varsayılan dosyaları yazar (var olanın
-/// üstüne yazmaz — `config::should_write`). Her dosya için `(yol, yazıldı-mı)`
+/// Global brain kökünü oluşturup varsayılan dosyaları yazar. Kod-sahipli
+/// dosyalar (USTA.md, approaches/*) gömülü içerikle senkronlanır — eskiyse
+/// üstüne yazılır; kullanıcı-sahipli dosyalar (learner/*) yalnız ilk-kez
+/// yazılır (`defaults::Ownership`). Her dosya için `(yol, yazıldı-mı)`
 /// döner — `run_init` bunu yazdırır, `ensure_scaffold` sessizce yutar.
 fn write_global_defaults(global: &Path) -> Result<Vec<(PathBuf, bool)>> {
     std::fs::create_dir_all(global)
         .with_context(|| format!("global kök oluşturulamadı: {}", global.display()))?;
 
     let mut results = Vec::new();
-    for (rel, content) in defaults::global_defaults() {
+    for (rel, content, ownership) in defaults::global_defaults() {
         let path = global.join(rel);
-        let wrote = if config::should_write(&path) {
+        let write_needed = match ownership {
+            defaults::Ownership::Code => config::needs_sync(&path, content),
+            defaults::Ownership::User => config::should_write(&path),
+        };
+        let wrote = if write_needed {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
@@ -839,6 +845,40 @@ mod tests {
 
     /// `write_project_scaffold` bir temp dizinde `.usta/` iskeletini kurar —
     /// `global_root()`'a hiç dokunmadan (gerçek `~/.config`'i etkilemez).
+    #[test]
+    fn write_global_defaults_syncs_code_owned_preserves_user_owned() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_global_sync_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+
+        // İlk yazım: her şey yazılır.
+        let first = write_global_defaults(&base).unwrap();
+        assert!(first.iter().all(|(_, wrote)| *wrote));
+
+        // Kirlet: kod-sahipli USTA.md eskisin, kullanıcı-sahipli profile düzenlensin.
+        std::fs::write(base.join("USTA.md"), "eski sürüm").unwrap();
+        std::fs::write(base.join("learner/profile.md"), "kullanıcı düzenlemesi").unwrap();
+
+        write_global_defaults(&base).unwrap();
+
+        // Kod-sahipli senkronlandı — gömülü güncel içerik geri geldi.
+        let usta = std::fs::read_to_string(base.join("USTA.md")).unwrap();
+        assert!(usta.contains("Sert Kurallar"));
+        // Kullanıcı-sahipli korundu.
+        assert_eq!(
+            std::fs::read_to_string(base.join("learner/profile.md")).unwrap(),
+            "kullanıcı düzenlemesi"
+        );
+
+        // Değişiklik yokken hiçbir şey yeniden yazılmaz.
+        let third = write_global_defaults(&base).unwrap();
+        assert!(third.iter().all(|(_, wrote)| !*wrote));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn write_project_scaffold_creates_dirs_and_gitkeeps() {
         let base = std::env::temp_dir().join(format!(

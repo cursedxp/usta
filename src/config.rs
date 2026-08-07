@@ -54,6 +54,16 @@ pub fn should_write(path: &Path) -> bool {
     !path.exists()
 }
 
+/// Kod-sahipli dosya senkron gerektiriyor mu? Dosya yoksa veya diskteki
+/// içerik gömülüden farklıysa `true` — repo'daki USTA.md düzenlemesi rebuild
+/// sonrası ilk açılışta global'e taşınır (bkz. `defaults::Ownership::Code`).
+pub fn needs_sync(path: &Path, embedded: &str) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(disk) => disk != embedded,
+        Err(_) => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +111,27 @@ mod tests {
         // (Gerçek filesystem kökü boyunca yürür ama /tmp altında .usta olması
         // beklenmez.)
         assert!(find_project_root(&nested).is_none());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn needs_sync_true_for_missing_or_stale_false_for_current() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_config_test_needssync_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let stale = base.join("eski.md");
+        let current = base.join("guncel.md");
+        let missing = base.join("yok.md");
+        fs::write(&stale, "eski içerik").unwrap();
+        fs::write(&current, "gömülü içerik").unwrap();
+
+        assert!(needs_sync(&missing, "gömülü içerik"));
+        assert!(needs_sync(&stale, "gömülü içerik"));
+        assert!(!needs_sync(&current, "gömülü içerik"));
 
         let _ = fs::remove_dir_all(&base);
     }

@@ -124,7 +124,8 @@ pub fn onboarding_prompt(topic: &str) -> String {
          approach'un `## Hedef` bölümüne yazılacak. Harita resmi çerçeveden kurulur (sınav \
          müfredatı / exam guide / CEFR) — web'de araştır. Alanı yeterince bilmiyorsan web'de \
          araştır. \
-         Oturum kapanışında yaklaşımı ve TAM müfredat haritasını dosyalara yazacaksın — \
+         Oturum kapanışında senden yaklaşım + TAM müfredat haritası İÇERİĞİ istenecek; \
+         dosyaları Usta kabuğu yazar, sen oturum içinde dosya yazmaya çalışma (Sert Kural 6) — \
          tanışmayı buna göre derinleştir ama derse çevirme, kısa tut."
     )
 }
@@ -278,6 +279,15 @@ mod tests {
         assert!(s.contains("linux-guvenlik"));
         assert!(s.contains("TANIŞMA"));
         assert!(s.contains("form"));
+    }
+
+    #[test]
+    fn onboarding_prompt_does_not_tell_model_it_writes_files() {
+        // Sert Kural 6: modelin dosya yazma aracı yok — kapanış içeriğini üretir,
+        // dosyayı kabuk yazar. Prompt modeli yazma denemesine itmemeli.
+        let s = onboarding_prompt("rust");
+        assert!(!s.contains("dosyalara yazacaksın"));
+        assert!(s.contains("kabuğu yazar"));
     }
 
     #[test]
