@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
         ui::notice(".usta/ kuruldu");
     }
 
-    let topic = resolve_topic(topic_arg)?;
+    let topic = resolve_topic(&mut backend, topic_arg).await?;
 
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
     // model — bkz. brain.rs).
@@ -390,8 +390,9 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
 
 /// Konuyu çöz: açık argüman > TTY promptu > sessiz "genel" default'u.
 /// Stdin pipe'lanmışsa (TTY değilse) cevaplanamayacak bir prompt'a takılmadan
-/// direkt "genel" döner.
-fn resolve_topic(topic_arg: Option<String>) -> Result<String> {
+/// direkt "genel" döner. Kısa girdi yerel slug'lanır; cümle yazılırsa NE
+/// öğrenmek istediğini modele çıkartıp en mantıklı slug'ı ona seçtiririz.
+async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Result<String> {
     if let Some(raw) = topic_arg {
         return Ok(slugify_topic(&raw));
     }
@@ -399,19 +400,47 @@ fn resolve_topic(topic_arg: Option<String>) -> Result<String> {
         return Ok("genel".to_string());
     }
     let mut rl = DefaultEditor::new()?;
-    // Ret yok: kısa yaz ya da cümleyle anlat — stopword'ler atılıp ilk 3
-    // içerik kelimesinden slug üretilir. Detay zaten sohbette derinleşir.
     let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
         Ok(l) => l,
         // Ctrl-D / Ctrl-C → engellemeden "genel"e düş.
         Err(_) => return Ok("genel".to_string()),
     };
-    let slug = slugify_topic(line.trim());
-    // Cümle yazdıysa neyi slug aldığımızı göster (şeffaflık).
-    if line.split_whitespace().count() > 3 {
-        ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
+    let raw = line.trim();
+    if raw.is_empty() {
+        return Ok("genel".to_string());
     }
+    // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
+    if raw.split_whitespace().count() <= 2 {
+        return Ok(slugify_topic(raw));
+    }
+    // Cümle → model ne istediğini çıkarıp slug seçsin.
+    let slug = derive_slug(backend, raw).await;
+    ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
     Ok(slug)
+}
+
+/// Cümleden konu slug'ını modele çıkart — o "ne öğrenmek istiyor"u anlar,
+/// en mantıklı kısa slug'ı seçer. Format yine `slugify_topic`'le garantilenir;
+/// çağrı hata verirse yerel slug'a düşülür (oturum engellenmez).
+async fn derive_slug(backend: &mut Backend, raw: &str) -> String {
+    let system = "Kullanıcının öğrenmek/yapmak istediğini TEK kısa dosya-adı slug'ına indir. \
+        Kurallar: yalnız küçük harf, ascii (Türkçe karakter yok), kelimeler tire ile ayrılır, \
+        EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
+        SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
+        Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
+    let history = [Message::user(raw)];
+    match ask_usta(backend, system, &history).await {
+        Ok(reply) => {
+            // Tireleri boşluğa çevirip slugify — modelin verdiği tireler korunur.
+            let s = slugify_topic(&reply.text.trim().replace(['-', '_'], " "));
+            if s == "genel" {
+                slugify_topic(raw)
+            } else {
+                s
+            }
+        }
+        Err(_) => slugify_topic(raw),
+    }
 }
 
 /// Türkçe harfi ascii'ye indir + küçük harfe çevir; diğerlerini küçült.
