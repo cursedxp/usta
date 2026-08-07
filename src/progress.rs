@@ -73,9 +73,15 @@ pub fn closing_prompt(
          `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (KANITLA) / \
          `## Geri çağırma soruları` (3-5 soru + tek satır cevap; oturmuş eskileri çıkar, \
          bu oturumdan yenileri ekle) / `## Hata günlüğü` (`tip | kaç kez | son örnek`, \
-         3+ tekrar = GAP ADAYI) / `## İpucu merdiveni`.\n\
+         3+ tekrar = GAP ADAYI) / `## İpucu merdiveni` / `## Hedef Durumu` — SADECE \
+         approach'ta `## Hedef` tanımlıysa yaz: kalan süre (BUGÜN bölümünden hesapla), \
+         harita ilerlemesi (%), tempo değerlendirmesi (yetişir / riskli / yetişmez + tek \
+         cümle gerekçe), ölçüm logu (`tarih | ölçüm | skor` — deneme sınavı, yazma \
+         değerlendirmesi vb.). Hedef yoksa bu bölümü hiç yazma.\n\
          - `approach` yalnız ilk oturumda veya yaklaşım bu oturumda değiştiyse üretilir — \
-         canlı belge, _default.md'deki üç soruya cevap verir (pratik / çıktı / feedback).\n\
+         canlı belge, _default.md'deki üç soruya cevap verir (pratik / çıktı / feedback). \
+         Hedefli öğrenmede approach `## Hedef` bölümü içerir: ne (sertifika/seviye/çıktı), \
+         sınav-değerlendirme tarihi (YYYY-MM-DD), geçme eşiği, sınav/değerlendirme formatı.\n\
          - `curriculum` ilk oturumda TAM harita olarak çıkarılır (konu/alt-konu ağacı; her \
          madde `görülmedi/görüldü/oturdu/derinleşildi` durumuyla; gerekiyorsa web \
          araştırmasına dayan); sonraki oturumlarda yalnız durum değiştiyse üretilir. \
@@ -109,7 +115,12 @@ pub fn onboarding_prompt(topic: &str) -> String {
          Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n\
          Kısa bir tanışma başlat: ne öğrenmek istiyorum, neden, hedefim ne, elimde ne \
          var? Bu bir form değil — AÇIK sohbet; ben ne söylersem oradan türet, başka bir \
-         şey istiyorsam onu takip et. Alanı yeterince bilmiyorsan web'de araştır. \
+         şey istiyorsam onu takip et. Şunu mutlaka netleştir: bu keşif mi (merak, açık \
+         uçlu), yoksa somut bir hedef mi (sertifika, seviye, tarihli çıktı — ör. AWS SAA, \
+         Goethe B1, PMP)? Hedefliyse: ne, hangi tarihte, geçme eşiği ne, formatı ne — \
+         approach'un `## Hedef` bölümüne yazılacak. Harita resmi çerçeveden kurulur (sınav \
+         müfredatı / exam guide / CEFR) — web'de araştır. Alanı yeterince bilmiyorsan web'de \
+         araştır. \
          Oturum kapanışında yaklaşımı ve TAM müfredat haritasını dosyalara yazacaksın — \
          tanışmayı buna göre derinleştir ama derse çevirme, kısa tut."
     )
@@ -222,6 +233,21 @@ mod tests {
         assert!(s.contains("CMEVCUT"));
         assert!(s.contains("===DOSYA:"));
         assert!(s.contains("görülmedi/görüldü/oturdu/derinleşildi"));
+    }
+
+    #[test]
+    fn closing_prompt_defines_goal_sections() {
+        let s = closing_prompt("almanca", None, None, None);
+        assert!(s.contains("## Hedef Durumu"));
+        assert!(s.contains("## Hedef"));
+        assert!(s.contains("tempo"));
+    }
+
+    #[test]
+    fn onboarding_prompt_asks_exploration_or_goal() {
+        let s = onboarding_prompt("almanca");
+        assert!(s.contains("keşif mi"));
+        assert!(s.contains("hedef"));
     }
 
     #[test]

@@ -105,7 +105,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - `closing_prompt` kurallarına eklenir: approach'ta `## Hedef` (kararlı tanım), progress'te `## Hedef Durumu` (değişen durum; hedef yoksa bölüm yazılmaz).
 - `onboarding_prompt`'a keşif-mi-hedef-mi sorusu eklenir.
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/progress.rs` test modülüne:
 
@@ -129,7 +129,7 @@ fn onboarding_prompt_asks_exploration_or_goal() {
 Run: `cargo test 'goal'` ve `cargo test onboarding`
 Expected: FAIL.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `closing_prompt` format string'inde iki kural satırını değiştir/ekle:
 
@@ -159,12 +159,12 @@ Expected: FAIL.
  Harita resmi çerçeveden kurulur (sınav müfredatı / exam guide / CEFR) — web'de araştır.
 ```
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build && cargo clippy`
 Expected: yeni 2 test dahil hepsi PASS (v0.6/v0.7 prompt testleri bozulmadan).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/progress.rs
