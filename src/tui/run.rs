@@ -170,7 +170,9 @@ async fn ask_topic(
     };
     let name = profile.and_then(welcome::extract_name);
     let width = current_width(tui);
-    page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, &topics, width))?;
+    // GEÇİCİ KABLOLAMA (Task 5'te değişir): global katalog `local` olarak
+    // veriliyor, `other` boş — proje-yerel/diğer-proje ayrımı Task 5'te gelir.
+    page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, &topics, &[], width))?;
     page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
 
     loop {

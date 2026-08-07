@@ -166,14 +166,19 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
 }
 
 /// Kimlik modu: konu YOK. Sol kolon logo + selam + model + dizin; sağ kolon
-/// "Ne öğrenmek istiyorsun?" + kayıtlı konular (veya ilk-oturum mesajı).
-/// Konu seçilmeden gösterilir (Claude tarzı: welcome üstte, soru altta).
-/// run.rs konu girişinde (`ask_topic`) bağlı.
+/// "Ne öğrenmek istiyorsun?" + devam edilebilecek yerel konular (veya
+/// ilk-oturum mesajı). Konu seçilmeden gösterilir (Claude tarzı: welcome
+/// üstte, soru altta). run.rs konu girişinde (`ask_topic`) bağlı.
+///
+/// `local`: bu projede kayıtlı konular — boş değilse `Enter → <ilk>'e devam`
+/// satırı ve numaralı liste (≤6) gösterilir. `other`: başka projelerde
+/// kayıtlı konular — sadece bilgi amaçlı, seçilemez, soluk bir satırda özetlenir.
 pub fn render_welcome_identity(
     name: Option<&str>,
     model: &str,
     dir: &str,
-    topics: &[String],
+    local: &[String],
+    other: &[String],
     width: u16,
 ) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
@@ -193,13 +198,23 @@ pub fn render_welcome_identity(
     left.push((format!("  {}", fit(dir, left_w - 2)), false));
 
     let mut right: Vec<String> = vec!["Ne öğrenmek istiyorsun?".to_string(), String::new()];
-    if topics.is_empty() {
-        right.push(fit("İlk oturum — bir konu yaz.", right_w));
+    if let Some(first) = local.first() {
+        right.push(fit(&format!("Enter → {first}'e devam"), right_w));
+        for (i, t) in local.iter().take(6).enumerate() {
+            right.push(fit(&format!("{}) {t}", i + 1), right_w));
+        }
+        right.push(String::new());
+        right.push("Yeni konu için yaz.".to_string());
+        if !other.is_empty() {
+            right.push(fit(&format!("Diğer projelerde: {}", other.join(", ")), right_w));
+        }
     } else {
         right.push(fit("Kısa yaz ya da cümleyle anlat.", right_w));
-        right.push(String::new());
-        let list = format!("Kayıtlı: {}", topics.join(" · "));
-        right.push(fit(&list, right_w));
+        // mevcut "Kayıtlı:" satırı KALKAR — yerine other bilgi satırı (varsa).
+        if !other.is_empty() {
+            right.push(String::new());
+            right.push(fit(&format!("Diğer projelerde: {}", other.join(", ")), right_w));
+        }
     }
 
     render_box(env!("CARGO_PKG_VERSION"), left, right, width)
@@ -329,8 +344,8 @@ mod tests {
     #[test]
     fn render_identity_with_topics_lists_them_and_equal_width() {
         use unicode_width::UnicodeWidthStr;
-        let topics = vec!["rust".to_string(), "gtm".to_string()];
-        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &topics, 80);
+        let local = vec!["rust".to_string(), "gtm".to_string()];
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], 80);
         let lines = plain_lines(&t);
         let w = lines[0].width();
         assert!(lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
@@ -343,10 +358,37 @@ mod tests {
 
     #[test]
     fn render_identity_no_topics_shows_first_session_and_no_name() {
-        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], 80);
+        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], 80);
         let joined = plain_lines(&t).join("\n");
-        assert!(joined.contains("İlk oturum"));
+        assert!(joined.contains("Ne öğrenmek istiyorsun?"));
         assert!(joined.contains("Merhaba!"));       // isim yok → jenerik
         assert!(!joined.contains("Merhaba,"));      // "Merhaba, X!" biçimi yok
+        assert!(!joined.contains("Enter →"));       // konu yok → devam satırı yok
+    }
+
+    #[test]
+    fn identity_welcome_lists_local_topics_with_enter_hint() {
+        let local = vec!["brainstorm-ilk-adim".to_string(), "linux-guvenlik".to_string()];
+        let other = vec!["rust".to_string()];
+        let t = render_welcome_identity(Some("Anil"), "opus · cli", "~/x", &local, &other, 80);
+        let joined = plain_lines(&t).join("\n");
+        assert!(joined.contains("Enter"));
+        assert!(joined.contains("brainstorm-ilk-adim"));
+        assert!(joined.contains("1)"));
+        assert!(joined.contains("2)"));
+        assert!(joined.contains("Diğer projelerde"));
+        // Hizalama korunur.
+        use unicode_width::UnicodeWidthStr;
+        let lines = plain_lines(&t);
+        let w = lines[0].width();
+        assert!(lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
+    }
+
+    #[test]
+    fn identity_welcome_without_local_topics_keeps_first_run_look() {
+        let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], 80);
+        let joined = plain_lines(&t).join("\n");
+        assert!(joined.contains("Ne öğrenmek istiyorsun"));
+        assert!(!joined.contains("Enter →"));
     }
 }
