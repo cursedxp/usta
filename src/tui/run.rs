@@ -48,6 +48,12 @@ fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
     page(tui, ansi_to_text(&format!("\x1b[2m· {msg}\x1b[0m")))
 }
 
+/// Anlık terminal genişliği — resize sonrası sarma doğru kalsın (spec B3).
+/// Ölçüm başarısızsa 80'e düş (sarma bozulmaz, sadece dar olur).
+fn current_width(tui: &Tui) -> u16 {
+    tui.terminal.size().map(|s| s.width).unwrap_or(80)
+}
+
 /// Alt bölgeyi çiz: girdi kutusu (üstte) + durum satırı (altta).
 fn draw(
     tui: &mut Tui,
@@ -66,30 +72,35 @@ fn draw(
     Ok(())
 }
 
-fn draw_locked(
-    tui: &mut Tui,
-    editor: &InputBox,
-    frame: usize,
-    tokens: Option<u64>,
-    window: u64,
-) -> Result<()> {
-    draw(tui, editor, &Status::Thinking { frame }, tokens, window)
+/// ask_live sonucu: yanıt geldi ya da kullanıcı çift Ctrl-C ile iptal etti.
+pub enum AskOutcome {
+    Reply(crate::backend::Reply),
+    Cancelled,
 }
 
-/// Kilitli modda tuş: Enter ve Ctrl-C/D yutulur, gerisi editöre gider —
-/// tek-turn ilkesi (yanıt beklenirken yeni turn başlatılamaz).
-fn editor_key_locked(editor: &mut InputBox, k: KeyEvent) -> Action {
-    if matches!(k.code, KeyCode::Enter) {
-        return Action::None;
-    }
-    match editor.handle_key(k) {
-        Action::Exit => Action::None, // kapanış sadece idle'da
-        other => other,
+/// Kilitli moddaki tuşun anlamı — saf, testlenebilir (spec B2).
+enum LockedKey {
+    /// Editöre işlenecek tuş (Enter dahil — Enter yutulur ama edit sayılır).
+    Edit,
+    /// Ctrl-C / Ctrl-D — iptal isteği basamağı.
+    CancelRequest,
+}
+
+fn classify_locked_key(k: KeyEvent) -> LockedKey {
+    use crossterm::event::KeyModifiers;
+    if k.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('d'))
+    {
+        LockedKey::CancelRequest
+    } else {
+        LockedKey::Edit
     }
 }
 
 /// LLM çağrısını canlı arayüzle bekle: spinner döner, tuşlar editöre işler
-/// ama Submit/Exit KİLİTLİ (tek turn ilkesi) — Enter yutulur.
+/// ama Submit/Exit KİLİTLİ (tek turn ilkesi) — Enter yutulur. Çift Ctrl-C
+/// (veya Ctrl-D) ile iptal edilebilir: ilk basış durum satırında ipucu
+/// yakar, ikincisi future'ı düşürür (kill_on_drop çocuğu öldürür).
 async fn ask_live(
     tui: &mut Tui,
     editor: &mut InputBox,
@@ -98,19 +109,33 @@ async fn ask_live(
     system: &str,
     history: &[Message],
     tokens: Option<u64>,
-) -> Result<crate::backend::Reply> {
+) -> Result<AskOutcome> {
     let window = backend.context_window();
     let fut = backend.complete(system, history);
     tokio::pin!(fut);
     let mut frame = 0usize;
+    let mut cancel_armed = false; // ilk Ctrl-C sonrası true — sayaç sıfırlanmaz (spec B2)
     loop {
-        draw_locked(tui, editor, frame, tokens, window)?;
+        draw(tui, editor, &Status::Thinking { frame, cancel_hint: cancel_armed }, tokens, window)?;
         tokio::select! {
-            r = &mut fut => return r,
+            r = &mut fut => return Ok(AskOutcome::Reply(r?)),
             Some(Ok(ev)) = events.next() => {
                 if let Event::Key(k) = ev {
-                    // Enter/Ctrl-C burada işlem başlatamaz — sadece edit tuşları.
-                    let _ = editor_key_locked(editor, k);
+                    match classify_locked_key(k) {
+                        LockedKey::CancelRequest if cancel_armed => {
+                            // fut düşer → kill_on_drop çocuğu öldürür (backend.rs).
+                            return Ok(AskOutcome::Cancelled);
+                        }
+                        LockedKey::CancelRequest => { cancel_armed = true; }
+                        LockedKey::Edit => {
+                            if !matches!(k.code, KeyCode::Enter) {
+                                let _ = match editor.handle_key(k) {
+                                    Action::Exit => Action::None, // buraya düşmez (CancelRequest yakalar) — emniyet
+                                    other => other,
+                                };
+                            }
+                        }
+                    }
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(120)) => { frame += 1; }
@@ -131,7 +156,6 @@ async fn ask_topic(
     profile: Option<&str>,
     model: &str,
     dir: &str,
-    width: u16,
 ) -> Result<Option<String>> {
     // Kayıtlı konular (global katalog) — boşsa ilk-oturum mesajı.
     let idx = std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
@@ -142,17 +166,20 @@ async fn ask_topic(
         t
     };
     let name = profile.and_then(welcome::extract_name);
+    let width = current_width(tui);
     page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, &topics, width))?;
     page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
 
     loop {
         draw(tui, editor, &Status::Idle, None, 0)?;
-        if let Some(Ok(Event::Key(k))) = events.next().await {
-            match editor.handle_key(k) {
+        match events.next().await {
+            Some(Ok(Event::Key(k))) => match editor.handle_key(k) {
                 Action::Submit(line) => return Ok(Some(line)),
                 Action::Exit => return Ok(None),
                 Action::None => {}
-            }
+            },
+            Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
+            None => return Ok(None), // stream bitti — sıcak döngüye girme (spec B4)
         }
     }
 }
@@ -167,11 +194,13 @@ async fn tui_confirm(
     page_notice(tui, msg)?;
     loop {
         draw(tui, editor, &Status::Idle, None, 0)?;
-        if let Some(Ok(Event::Key(k))) = events.next().await {
-            match k.code {
+        match events.next().await {
+            Some(Ok(Event::Key(k))) => match k.code {
                 KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
                 _ => return Ok(false),
-            }
+            },
+            Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
+            None => return Ok(false), // stream bitti — sıcak döngüye girme (spec B4)
         }
     }
 }
@@ -194,7 +223,6 @@ pub async fn run(
     let mut tui = crate::tui::term::setup()?;
     let mut editor = InputBox::new();
     let mut events = EventStream::new();
-    let width = tui.terminal.size()?.width;
     let read = |p: PathBuf| std::fs::read_to_string(p).ok();
 
     // Konu belirle: argüman verildiyse yerel slug'la (`usta start "JavaScript
@@ -211,7 +239,6 @@ pub async fn run(
                 read(global.join("learner/profile.md")).as_deref(),
                 &backend.label(),
                 &short_dir(project_root),
-                width,
             )
             .await?
             {
@@ -222,7 +249,7 @@ pub async fn run(
             if raw.split_whitespace().count() <= 2 {
                 crate::slugify_topic(&raw)
             } else {
-                match ask_live(
+                let slug = match ask_live(
                     &mut tui,
                     &mut editor,
                     &mut events,
@@ -233,9 +260,12 @@ pub async fn run(
                 )
                 .await
                 {
-                    Ok(reply) => crate::finalize_slug(&raw, &reply.text),
-                    Err(_) => crate::slugify_topic(&raw),
-                }
+                    Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
+                    Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
+                };
+                // Slug mini-oturumu öğrenme oturumuna taşınmasın (spec B1).
+                backend.reset_session();
+                slug
             }
         }
     };
@@ -288,7 +318,8 @@ pub async fn run(
             &backend.label(),
             &short_dir(project_root),
         );
-        page(&mut tui, welcome::render_welcome(&data, width))?;
+        let w = current_width(&tui);
+        page(&mut tui, welcome::render_welcome(&data, w))?;
     }
 
     // Açılış drilli / tanışma (main.rs plain yolunun TUI karşılığı).
@@ -310,11 +341,16 @@ pub async fn run(
     )
     .await
     {
-        Ok(reply) => {
+        Ok(AskOutcome::Reply(reply)) => {
             last_tokens = reply.context_tokens;
-            page_reply(&mut tui, &reply.text, width)?;
+            let w = current_width(&tui);
+            page_reply(&mut tui, &reply.text, w)?;
             recorder.assistant(&reply.text);
             session.push_assistant(reply.text);
+        }
+        Ok(AskOutcome::Cancelled) => {
+            backend.reset_session();
+            page_notice(&mut tui, "açılış turu iptal edildi")?;
         }
         Err(e) => page_notice(&mut tui, &format!("açılış turu atlandı: {e}"))?,
     }
@@ -327,7 +363,11 @@ pub async fn run(
         }
         draw(&mut tui, &editor, &Status::Idle, last_tokens, window)?;
         tokio::select! {
-            Some(Ok(ev)) = events.next() => {
+            maybe_ev = events.next() => {
+                let Some(Ok(ev)) = maybe_ev else {
+                    if maybe_ev.is_none() { break; } // stream bitti = Eof (spec B4)
+                    continue; // tek olay hatası — yoksay
+                };
                 let Event::Key(k) = ev else { continue };
                 match editor.handle_key(k) {
                     Action::None => {}
@@ -342,12 +382,19 @@ pub async fn run(
                             &mut tui, &mut editor, &mut events, backend,
                             &session.system, session.history(), last_tokens,
                         ).await {
-                            Ok(reply) => {
+                            Ok(AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
-                                page_reply(&mut tui, &reply.text, width)?;
+                                let w = current_width(&tui);
+                                page_reply(&mut tui, &reply.text, w)?;
                                 recorder.assistant(&reply.text);
                                 session.push_assistant(reply.text);
                                 crate::maybe_compact(backend, &mut session, project_root, last_tokens).await;
+                            }
+                            Ok(AskOutcome::Cancelled) => {
+                                // User turn history'de kalır (bilinçli — spec B2); CLI oturumu
+                                // yarım — resume edilmesin, sonraki çağrı tam transcript'le gitsin.
+                                backend.reset_session();
+                                page_notice(&mut tui, "yanıt iptal edildi — mesajın kaldı, istersen devam et")?;
                             }
                             Err(e) => page_notice(&mut tui, &format!("hata: {e}"))?,
                         }
@@ -377,7 +424,8 @@ pub async fn run(
                             Ok(crate::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
                             Ok(crate::FileFeedback::Yanit { tokens, reply }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
-                                page_reply(&mut tui, &reply.text, width)?;
+                                let w = current_width(&tui);
+                                page_reply(&mut tui, &reply.text, w)?;
                                 crate::maybe_compact(backend, &mut session, project_root, tokens).await;
                             }
                             Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,
@@ -401,5 +449,31 @@ fn short_dir(p: &Path) -> String {
     match dirs::home_dir() {
         Some(h) => s.replace(&h.display().to_string(), "~"),
         None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn classify_locked_key_ctrl_c_and_d_are_cancel_requests() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert!(matches!(classify_locked_key(ctrl_c), LockedKey::CancelRequest));
+        assert!(matches!(classify_locked_key(ctrl_d), LockedKey::CancelRequest));
+    }
+
+    #[test]
+    fn classify_locked_key_enter_and_chars_are_edits() {
+        assert!(matches!(
+            classify_locked_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            LockedKey::Edit
+        ));
+        assert!(matches!(
+            classify_locked_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            LockedKey::Edit
+        ));
     }
 }

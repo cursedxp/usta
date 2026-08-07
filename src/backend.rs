@@ -237,6 +237,8 @@ async fn run_claude_cli(
     if let Some(id) = resume {
         cmd.arg("--resume").arg(id);
     }
+    // Future iptal edilirse (çift Ctrl-C) çocuk süreç öksüz kalmasın.
+    cmd.kill_on_drop(true);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -280,6 +282,16 @@ mod tests {
         assert_eq!(opus.context_window(), 1_000_000);
         let haiku = Backend::Cli { model: "claude-haiku-4-5".into(), session_id: None };
         assert_eq!(haiku.context_window(), 200_000);
+    }
+
+    #[test]
+    fn reset_session_clears_cli_session_id() {
+        // reset_session() session_id'yi None'a çekmeli — slug mini-oturumu
+        // sonrası öğrenme oturumu bunu resume ETMESİN (spec B1).
+        let mut b = Backend::Cli { model: "opus".into(), session_id: Some("sid-123".into()) };
+        b.reset_session();
+        let Backend::Cli { session_id, .. } = &b else { panic!("Cli bekleniyordu") };
+        assert!(session_id.is_none());
     }
 
     #[test]
