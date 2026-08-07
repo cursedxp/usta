@@ -134,6 +134,19 @@ impl Spinner {
     }
 }
 
+/// Usta yanıtını ANSI'li String'e render et — TUI yolu bunu ratatui Text'ine
+/// çevirir (tui::convert). Satır başına 2 boşluk girinti print_usta_reply ile
+/// aynı görsel dil.
+pub fn render_markdown(md: &str, width: usize) -> String {
+    let skin = skin();
+    let text = skin.text(md, Some(width.saturating_sub(4)));
+    format!("{text}")
+        .lines()
+        .map(|l| format!("  {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Usta yanıtlarının markdown teni: başlık+bold turuncu, inline code yeşil.
 /// (termimad API'si sürüme göre değişebilir — hedef renkler Global
 /// Constraints'te; eş değer çağrıyı kullan.)
@@ -144,4 +157,16 @@ fn skin() -> MadSkin {
     skin.bold.set_fg(Color::AnsiValue(208));
     skin.inline_code.set_fg(Color::AnsiValue(114));
     skin
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_markdown_indents_and_keeps_content() {
+        let out = render_markdown("**kalın** metin", 60);
+        assert!(out.contains("kalın"));
+        assert!(out.lines().all(|l| l.is_empty() || l.starts_with("  ")));
+    }
 }
