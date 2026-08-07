@@ -1,6 +1,19 @@
 //! Açılış kutusu: veri toplama (saf) + render. Spec §5.
 //! Tüm parse'lar best-effort — bozuk/eksik girdi alanı atlar, asla panik yok.
 
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span, Text};
+use unicode_width::UnicodeWidthStr;
+
+const ORANGE: Color = Color::Indexed(208);
+
+const LOGO: [&str; 4] = [
+    "██  ██ ██████ ██████ ██████",
+    "██  ██ ██       ██   ██  ██",
+    "██  ██ ██████   ██   ██████",
+    "██████     ██   ██   ██  ██",
+];
+
 /// Açılış kutusunun tüm verisi — render bu struct'tan çizer, IO yapmaz.
 pub struct WelcomeData {
     pub version: &'static str,
@@ -90,9 +103,104 @@ pub fn gather(
     }
 }
 
+/// Görünür genişliğe göre kırp, taşarsa `…` ekle. Padding hesapları da
+/// unicode-width ile — Türkçe karakterlerde byte sayımı yanlış hizalar.
+pub fn fit(s: &str, max: usize) -> String {
+    if s.width() <= max { return s.to_string(); }
+    let mut out = String::new();
+    let mut w = 0usize;
+    for ch in s.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > max.saturating_sub(1) { break; }
+        out.push(ch);
+        w += cw;
+    }
+    out.push('…');
+    out
+}
+
+/// Görünür genişliğe tamamla — sağa boşluk ekler (unicode-width'e göre).
+fn pad(s: &str, w: usize) -> String {
+    format!("{s}{}", " ".repeat(w.saturating_sub(s.width())))
+}
+
+/// Çift kolonlu açılış kutusu. Genişlik `min(width, 100)`; sol kolon logo +
+/// selamlama + model + dizin, sağ kolon Öğrenme Durumu (spec §5).
+pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
+    let total = (width as usize).clamp(60, 100);
+    let inner = total - 2;                      // kenarlar
+    let left_w = 34usize;
+    let right_w = inner - left_w - 3;           // " │ " ayracı
+
+    let greet = match &d.name {
+        Some(n) => format!("Tekrar hoş geldin, {n}!"),
+        None => "Tekrar hoş geldin!".to_string(),
+    };
+    let mut left: Vec<(String, bool)> = vec![(String::new(), false)];
+    for l in LOGO { left.push((format!("  {l}"), true)); }
+    left.push((String::new(), false));
+    left.push((format!("  {}", fit(&greet, left_w - 2)), false));
+    left.push((format!("  {}", fit(&d.model, left_w - 2)), false));
+    left.push((format!("  {}", fit(&d.dir, left_w - 2)), false));
+
+    let mut right: Vec<String> = Vec::new();
+    if d.first_session {
+        right.push("Öğrenme Durumu".to_string());
+        right.push(String::new());
+        right.push(fit("İlk oturum — tanışmayla başlarız.", right_w));
+    } else {
+        right.push("Öğrenme Durumu".to_string());
+        let konu = match &d.level {
+            Some(l) => format!("Konu: {} · {}", d.topic, l),
+            None => format!("Konu: {}", d.topic),
+        };
+        right.push(fit(&konu, right_w));
+        if let Some(p) = d.map_percent { right.push(format!("Harita: %{p}")); }
+        right.push("─".repeat(right_w));
+        right.push("Sırada".to_string());
+        if let Some(n) = &d.next_item { right.push(fit(n, right_w)); }
+        if d.drill_count > 0 { right.push(format!("Drill: {} soru hazır", d.drill_count)); }
+    }
+
+    let rows = left.len().max(right.len());
+    let title = format!(" Usta v{} ", d.version);
+    // NOT: dashes = inner - (4 + title_genişliği) olmalı — "╭─── " öneki 5 char,
+    // kapanış "╮" 1 char, toplam sabit 6; inner = total-2 olduğundan 6-2=4 kalır.
+    // Brifingdeki "5 +" formülü satırı 1 char kısa bırakıyordu (equal-width testini kırıyordu).
+    let top = format!("╭─── {}{}╮", title.trim(), "─".repeat(inner.saturating_sub(4 + title.trim().width())));
+    let bottom = format!("╰{}╯", "─".repeat(inner));
+
+    let mut lines: Vec<Line> = vec![Line::from(top)];
+    for i in 0..rows {
+        let (ltxt, is_logo) = left.get(i).cloned().unwrap_or_default();
+        let rtxt = right.get(i).cloned().unwrap_or_default();
+        let lspan = Span::styled(
+            pad(&ltxt, left_w),
+            if is_logo { Style::default().fg(ORANGE) } else { Style::default() },
+        );
+        let rstyle = if i == 0 && !rtxt.is_empty() {
+            Style::default().add_modifier(Modifier::BOLD).fg(ORANGE)
+        } else { Style::default() };
+        lines.push(Line::from(vec![
+            Span::raw("│"),
+            lspan,
+            Span::raw(" │ "),
+            Span::styled(pad(&rtxt, right_w), rstyle),
+            Span::raw("│"),
+        ]));
+    }
+    lines.push(Line::from(bottom));
+    Text::from(lines)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::text::Text;
+
+    fn plain_lines(t: &Text) -> Vec<String> {
+        t.lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
 
     const PROFILE: &str = "# Öğrenci Profili — Anil\n\n## Kim\n- test";
     const PROGRESS: &str = "# rust — İlerleme\n## Seviye\n- Orta: ownership oturdu\n## Geri çağırma soruları\n- Soru 1? — cevap\n- Soru 2? — cevap\n- Soru 3? — cevap\n";
@@ -139,5 +247,31 @@ mod tests {
         let d2 = gather(None, None, None, "gtm", "opus · cli", "~/x");
         assert!(d2.first_session);
         assert_eq!(d2.drill_count, 0);
+    }
+
+    #[test]
+    fn render_welcome_lines_have_equal_display_width() {
+        use unicode_width::UnicodeWidthStr;
+        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/proje");
+        let t = render_welcome(&d, 80);
+        let lines = plain_lines(&t);
+        assert!(lines.len() >= 8);
+        let w = lines[0].width();
+        assert!(lines.iter().all(|l| l.width() == w), "hizasız satır: {lines:#?}");
+        assert!(lines[0].starts_with('╭') && lines.last().unwrap().starts_with('╰'));
+    }
+
+    #[test]
+    fn render_welcome_first_session_shows_intro_message() {
+        let d = gather(None, None, None, "gtm", "opus · cli", "~/p");
+        let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
+        assert!(joined.contains("İlk oturum"));
+        assert!(joined.contains("Tekrar hoş geldin"));
+    }
+
+    #[test]
+    fn fit_truncates_by_display_width_with_ellipsis() {
+        assert_eq!(fit("çğşöü-uzun-metin", 8), "çğşöü-u…");
+        assert_eq!(fit("kısa", 10), "kısa");
     }
 }
