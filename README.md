@@ -49,13 +49,15 @@ cargo build --release
 ## Kullanım
 
 ```bash
-usta                    # başlat — konuyu sorar (veya sen söylersin)
-usta start rust         # doğrudan Rust oturumu
+usta                    # başlat — konuyu sorar (en kısa yol, bunu yaz)
+usta start rust         # konuyu baştan ver — konu argümanı 'start' ister
 usta topics             # nerede ne öğreniyorum? (katalog)
 usta reset rust         # bu projedeki Rust progress'ini sıfırla (onaylı)
 usta reset --factory    # her şeyi sıfırla — Usta seni hiç tanımamış gibi (kelime onaylı)
 usta init               # sadece iskeleti kur (opsiyonel — start zaten kurar)
 ```
+
+> **Not:** Konuyu argümanla vermek istersen `start` şart — `usta rust` "bilinmeyen komut" verir (ilk arg komut sanılır). Konusuz `usta` ise oturumu açıp konuyu sorar. Herhangi bir projede çalıştır: proje `.usta/` yoksa sessizce kurulur.
 
 Bir öğrenme oturumu:
 
