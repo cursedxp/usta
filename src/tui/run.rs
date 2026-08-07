@@ -172,12 +172,14 @@ async fn ask_topic(
 
     loop {
         draw(tui, editor, &Status::Idle, None, 0)?;
-        if let Some(Ok(Event::Key(k))) = events.next().await {
-            match editor.handle_key(k) {
+        match events.next().await {
+            Some(Ok(Event::Key(k))) => match editor.handle_key(k) {
                 Action::Submit(line) => return Ok(Some(line)),
                 Action::Exit => return Ok(None),
                 Action::None => {}
-            }
+            },
+            Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
+            None => return Ok(None), // stream bitti — sıcak döngüye girme (spec B4)
         }
     }
 }
@@ -192,11 +194,13 @@ async fn tui_confirm(
     page_notice(tui, msg)?;
     loop {
         draw(tui, editor, &Status::Idle, None, 0)?;
-        if let Some(Ok(Event::Key(k))) = events.next().await {
-            match k.code {
+        match events.next().await {
+            Some(Ok(Event::Key(k))) => match k.code {
                 KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
                 _ => return Ok(false),
-            }
+            },
+            Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
+            None => return Ok(false), // stream bitti — sıcak döngüye girme (spec B4)
         }
     }
 }
@@ -359,7 +363,11 @@ pub async fn run(
         }
         draw(&mut tui, &editor, &Status::Idle, last_tokens, window)?;
         tokio::select! {
-            Some(Ok(ev)) = events.next() => {
+            maybe_ev = events.next() => {
+                let Some(Ok(ev)) = maybe_ev else {
+                    if maybe_ev.is_none() { break; } // stream bitti = Eof (spec B4)
+                    continue; // tek olay hatası — yoksay
+                };
                 let Event::Key(k) = ev else { continue };
                 match editor.handle_key(k) {
                     Action::None => {}
