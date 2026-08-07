@@ -16,3 +16,8 @@ dirs = "5"
 similar = "2"
 chrono = "0.4"
 termimad = "0.30"
+ratatui = "0.29"
+tui-input = "0.11"
+ansi-to-tui = "7"
+unicode-width = "0.2"
+crossterm = { version = "0.28", features = ["event-stream"] }

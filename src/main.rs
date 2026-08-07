@@ -13,6 +13,7 @@ mod input;
 mod progress;
 mod session;
 mod transcript;
+mod tui;
 mod ui;
 mod watcher;
 
