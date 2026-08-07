@@ -93,9 +93,7 @@ pub fn record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<
 /// (boş olmayan) dosya adları. Sıralama: global index tarihi yeniden-eskiye;
 /// index kaydı olmayan konu dosya mtime'ına düşer (factory reset sonrası
 /// katalog boş olabilir — progress hâlâ gerçek kaynak). `[0]` = son konu.
-/// Henüz hiçbir çağıran yok (kamu API) — welcome box + resume mantığı bir
-/// sonraki task'ta buna bağlanacak; o zamana kadar clippy için allow.
-#[allow(dead_code)]
+/// Kimlik welcome kutusu (numaralı liste) + resume seçim mantığı bunu okur.
 pub fn local_topics(project_root: &Path, index_content: &str) -> Vec<String> {
     let dir = project_root.join(".usta/learner/progress");
     let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
