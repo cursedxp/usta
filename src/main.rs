@@ -500,26 +500,45 @@ async fn resolve_topic(
         println!("kayıtlı: {} — Enter = {}'e devam", local.join(", "), local[0]);
     }
     let mut rl = DefaultEditor::new()?;
-    let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
-        Ok(l) => l,
-        // Ctrl-D / Ctrl-C → engellemeden "genel"e düş.
-        Err(_) => return Ok("genel".to_string()),
-    };
-    let raw = line.trim();
-    // Konu girişi yorumu: devam mı, yeni konu mu? (spec K1). Plain yolda devam/yeni
-    // ayrımı yalnız slug'a yansır — TUI'deki görsel notice farkı burada yok.
-    match interpret_topic_input(raw, &local) {
-        None => Ok("genel".to_string()),
-        Some(TopicChoice::Resume(t)) => Ok(t),
-        Some(TopicChoice::New(raw)) => {
-            // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
-            if raw.split_whitespace().count() <= 2 {
-                return Ok(slugify_topic(&raw));
+    // Yeni-konu onayı yalnız burada (plain yol) döngüye alınır: ret cevabı
+    // "Konu nedir?" promptuna geri döner — TUI'deki reddet-tekrar-sor akışının
+    // eşdeğeri. Resume/ilk-oturum yolları asla bu döngüde takılmaz.
+    loop {
+        let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
+            Ok(l) => l,
+            // Ctrl-D / Ctrl-C → engellemeden "genel"e düş.
+            Err(_) => return Ok("genel".to_string()),
+        };
+        let raw = line.trim();
+        // Konu girişi yorumu: devam mı, yeni konu mu? (spec K1). Plain yolda devam/yeni
+        // ayrımı yalnız slug'a yansır — TUI'deki görsel notice farkı burada yok.
+        match interpret_topic_input(raw, &local) {
+            None => return Ok("genel".to_string()),
+            Some(TopicChoice::Resume(t)) => return Ok(t),
+            Some(TopicChoice::New(raw)) => {
+                // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
+                let slug = if raw.split_whitespace().count() <= 2 {
+                    slugify_topic(&raw)
+                } else {
+                    // Cümle → model ne istediğini çıkarıp slug seçsin (yerel konular K2 için).
+                    derive_slug(backend, &raw, &local).await
+                };
+                if local.contains(&slug) {
+                    // Model devam niyetini mevcut slug'a çözdü — onaysız devam.
+                    return Ok(slug);
+                }
+                // İlk oturum (kayıtlı konu yok) → onay muafiyeti. Aksi halde sor.
+                if local.is_empty()
+                    || confirm(&format!("Yeni konu '{slug}' açılsın mı? [e/H] "), &["e", "evet"])?
+                {
+                    return Ok(slug);
+                }
+                println!(
+                    "vazgeçildi — Enter = {}'e devam, ya da başka konu yaz",
+                    local[0]
+                );
+                // Döngü başa döner: tekrar "Konu nedir?" sorulur.
             }
-            // Cümle → model ne istediğini çıkarıp slug seçsin (yerel konular K2 için).
-            let slug = derive_slug(backend, &raw, &local).await;
-            ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
-            Ok(slug)
         }
     }
 }
