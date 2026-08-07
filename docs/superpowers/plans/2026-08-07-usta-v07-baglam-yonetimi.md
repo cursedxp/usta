@@ -246,7 +246,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `main::CONTEXT_WINDOW: u64 = 200_000`
 - Kullanıcı promptu `"■ "` → `"❯ "`. Usta bloğu 2 boşluk sol padding + terminal genişliğine sarma.
 
-- [ ] **Step 1: `Backend::label` ekle**
+- [x] **Step 1: `Backend::label` ekle**
 
 `src/backend.rs` — `impl Backend` içine:
 
@@ -260,7 +260,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 2: ui.rs güncellemeleri**
+- [x] **Step 2: ui.rs güncellemeleri**
 
 Sarı sabiti ekle:
 
@@ -316,7 +316,7 @@ pub fn context_gauge(tokens: Option<u64>, window: u64) {
 }
 ```
 
-- [ ] **Step 3: main.rs bağla**
+- [x] **Step 3: main.rs bağla**
 
 ```rust
 /// Opus bağlam penceresi — gösterge ve kompaksiyon eşiği bu tabana oranlanır.
@@ -334,12 +334,12 @@ fn print_reply(reply: &backend::Reply) {
 }
 ```
 
-- [ ] **Step 4: Test + build + duman**
+- [x] **Step 4: Test + build + duman**
 
 Run: `cargo test && cargo build`
 Expected: hepsi PASS. Duman: `echo "" | cargo run -- start deneme` → düz modda ANSI yok, gösterge yok.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui.rs src/backend.rs src/main.rs

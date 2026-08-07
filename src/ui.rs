@@ -10,6 +10,7 @@ use termimad::MadSkin;
 
 pub const ORANGE: &str = "\x1b[38;5;208m";
 pub const DIM: &str = "\x1b[2m";
+pub const YELLOW: &str = "\x1b[33m";
 pub const RESET: &str = "\x1b[0m";
 
 /// Düz mod: stdout TTY değil veya kullanıcı NO_COLOR istemiş.
@@ -27,7 +28,12 @@ pub fn print_usta_reply(reply: &str, web: bool) {
         return;
     }
     println!("\n{ORANGE}●{RESET}");
-    skin().print_text(reply);
+    let width = termimad::terminal_size().0.max(40) as usize;
+    let skin = skin();
+    let text = skin.text(reply, Some(width.saturating_sub(4)));
+    for line in format!("{text}").lines() {
+        println!("  {line}");
+    }
     if web {
         println!("{DIM}  🔎 web araştırıldı{RESET}");
     }
@@ -52,13 +58,27 @@ pub fn warn(msg: &str) {
     }
 }
 
-/// Oturum açılış satırı.
-pub fn banner(topic: &str) {
+/// Oturum açılış satırı — konu + model + çıkış ipucu.
+pub fn banner(topic: &str, model: &str) {
     if is_plain() {
-        println!("Usta hazır — konu: {topic}. Kod yaz, kaydet; ben izlerim. (/quit ile çık)");
+        println!("Usta hazır — konu: {topic} · model: {model}. (/quit ile çık)");
         return;
     }
-    println!("{ORANGE}● Usta{RESET} {DIM}— konu: {topic} · kod yaz, kaydet; izliyorum · /quit ile çık{RESET}");
+    println!("{ORANGE}● Usta{RESET} {DIM}— konu: {topic} · model: {model} · /quit ile çık{RESET}");
+}
+
+/// Bağlam doluluk göstergesi — 8 hücreli bar, ≥%70 sarı uyarı.
+/// Token bilgisi yoksa veya düz moddaysa hiç çizilmez (gürültü yok).
+pub fn context_gauge(tokens: Option<u64>, window: u64) {
+    let Some(t) = tokens else { return };
+    if is_plain() {
+        return;
+    }
+    let ratio = (t as f64 / window as f64).min(1.0);
+    let filled = ((ratio * 8.0).round() as usize).min(8);
+    let bar = format!("{}{}", "▓".repeat(filled), "░".repeat(8 - filled));
+    let color = if ratio >= 0.7 { YELLOW } else { DIM };
+    println!("{color}  {bar} bağlam {}k/{}k{RESET}", t / 1000, window / 1000);
 }
 
 /// LLM beklerken tek satır animasyon. Düz modda hiç çizmez.

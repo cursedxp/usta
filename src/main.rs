@@ -25,6 +25,9 @@ use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::session::Session;
 
+/// Opus bağlam penceresi — gösterge ve kompaksiyon eşiği bu tabana oranlanır.
+const CONTEXT_WINDOW: u64 = 200_000;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -60,11 +63,11 @@ async fn main() -> Result<()> {
     // Dosya izleyici + girdi thread'i + debounce durumu.
     let mut watch_rx = watcher::spawn(&project_root)?;
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
-    let mut input_rx = input::spawn("■ ", ready_rx);
+    let mut input_rx = input::spawn("❯ ", ready_rx);
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
 
-    ui::banner(&topic);
+    ui::banner(&topic, &backend.label());
 
     // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
     // 2-3 geri çağırma sorusuyla ısındırır (testing effect — USTA.md kuralı).
@@ -574,6 +577,7 @@ async fn handle_file_change(
 /// Usta yanıtını sunum katmanına devret.
 fn print_reply(reply: &backend::Reply) {
     ui::print_usta_reply(&reply.text, reply.web);
+    ui::context_gauge(reply.context_tokens, CONTEXT_WINDOW);
 }
 
 #[cfg(test)]

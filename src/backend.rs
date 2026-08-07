@@ -20,8 +20,6 @@ pub struct Reply {
     pub text: String,
     pub web: bool,
     /// Son çağrının toplam bağlam token'ı (input + cache) — gösterge için.
-    /// Bu görevde sadece toplanır; tüketimi (gösterge) v0.7 Task 2'de gelir.
-    #[allow(dead_code)]
     pub context_tokens: Option<u64>,
 }
 
@@ -99,6 +97,14 @@ fn claude_on_path() -> bool {
 }
 
 impl Backend {
+    /// Banner'da gösterilecek model etiketi.
+    pub fn label(&self) -> String {
+        match self {
+            Backend::Cli { model, .. } => format!("{model} · cli"),
+            Backend::Api { model, .. } => format!("{model} · api"),
+        }
+    }
+
     /// Seçilen backend'e göre tamamlama iste, `Reply` döner.
     /// CLI modunda web kullanımı metinden tespit edilemez → `false`.
     pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<Reply> {
