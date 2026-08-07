@@ -145,6 +145,11 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
     }
+    // Önceki sürümü yedekle — kötü model çıktısı tek kopyayla geri alınır.
+    if path.exists() {
+        let bak = path.with_extension("md.bak");
+        let _ = std::fs::copy(path, &bak);
+    }
     let tmp = path.with_extension("md.tmp");
     std::fs::write(&tmp, content)
         .with_context(|| format!("yazılamadı: {}", tmp.display()))?;
@@ -298,6 +303,25 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "içerik");
         // tmp dosyası kalmamalı.
         assert!(!target.with_extension("md.tmp").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_atomic_backs_up_previous_version() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_progress_bak_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let target = base.join("rust.md");
+        write_atomic(&target, "ilk sürüm").unwrap();
+        assert!(!target.with_extension("md.bak").exists()); // ilk yazımda yedek yok
+        write_atomic(&target, "ikinci sürüm").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(target.with_extension("md.bak")).unwrap(),
+            "ilk sürüm"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "ikinci sürüm");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

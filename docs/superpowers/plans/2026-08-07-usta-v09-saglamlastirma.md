@@ -405,7 +405,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Interfaces:**
 - `write_atomic` davranış ekI: hedef dosya VARSA üzerine yazmadan önce mevcut içerik `<dosya>.bak`'a kopyalanır (tek nesil yedek). Kötü model çıktısı tek `cp` ile geri alınır.
 
-- [ ] **Step 1: Failing testi yaz**
+- [x] **Step 1: Failing testi yaz**
 
 `src/progress.rs` test modülüne:
 
@@ -433,7 +433,7 @@ fn write_atomic_backs_up_previous_version() {
 Run: `cargo test write_atomic`
 Expected: yeni test FAIL, eski `write_atomic_creates_parents_and_writes` PASS.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `write_atomic` içinde, tmp yazımından ÖNCE:
 
@@ -445,7 +445,7 @@ Expected: yeni test FAIL, eski `write_atomic_creates_parents_and_writes` PASS.
     }
 ```
 
-- [ ] **Step 3: Test + build + commit**
+- [x] **Step 3: Test + build + commit**
 
 Run: `cargo test && cargo build && cargo clippy` → PASS.
 
