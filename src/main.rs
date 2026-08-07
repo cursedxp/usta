@@ -82,6 +82,28 @@ async fn main() -> Result<()> {
     for p in transcript::find_unfinished(&project_root) {
         ui::warn(&format!("yarım oturum kaydı bulundu (flush edilememiş olabilir): {}", p.display()));
     }
+
+    let lock = lock_path(&project_root, &topic);
+    if lock.exists() {
+        let pid = std::fs::read_to_string(&lock).unwrap_or_default();
+        if std::io::stdin().is_terminal() {
+            let msg = format!(
+                "Bu konuda başka bir oturum açık görünüyor (pid {}). İki oturum aynı anda \
+                 kapanırsa progress birbirini EZER. Yine de devam? [e/H] ",
+                pid.trim()
+            );
+            if !confirm(&msg, &["e", "evet"])? {
+                println!("vazgeçildi — önce diğer oturumu kapat (veya kalıntıysa sil: {})", lock.display());
+                return Ok(());
+            }
+        } else {
+            ui::warn("kalıntı konu kilidi bulundu — pipe modunda devam ediliyor");
+        }
+    }
+    if let Err(e) = std::fs::write(&lock, std::process::id().to_string()) {
+        ui::warn(&format!("konu kilidi yazılamadı: {e}"));
+    }
+
     let recorder = transcript::Recorder::new(transcript::session_path(
         &project_root, &topic, &now_stamp(),
     ));
@@ -188,6 +210,8 @@ async fn main() -> Result<()> {
     } else if let Err(e) = transcript::mark_done(recorder.path()) {
         ui::warn(&format!("oturum kaydı işaretlenemedi: {e}"));
     }
+
+    let _ = std::fs::remove_file(&lock);
 
     ui::notice("Görüşürüz — suya girmeye devam et.");
     Ok(())
@@ -306,6 +330,12 @@ fn today() -> String {
 /// Oturum dosya adı damgası — yerel saat.
 fn now_stamp() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
+}
+
+/// Konu kilidi: `.usta/.lock-<konu>` — eşzamanlı iki oturumun aynı progress'i
+/// sessizce ezmesini önler. İçerik: pid (teşhis için).
+fn lock_path(project_root: &Path, topic: &str) -> PathBuf {
+    project_root.join(".usta").join(format!(".lock-{topic}"))
 }
 
 /// Deadline varsa ona kadar uyu; yoksa asla dönmeyen future (select guard'ı

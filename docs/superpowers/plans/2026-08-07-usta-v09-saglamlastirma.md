@@ -337,7 +337,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Produces: `lock_path(project_root, topic) -> PathBuf` → `.usta/.lock-<topic>`
 - Sözleşme: açılışta lock varsa TTY'de onay istenir ("başka oturum açık olabilir"); onay yoksa temiz çıkış. TTY değilse (pipe/test) uyarıp devam edilir — otomasyon stale lock'a takılmaz. Lock çıkışta silinir; çökme stale lock bırakır → onay mekanizması zaten karşılar.
 
-- [ ] **Step 1: Implemente et**
+- [x] **Step 1: Implemente et**
 
 ```rust
 /// Konu kilidi: `.usta/.lock-<konu>` — eşzamanlı iki oturumun aynı progress'i
@@ -378,12 +378,12 @@ Açılışta (recorder oluşturmadan önce):
     let _ = std::fs::remove_file(&lock);
 ```
 
-- [ ] **Step 2: Test + build + duman**
+- [x] **Step 2: Test + build + duman**
 
 Run: `cargo test && cargo build && cargo clippy`
 Expected: hepsi PASS. Duman: sandbox'ta bir oturum aç, İKİNCİ terminalde aynı konuyu aç → onay sorusu gelsin; "H" → temiz çıkış. İlk oturum `/quit` → lock silinmiş olsun (`ls .usta/.lock-*` boş).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/main.rs
