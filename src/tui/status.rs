@@ -8,15 +8,16 @@ const FRAMES: [&str; 4] = ["⠋", "⠙", "⠸", "⠴"];
 
 pub enum Status {
     Idle,
-    Thinking { frame: usize },
+    Thinking { frame: usize, cancel_hint: bool },
 }
 
-/// Tek satır durum: düşünüyorsa spinner, her durumda token varsa gauge.
+/// Tek satır durum: düşünüyorsa spinner (+ iptal ipucu), her durumda token varsa gauge.
 pub fn render_status(s: &Status, tokens: Option<u64>, window: u64) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
-    if let Status::Thinking { frame } = s {
+    if let Status::Thinking { frame, cancel_hint } = s {
+        let hint = if *cancel_hint { " (iptal: tekrar Ctrl-C)" } else { "" };
         spans.push(Span::styled(
-            format!("{} Usta düşünüyor… ", FRAMES[frame % FRAMES.len()]),
+            format!("{} Usta düşünüyor…{hint} ", FRAMES[frame % FRAMES.len()]),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -47,8 +48,14 @@ mod tests {
 
     #[test]
     fn thinking_shows_spinner_frame() {
-        let l = render_status(&Status::Thinking { frame: 0 }, None, 1_000_000);
+        let l = render_status(&Status::Thinking { frame: 0, cancel_hint: false }, None, 1_000_000);
         assert!(text(&l).contains("düşünüyor"));
+    }
+
+    #[test]
+    fn thinking_with_cancel_hint_shows_hint() {
+        let l = render_status(&Status::Thinking { frame: 0, cancel_hint: true }, None, 1_000_000);
+        assert!(text(&l).contains("iptal"));
     }
 
     #[test]

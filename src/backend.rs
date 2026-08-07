@@ -237,6 +237,8 @@ async fn run_claude_cli(
     if let Some(id) = resume {
         cmd.arg("--resume").arg(id);
     }
+    // Future iptal edilirse (çift Ctrl-C) çocuk süreç öksüz kalmasın.
+    cmd.kill_on_drop(true);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
