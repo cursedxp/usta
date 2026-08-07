@@ -501,7 +501,8 @@ async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Resu
         return Ok(slugify_topic(raw));
     }
     // Cümle → model ne istediğini çıkarıp slug seçsin.
-    let slug = derive_slug(backend, raw).await;
+    // TODO(Task 5): gerçek yerel konu listesi bağlanacak — şimdilik boş.
+    let slug = derive_slug(backend, raw, &[]).await;
     ui::notice(&format!("konu: {slug} — detayı sohbette anlatırsın"));
     Ok(slug)
 }
@@ -513,6 +514,20 @@ pub(crate) const SLUG_SYSTEM: &str = "Kullanıcının öğrenmek/yapmak istediğ
     EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
     SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
     Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
+
+/// Slug sistem promptu — kayıtlı konular varsa devam-farkındalığı eklenir
+/// (spec K2): model devam niyetini mevcut slug'a çevirir, akış Resume sayar.
+pub(crate) fn slug_system(known: &[String]) -> String {
+    if known.is_empty() {
+        return SLUG_SYSTEM.to_string();
+    }
+    format!(
+        "{SLUG_SYSTEM}\n\nMevcut konular: {list}. Kullanıcının yazdığı bu konulardan \
+         birine DEVAM ETME isteğiyse (aynı işin sürdürülmesi, 'kaldığımız yer', önceki \
+         çalışmaya atıf) SADECE o konunun slug'ını AYNEN döndür. Yeni bir konuysa yeni slug üret.",
+        list = known.join(", ")
+    )
+}
 
 /// Model slug cevabını nihai slug'a çevir — tireleri boşluğa çevirip `slugify_topic`
 /// ile garantile; "genel"e düşerse ham girdiden yerel slug türet. Saf.
@@ -572,9 +587,9 @@ pub(crate) fn interpret_topic_input(raw: &str, local: &[String]) -> Option<Topic
 /// Cümleden konu slug'ını modele çıkart (plain yol). Hata → yerel slug.
 /// Çağrı sonrası CLI oturumu KOŞULSUZ sıfırlanır — slug mini-oturumu
 /// öğrenme oturumuna resume edilip bağlamı kirletmesin (spec B1).
-async fn derive_slug(backend: &mut Backend, raw: &str) -> String {
+async fn derive_slug(backend: &mut Backend, raw: &str, known: &[String]) -> String {
     let history = [Message::user(raw)];
-    let out = match ask_usta(backend, SLUG_SYSTEM, &history).await {
+    let out = match ask_usta(backend, &slug_system(known), &history).await {
         Ok(reply) => finalize_slug(raw, &reply.text),
         Err(_) => slugify_topic(raw),
     };
@@ -1074,6 +1089,20 @@ mod tests {
     fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
         // Model "genel" derse ham girdiden yerel slug türet.
         assert_eq!(finalize_slug("temel linux güvenliği", "genel"), "temel-linux-guvenligi");
+    }
+
+    #[test]
+    fn slug_system_injects_known_topics() {
+        let s = slug_system(&["linux-guvenlik".to_string(), "rust".to_string()]);
+        assert!(s.contains("linux-guvenlik, rust"));
+        assert!(s.contains("DEVAM"));
+    }
+
+    #[test]
+    fn slug_system_without_topics_is_base_only() {
+        let s = slug_system(&[]);
+        assert!(s.contains("slug"));
+        assert!(!s.contains("Mevcut konular"));
     }
 
     #[test]

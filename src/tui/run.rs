@@ -253,12 +253,13 @@ pub async fn run(
             if raw.split_whitespace().count() <= 2 {
                 crate::slugify_topic(&raw)
             } else {
+                // TODO(Task 5): gerçek yerel konu listesi bağlanacak — şimdilik boş.
                 let slug = match ask_live(
                     &mut tui,
                     &mut editor,
                     &mut events,
                     backend,
-                    crate::SLUG_SYSTEM,
+                    &crate::slug_system(&[]),
                     &[Message::user(raw.as_str())],
                     None,
                 )
