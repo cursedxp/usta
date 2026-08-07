@@ -526,12 +526,16 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
 }
 
 /// Cümleden konu slug'ını modele çıkart (plain yol). Hata → yerel slug.
+/// Çağrı sonrası CLI oturumu KOŞULSUZ sıfırlanır — slug mini-oturumu
+/// öğrenme oturumuna resume edilip bağlamı kirletmesin (spec B1).
 async fn derive_slug(backend: &mut Backend, raw: &str) -> String {
     let history = [Message::user(raw)];
-    match ask_usta(backend, SLUG_SYSTEM, &history).await {
+    let out = match ask_usta(backend, SLUG_SYSTEM, &history).await {
         Ok(reply) => finalize_slug(raw, &reply.text),
         Err(_) => slugify_topic(raw),
-    }
+    };
+    backend.reset_session();
+    out
 }
 
 /// Türkçe harfi ascii'ye indir + küçük harfe çevir; diğerlerini küçült.

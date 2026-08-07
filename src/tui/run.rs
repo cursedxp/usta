@@ -222,7 +222,7 @@ pub async fn run(
             if raw.split_whitespace().count() <= 2 {
                 crate::slugify_topic(&raw)
             } else {
-                match ask_live(
+                let slug = match ask_live(
                     &mut tui,
                     &mut editor,
                     &mut events,
@@ -235,7 +235,10 @@ pub async fn run(
                 {
                     Ok(reply) => crate::finalize_slug(&raw, &reply.text),
                     Err(_) => crate::slugify_topic(&raw),
-                }
+                };
+                // Slug mini-oturumu öğrenme oturumuna taşınmasın (spec B1).
+                backend.reset_session();
+                slug
             }
         }
     };

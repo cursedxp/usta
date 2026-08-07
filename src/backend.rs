@@ -283,6 +283,16 @@ mod tests {
     }
 
     #[test]
+    fn reset_session_clears_cli_session_id() {
+        // reset_session() session_id'yi None'a çekmeli — slug mini-oturumu
+        // sonrası öğrenme oturumu bunu resume ETMESİN (spec B1).
+        let mut b = Backend::Cli { model: "opus".into(), session_id: Some("sid-123".into()) };
+        b.reset_session();
+        let Backend::Cli { session_id, .. } = &b else { panic!("Cli bekleniyordu") };
+        assert!(session_id.is_none());
+    }
+
+    #[test]
     fn transcript_labels_roles_and_orders() {
         let history = vec![
             Message::user("selam"),
