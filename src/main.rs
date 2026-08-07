@@ -401,55 +401,76 @@ fn resolve_topic(topic_arg: Option<String>) -> Result<String> {
     let mut rl = DefaultEditor::new()?;
     let mut last = String::new();
     for attempt in 0..3 {
-        match rl.readline("Tek kelimeyle konu (ör. rust, javascript): ") {
+        match rl.readline("Konu (1-3 kelime, ör. rust, linux güvenliği): ") {
             Ok(line) => {
                 let t = line.trim().to_string();
                 if t.is_empty() {
                     return Ok("genel".to_string());
                 }
-                if let Some(slug) = single_token(&t) {
+                if let Some(slug) = short_topic(&t) {
                     return Ok(slug);
                 }
                 last = t;
                 if attempt < 2 {
-                    println!("Konu tek kelime olmalı — dosyalama anahtarı bu (ör. rust).");
+                    println!("Konu kısa olmalı — 1-3 kelimelik dosyalama anahtarı (ör. rust, linux güvenliği). Detayı sohbette anlatırsın.");
                 }
             }
             // Ctrl-D / Ctrl-C promptta → engellemeden "genel"e düş.
             Err(_) => return Ok("genel".to_string()),
         }
     }
-    // Üç denemede tek kelime gelmedi — ilk kelimeyi al, açıkça bildir.
+    // Üç denemede kısalmadı — ilk 3 kelimeden slug üret, açıkça bildir.
     let slug = slugify_topic(&last);
-    ui::notice(&format!("ilk kelime konu alındı: {slug}"));
+    ui::notice(&format!("konu kısaltıldı: {slug}"));
     Ok(slug)
 }
 
-/// Girdi tek kelimeyse konu slug'ını döndür; cümleyse `None` — konu bir
-/// dosyalama anahtarıdır, cümleden sessizce ilk kelimeyi kapmak sürprizdir.
-pub fn single_token(input: &str) -> Option<String> {
-    let mut words = input.split_whitespace();
-    let first = words.next()?;
-    match words.next() {
-        Some(_) => None,
-        None => Some(slugify_topic(first)),
+/// Girdi kısa bir öbekse (≤3 kelime) konu slug'ını döndür; uzun cümleyse
+/// `None` — konu bir dosyalama anahtarıdır, uzun cümleden slug üretmek çirkin.
+/// "temel Linux güvenliği" kabul edilir → `temel-linux-guvenligi`.
+pub fn short_topic(input: &str) -> Option<String> {
+    let count = input.split_whitespace().count();
+    if count == 0 || count > 3 {
+        None
+    } else {
+        Some(slugify_topic(input))
+    }
+}
+
+/// Türkçe harfi ascii'ye indir + küçük harfe çevir; diğerlerini küçült.
+fn deasciify(c: char) -> char {
+    match c {
+        'ç' | 'Ç' => 'c',
+        'ğ' | 'Ğ' => 'g',
+        'ı' | 'İ' | 'I' => 'i',
+        'ö' | 'Ö' => 'o',
+        'ş' | 'Ş' => 's',
+        'ü' | 'Ü' => 'u',
+        other => other.to_ascii_lowercase(),
     }
 }
 
 /// Serbest metni konu slug'ına çevir — saf fonksiyon, test edilebilir.
-/// Kural: küçük harfe çevir, İLK boşlukla-ayrılmış token'ı al, sadece ascii
-/// alfanümerik karakterleri tut. Sonuç boşsa `"genel"` döner.
+/// Kural: Türkçe karakterleri sadeleştir, küçük harfe çevir, en fazla İLK 3
+/// kelimeyi al, her kelimede yalnız ascii alfanümerik karakterleri tut,
+/// kelimeleri tire ile birleştir. Sonuç boşsa `"genel"`.
+/// "temel Linux güvenliği" → `temel-linux-guvenligi`.
 pub fn slugify_topic(input: &str) -> String {
-    let first_token = input.split_whitespace().next().unwrap_or("");
-    let slug: String = first_token
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
+    let words: Vec<String> = input
+        .split_whitespace()
+        .take(3)
+        .map(|w| {
+            w.chars()
+                .map(deasciify)
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
+        .filter(|w| !w.is_empty())
         .collect();
-    if slug.is_empty() {
+    if words.is_empty() {
         "genel".to_string()
     } else {
-        slug
+        words.join("-")
     }
 }
 
@@ -711,8 +732,10 @@ mod tests {
     }
 
     #[test]
-    fn slugify_takes_first_token_only() {
-        assert_eq!(slugify_topic("Rust öğreniyorum"), "rust");
+    fn slugify_hyphenates_short_phrase_and_deasciifies() {
+        assert_eq!(slugify_topic("temel Linux güvenliği"), "temel-linux-guvenligi");
+        assert_eq!(slugify_topic("todo app"), "todo-app");
+        assert_eq!(slugify_topic("Rust öğreniyorum"), "rust-ogreniyorum");
     }
 
     #[test]
@@ -721,34 +744,31 @@ mod tests {
     }
 
     #[test]
+    fn slugify_caps_at_three_words() {
+        assert_eq!(slugify_topic("a b c d e"), "a-b-c");
+    }
+
+    #[test]
     fn slugify_blank_input_falls_back_to_genel() {
         assert_eq!(slugify_topic("   "), "genel");
-    }
-
-    #[test]
-    fn slugify_multi_word_takes_first() {
-        assert_eq!(slugify_topic("todo app"), "todo");
-    }
-
-    #[test]
-    fn slugify_empty_string_falls_back_to_genel() {
         assert_eq!(slugify_topic(""), "genel");
     }
 
     #[test]
-    fn single_token_accepts_one_word() {
-        assert_eq!(single_token("Rust"), Some("rust".to_string()));
-        assert_eq!(single_token("  C++  "), Some("c".to_string()));
+    fn short_topic_accepts_up_to_three_words() {
+        assert_eq!(short_topic("Rust"), Some("rust".to_string()));
+        assert_eq!(short_topic("  C++  "), Some("c".to_string()));
+        assert_eq!(short_topic("temel Linux güvenliği"), Some("temel-linux-guvenligi".to_string()));
     }
 
     #[test]
-    fn single_token_rejects_sentence() {
-        assert_eq!(single_token("aklimda bir proje var"), None);
+    fn short_topic_rejects_long_sentence() {
+        assert_eq!(short_topic("aklimda bir proje var elimde"), None);
     }
 
     #[test]
-    fn single_token_rejects_empty() {
-        assert_eq!(single_token("   "), None);
+    fn short_topic_rejects_empty() {
+        assert_eq!(short_topic("   "), None);
     }
 
     #[test]
