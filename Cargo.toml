@@ -28,3 +28,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 coolor = "=1.0.0"
 crokey = "=1.1.1"
 crokey-proc_macros = "=1.1.1"
+# Yalnız `StreamExt::next` için (crossterm EventStream.next()). default-features
+# kapalı: `async-await` özelliği futures-macro'yu çeker (bu ortamda 0.3.33 yok),
+# `std` StreamExt için yeterli.
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }

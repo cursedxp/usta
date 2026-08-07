@@ -34,7 +34,11 @@ impl InputBox {
         Self { input: Input::default(), history: Vec::new(), cursor: None, stash: String::new() }
     }
 
+    // Editör kamu API'si — döngü satırı Action::Submit'ten alır, imleci editör
+    // kendi çizer, bu yüzden şu an çağrılmıyorlar (value() testlerde kullanılır).
+    #[allow(dead_code)]
     pub fn value(&self) -> &str { self.input.value() }
+    #[allow(dead_code)]
     pub fn visual_cursor(&self) -> usize { self.input.visual_cursor() }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {

@@ -2077,6 +2077,7 @@ dependencies = [
  "crokey-proc_macros",
  "crossterm",
  "dirs",
+ "futures-util",
  "notify",
  "ratatui",
  "reqwest",
