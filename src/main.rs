@@ -576,7 +576,8 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     }
 }
 
-/// Yeni konu onay metni — TUI notice ve plain confirm aynı dili kullanır.
+/// Yeni konu onay metni (TUI tui_confirm için). Plain yol kendi `[e/H]`
+/// rustyline formatını kullanır — sözcükler kasıtlı farklı, iki yüzey ayrı.
 pub(crate) fn new_topic_confirm_msg(slug: &str) -> String {
     format!("yeni konu: {slug} — açayım mı? [e = evet / başka tuş = geri dön]")
 }
