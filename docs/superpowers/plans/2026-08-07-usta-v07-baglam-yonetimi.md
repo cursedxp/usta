@@ -367,7 +367,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   - `main::COMPACT_THRESHOLD: f64 = 0.70`, `main::COMPACT_KEEP_LAST: usize = 4`
 - Davranış sözleşmesi: eşik aşılınca (1) ara-flush dosyaları yazar, (2) system prompt taze dosyalarla yeniden yüklenir, (3) history kırpılır, (4) CLI oturumu sıfırlanır. Kullanıcı akışı kesilmez; flush hatası kompaksiyonu İPTAL eder (veri yazılmadan history atılmaz).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/session.rs` test modülüne:
 
@@ -397,7 +397,7 @@ fn compact_noop_when_history_short() {
 Run: `cargo test compact`
 Expected: FAIL.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `src/session.rs`:
 
@@ -501,12 +501,12 @@ Bunun için `Ok(reply)` kolunda `session.push_assistant(reply.text)` yerine önc
 
 (`handle_file_change` son satırları: `let tokens = reply.context_tokens; print_reply(&reply); session.push_assistant(reply.text); Ok(tokens)`.)
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build && cargo clippy`
 Expected: yeni 2 test dahil hepsi PASS, clippy temiz.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/session.rs src/backend.rs src/main.rs

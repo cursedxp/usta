@@ -41,6 +41,19 @@ impl Session {
     pub fn history(&self) -> &[Message] {
         &self.history
     }
+
+    /// Kompaksiyon: history'yi `note` + son `keep_last` mesaja indir.
+    /// Ara-flush SONRASI çağrılır — atılan turn'lerin özü zaten progress/
+    /// curriculum dosyalarına yazılmıştır, note bunu modele söyler.
+    pub fn compact(&mut self, keep_last: usize, note: &str) {
+        if self.history.len() <= keep_last {
+            return;
+        }
+        let tail = self.history.split_off(self.history.len() - keep_last);
+        self.history.clear();
+        self.history.push(Message::user(note));
+        self.history.extend(tail);
+    }
 }
 
 #[cfg(test)]
@@ -70,5 +83,26 @@ mod tests {
         assert!(s.history().is_empty());
         assert_eq!(s.topic, "rust");
         assert_eq!(s.system, "sistem");
+    }
+
+    #[test]
+    fn compact_keeps_note_plus_last_n() {
+        let mut s = Session::new("rust", "sistem");
+        for i in 0..10 {
+            s.push_user(&format!("m{i}"));
+        }
+        s.compact(4, "[ARA KAYIT]");
+        let h = s.history();
+        assert_eq!(h.len(), 5);
+        assert_eq!(h[0].content, serde_json::Value::String("[ARA KAYIT]".into()));
+        assert_eq!(h[4].content, serde_json::Value::String("m9".into()));
+    }
+
+    #[test]
+    fn compact_noop_when_history_short() {
+        let mut s = Session::new("rust", "sistem");
+        s.push_user("tek");
+        s.compact(4, "[ARA KAYIT]");
+        assert_eq!(s.history().len(), 1);
     }
 }

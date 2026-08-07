@@ -28,6 +28,16 @@ use crate::session::Session;
 /// Opus bağlam penceresi — gösterge ve kompaksiyon eşiği bu tabana oranlanır.
 const CONTEXT_WINDOW: u64 = 200_000;
 
+/// Bu orana ulaşınca ara-kayıt + kompaksiyon tetiklenir.
+const COMPACT_THRESHOLD: f64 = 0.70;
+/// Kompaksiyon sonrası history'de bırakılacak son mesaj sayısı.
+const COMPACT_KEEP_LAST: usize = 4;
+/// Kompaksiyon sonrası history başına eklenen not — modele bağlamın
+/// sıkıştırıldığını, özün dosyalarda olduğunu söyler.
+const COMPACT_NOTE: &str = "[ARA KAYIT] Bağlam sıkıştırıldı. Önceki konuşmanın özü \
+system prompt'taki progress/curriculum/approach dosyalarına yazıldı — güncel durum \
+orada. Kaldığımız yerden devam et; kullanıcıya kompaksiyonu anlatma.";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -111,7 +121,9 @@ async fn main() -> Result<()> {
                         match ask_usta(&mut backend, &session.system, session.history()).await {
                             Ok(reply) => {
                                 print_reply(&reply);
+                                let tokens = reply.context_tokens;
                                 session.push_assistant(reply.text);
+                                maybe_compact(&mut backend, &mut session, &project_root, tokens).await;
                             }
                             Err(e) => ui::warn(&format!("hata: {e}")),
                         }
@@ -127,9 +139,10 @@ async fn main() -> Result<()> {
                 // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
                 println!(); // yarım kalan prompt satırını kirletme
                 for path in debouncer.flush() {
-                    if let Err(e) = handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path).await {
+                    match handle_file_change(&mut backend, &mut session, &mut files, &project_root, &path).await {
+                        Ok(tokens) => maybe_compact(&mut backend, &mut session, &project_root, tokens).await,
                         // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
-                        ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display()));
+                        Err(e) => ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display())),
                     }
                 }
             }
@@ -214,6 +227,39 @@ async fn flush_progress(
     }
 
     Ok(())
+}
+
+/// Eşik aşıldıysa: ara-flush → system prompt'u taze dosyalarla yeniden yükle →
+/// history'yi kırp → CLI oturumunu sıfırla. Flush başarısızsa kompaksiyon
+/// İPTAL — veri diske inmeden history atılmaz.
+async fn maybe_compact(
+    backend: &mut Backend,
+    session: &mut Session,
+    project_root: &Path,
+    tokens: Option<u64>,
+) {
+    let Some(t) = tokens else { return };
+    if (t as f64) < COMPACT_THRESHOLD * CONTEXT_WINDOW as f64 {
+        return;
+    }
+    if session.history().len() <= COMPACT_KEEP_LAST {
+        return;
+    }
+    ui::notice("bağlam doluyor — ara kayıt alınıyor…");
+    if let Err(e) = flush_progress(backend, session, project_root).await {
+        ui::warn(&format!("ara kayıt başarısız, kompaksiyon ertelendi: {e}"));
+        return;
+    }
+    match config::global_root() {
+        Ok(global) => {
+            session.system =
+                brain::load_system_prompt(&global, Some(project_root), &session.topic);
+        }
+        Err(e) => ui::warn(&format!("system prompt yenilenemedi: {e}")),
+    }
+    session.compact(COMPACT_KEEP_LAST, COMPACT_NOTE);
+    backend.reset_session();
+    ui::notice("bağlam sıkıştırıldı — kaldığın yerden devam");
 }
 
 /// Bugünün yerel tarihi — katalog satırlarının tarih alanı.
@@ -545,13 +591,13 @@ async fn handle_file_change(
     files: &mut feedback::FileMemory,
     project_root: &Path,
     path: &Path,
-) -> Result<()> {
+) -> Result<Option<u64>> {
     let contents = std::fs::read_to_string(path)?;
     let mut injected = match files.observe(path, contents) {
-        feedback::ChangePayload::Skip => return Ok(()),
+        feedback::ChangePayload::Skip => return Ok(None),
         feedback::ChangePayload::TooLarge(len) => {
             println!("(büyük dosya izleme dışı: {} — {len} bayt)", path.display());
-            return Ok(());
+            return Ok(None);
         }
         feedback::ChangePayload::FirstSight(full) => format!(
             "[Dosya kaydedildi: {}]\n{full}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver.",
@@ -569,9 +615,10 @@ async fn handle_file_change(
     }
     session.push_user(&injected);
     let reply = ask_usta(backend, &session.system, session.history()).await?;
+    let tokens = reply.context_tokens;
     print_reply(&reply);
     session.push_assistant(reply.text);
-    Ok(())
+    Ok(tokens)
 }
 
 /// Usta yanıtını sunum katmanına devret.

@@ -105,6 +105,14 @@ impl Backend {
         }
     }
 
+    /// CLI server oturumunu sıfırla — kompaksiyon sonrası sıradaki çağrı
+    /// kompakt history ile YENİ oturum açar. API'de no-op.
+    pub fn reset_session(&mut self) {
+        if let Backend::Cli { session_id, .. } = self {
+            *session_id = None;
+        }
+    }
+
     /// Seçilen backend'e göre tamamlama iste, `Reply` döner.
     /// CLI modunda web kullanımı metinden tespit edilemez → `false`.
     pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<Reply> {
