@@ -1,6 +1,6 @@
 # Usta v0.8 — Hedefli Öğrenme Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Öğrenmenin iki modunu tek sistemde birleştir: **keşif** (Rust merakı) ve **hedef** (AWS sertifikası, PMP, Goethe B1 — tarih + geçme eşiği olan somut hedefler). Hedefliyse: harita resmi çerçeveden kurulur, geriye-doğru planlama + tempo bekçiliği yapılır ("8 hafta kaldı, haritanın %30'undasın — riskli"), drill hedefin sınav formatına uyar, ölçümler loglanır.
 
@@ -256,9 +256,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ## Bitiş Doğrulaması (tüm görevler sonrası)
 
-- [ ] `cargo test` — tamamı PASS; `cargo build` + `cargo clippy` temiz
-- [ ] **Migrasyon notu rapora:** USTA.md yine değişti — gerçek kurulumda `rm ~/.config/usta/USTA.md` + bir kez `usta` gerekli (rapora açıkça yaz).
-- [ ] Sandbox duman (backend varsa):
+- [x] `cargo test` — tamamı PASS; `cargo build` + `cargo clippy` temiz
+- [x] **Migrasyon notu rapora:** USTA.md yine değişti — gerçek kurulumda `rm ~/.config/usta/USTA.md` + bir kez `usta` gerekli (rapora açıkça yaz).
+- [x] Sandbox duman (backend varsa):
   1. `usta start almanca` → tanışmada "keşif mi, hedef mi?" sorulsun; "Goethe B1, Aralık ortası" de → `/quit` → approach'ta `## Hedef` (tarih + eşik + format), curriculum'da dört modül + Hören/Sprechen'de `dış kaynak gerekli` işareti oluşsun.
   2. Yeniden `usta start almanca` → açılışta tempo satırı ("X hafta kaldı · %Y · tempo") gelsin — tarih hesabı BUGÜN bölümünden doğru olsun.
   3. Keşif regresyonu: hedefsiz konuda (`rust`) progress'te `## Hedef Durumu` bölümü YAZILMAMIŞ olsun.
