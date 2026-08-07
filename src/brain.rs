@@ -68,8 +68,12 @@ fn read_all_approaches(project_usta: Option<&PathBuf>, global: &Path, parts: &mu
 /// Global brain + (varsa) proje override/ilerlemesini birleştirip system
 /// prompt üret. `project`, `.usta/` İÇEREN proje kökü — proje dosyaları
 /// `project.join(".usta")` altında yaşar (`.usta`'nın kendisi değil).
-pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str) -> String {
+pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, today: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
+
+    // Model bugünü güvenilir bilmez — "sınava kaç hafta kaldı" gibi hesaplar
+    // için sabit referans en başta verilir (USTA.md "Hedefli Öğrenme").
+    parts.push(format!("===== BUGÜN =====\n{today}"));
 
     read_section(&global.join("USTA.md"), "USTA.md", &mut parts);
     read_section(
@@ -96,8 +100,9 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str) ->
         }
     }
 
-    if parts.is_empty() {
-        // Brain dosyaları hiç bulunamazsa çekirdek kural gömülü fallback.
+    if parts.len() == 1 {
+        // Yalnız BUGÜN bölümü varsa brain dosyaları hiç bulunamamış demektir
+        // — çekirdek kural gömülü fallback.
         return FALLBACK_SYSTEM.to_string();
     }
     parts.join("\n\n")
@@ -134,7 +139,7 @@ mod tests {
         fs::write(global.join("learner/profile.md"), "ANIL PROFILI").unwrap();
         // approaches/software.md ve proje/progress bilerek yok.
 
-        let sys = load_system_prompt(&global, None, "rust");
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys.contains("ÇEKIRDEK KURAL"));
         assert!(sys.contains("ANIL PROFILI"));
         assert!(sys.contains("USTA.md"));
@@ -146,7 +151,7 @@ mod tests {
     #[test]
     fn falls_back_when_no_files() {
         let (global, _project) = temp_pair("empty");
-        let sys = load_system_prompt(&global, None, "rust");
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys.contains("Usta"));
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }
@@ -169,7 +174,7 @@ mod tests {
         )
         .unwrap();
 
-        let sys = load_system_prompt(&global, Some(&project), "rust");
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
         assert!(sys.contains("PROJE ÖZEL SOFTWARE YAKLAŞIMI"));
         assert!(!sys.contains("GLOBAL SOFTWARE YAKLAŞIMI"));
 
@@ -185,7 +190,7 @@ mod tests {
         fs::create_dir_all(&progress_dir).unwrap();
         fs::write(progress_dir.join("rust.md"), "SEVIYE: başlangıç").unwrap();
 
-        let sys = load_system_prompt(&global, Some(&project), "rust");
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
         assert!(sys.contains("SEVIYE: başlangıç"));
         assert!(sys.contains("learner/progress/rust.md"));
 
@@ -196,7 +201,7 @@ mod tests {
     fn project_none_skips_progress_without_panicking() {
         let (global, _project) = temp_pair("noproject");
         fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
-        let sys = load_system_prompt(&global, None, "rust");
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys.contains("ÇEKIRDEK"));
         assert!(!sys.contains("progress/rust.md"));
         let _ = fs::remove_dir_all(global.parent().unwrap());
@@ -210,7 +215,7 @@ mod tests {
         fs::write(global.join("approaches/marketing.md"), "MARKETING YAKLAŞIMI").unwrap();
         fs::write(global.join("approaches/_default.md"), "META YAKLAŞIM").unwrap();
 
-        let sys = load_system_prompt(&global, None, "gtm");
+        let sys = load_system_prompt(&global, None, "gtm", "2026-08-07");
         assert!(sys.contains("YAZILIM YAKLAŞIMI"));
         assert!(sys.contains("MARKETING YAKLAŞIMI"));
         assert!(sys.contains("META YAKLAŞIM"));
@@ -226,7 +231,7 @@ mod tests {
         fs::create_dir_all(&pa).unwrap();
         fs::write(pa.join("linux-guvenlik.md"), "KONUYA ÖZEL YAKLAŞIM").unwrap();
 
-        let sys = load_system_prompt(&global, Some(&project), "linux-guvenlik");
+        let sys = load_system_prompt(&global, Some(&project), "linux-guvenlik", "2026-08-07");
         assert!(sys.contains("KONUYA ÖZEL YAKLAŞIM"));
 
         let _ = fs::remove_dir_all(global.parent().unwrap());
@@ -240,10 +245,19 @@ mod tests {
         fs::create_dir_all(&cdir).unwrap();
         fs::write(cdir.join("rust.md"), "HARITA: ownership görüldü").unwrap();
 
-        let sys = load_system_prompt(&global, Some(&project), "rust");
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
         assert!(sys.contains("HARITA: ownership görüldü"));
         assert!(sys.contains("learner/curriculum/rust.md"));
 
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn system_prompt_starts_with_today_section() {
+        let (global, _project) = temp_pair("today");
+        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(sys.starts_with("===== BUGÜN =====\n2026-08-07"));
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }
 }

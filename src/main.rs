@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
     // model — bkz. brain.rs).
     let global = config::global_root()?;
-    let system = brain::load_system_prompt(&global, Some(&project_root), &topic);
+    let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
 
     let mut session = Session::new(topic.clone(), system);
 
@@ -251,7 +251,7 @@ async fn maybe_compact(
     match config::global_root() {
         Ok(global) => {
             session.system =
-                brain::load_system_prompt(&global, Some(project_root), &session.topic);
+                brain::load_system_prompt(&global, Some(project_root), &session.topic, &today());
         }
         Err(e) => ui::warn(&format!("system prompt yenilenemedi: {e}")),
     }

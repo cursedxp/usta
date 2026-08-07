@@ -42,7 +42,7 @@
 - Consumes: `main::today()` (v0.4'te mevcut).
 - v0.6 brain testleri 4. argümanla (`"2026-08-07"` gibi sabit) UYARLANIR.
 
-- [ ] **Step 1: Failing testi yaz**
+- [x] **Step 1: Failing testi yaz**
 
 `src/brain.rs` test modülüne ekle (mevcut tüm `load_system_prompt(...)` çağrılarına 4. argüman olarak `"2026-08-07"` ekle):
 
@@ -60,7 +60,7 @@ fn system_prompt_starts_with_today_section() {
 Run: `cargo test brain`
 Expected: FAIL (derleme — 4. parametre yok).
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `load_system_prompt` imzasına `today: &str` ekle; gövdede `let mut parts ...` satırından hemen sonra:
 
@@ -77,12 +77,12 @@ NOT: `parts` artık asla boş olamaz — fonksiyon sonundaki `if parts.is_empty(
 1. Oturum açılışı: `brain::load_system_prompt(&global, Some(&project_root), &topic, &today())`
 2. `maybe_compact` içindeki yeniden yükleme (v0.7): `brain::load_system_prompt(&global, Some(project_root), &session.topic, &today())`
 
-- [ ] **Step 3: Test + build**
+- [x] **Step 3: Test + build**
 
 Run: `cargo test && cargo build && cargo clippy`
 Expected: yeni test dahil hepsi PASS (fallback testi dahil).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/brain.rs src/main.rs
