@@ -26,6 +26,8 @@ Domain-agnostik — Rust, JavaScript, marketing, ne öğreniyorsan. İlk kullan�
 | ⚡ **Gerçek proaktiflik** | Dosyayı kaydettiğin an feedback gelir — Enter'a basmana gerek yok (debounce + `tokio::select!`). İlk görüşte tam içerik, sonra unified diff. |
 | 🎓 **Pedagoji katmanı** | Açılış drilli (geri çağırma), anlat-modu (Feynman), ipucu merdiveni (fading), tahmin protokolü (`cargo check` sonucunu söylemez — önce tahmin ettirir). |
 | 🔎 **Araştırma** | Bilmediğini web'de arar (WebSearch) — uydurma yok. |
+| 🌍 **Her konu** | Rust'a özgü değil. Yeni konuda (Linux güvenliği, GTM, ne olursa) Usta yaklaşımı **tanışmayla türetir**, web-araştırmalı **müfredat haritası** çıkarır (`görülmedi → görüldü → oturdu → derinleşildi`). Kapsam bekçiliği: havada hiçbir şey kalmaz. |
+| 🎨 **Terminal arayüzü** | `●` Usta / `■` sen — kim konuşuyor tek bakışta belli; yanıtlar gerçek markdown render, beklerken spinner. Pipe/`NO_COLOR`'da düz çıktı (script'ler bozulmaz). |
 | 🗂️ **Yönetim** | `usta topics` nerede ne öğrendiğini gösterir; `reset` konuyu veya her şeyi sıfırlar. |
 
 ## Kurulum
@@ -58,12 +60,13 @@ usta init               # sadece iskeleti kur (opsiyonel — start zaten kurar)
 Bir öğrenme oturumu:
 
 ```
-usta start rust
-  → (varsa) açılış drilli: geçen seferden 2-3 hatırlama sorusu
-  → kod yazarsın, kaydedersin
-  → Usta proaktif Socratic feedback verir (kodu yazmadan)
+usta start gtm            # rust olabilir, gtm olabilir, ne olursa
+  → yeni konu (progress yok) → TANIŞMA: Usta yaklaşımı + müfredat haritasını türetir
+  → (varsa) açılış drilli: haritadan 2-3 hatırlama sorusu + "neredeyiz, sırada ne var"
+  → çalışırsın (kod / plan.md / ne olursa), kaydedersin
+  → Usta proaktif Socratic feedback verir (kodu/işi yapmadan)
   → cargo check hatası varsa: söylemez, "nerede patlar?" diye tahmin ettirir
-  → /quit → oturum özeti progress'e yazılır, katalog güncellenir
+  → /quit → progress + approach + curriculum güncellenir, katalog yenilenir
 ```
 
 ## Nasıl çalışır — "ince kabuk, kalın beyin"
@@ -78,14 +81,15 @@ Rust yalnızca kabuk: CLI, LLM client, dosya izleyici (`notify`), `cargo check` 
   approaches/            #   software.md, _default.md — domaine göre yaklaşım
 
 <proje>/.usta/           # PROJE (her projede ayrı)
-  learner/progress/<konu>.md   #   seviye, gap'ler, geri çağırma soruları, hata günlüğü
-  approaches/            #   opsiyonel proje-özel override
+  learner/progress/<konu>.md      #   seviye, gap'ler, geri çağırma soruları, hata günlüğü
+  learner/curriculum/<konu>.md    #   web-araştırmalı müfredat haritası (durum etiketli)
+  approaches/<konu>.md            #   Usta'nın türettiği konuya özel yaklaşım (canlı belge)
 ```
 
-Davranışı değiştirmek = markdown'ı düzenle, Rust'a dokunma. (Global `USTA.md` güncellemesi için: `rm ~/.config/usta/USTA.md` + bir kez `usta`.)
+Davranışı değiştirmek = markdown'ı düzenle, Rust'a dokunma. (Global davranış dosyaları güncellenince — scaffold var olanı ezmez — yenilemek için: `rm ~/.config/usta/USTA.md ~/.config/usta/approaches/_default.md` + bir kez `usta`; ya da `usta reset --factory`.)
 
 ## Durum
 
-v0.4 · Rust 2021 · 72 birim test. Tasarım kararları: [`SPEC.md`](SPEC.md). Çekirdek davranış: [`USTA.md`](USTA.md).
+v0.6 · Rust 2021 · 85 birim test. Tasarım kararları: [`SPEC.md`](SPEC.md). Çekirdek davranış: [`USTA.md`](USTA.md).
 
-Yol haritası fikirleri: streaming, çoklu terminal sağlamlaştırma, gaps→curriculum otomasyonu, kendi-sağlık-denetimi.
+Yol haritası fikirleri: streaming, çoklu terminal sağlamlaştırma, kendi-sağlık-denetimi (link/tutarlılık), tech-notes cache.
