@@ -120,7 +120,8 @@ async fn ask_live(
 
 /// Kimlik welcome'ı basıp konuyu girdi kutusundan okur. `None` = kullanıcı
 /// konu vermeden çıktı (Ctrl-C/D). Slug çözümü çağırana bırakılır. Konu
-/// girişinde watcher olayları YOK sayılır (henüz oturum yok) — sadece tuş.
+/// girişinde watcher olayları burada TÜKETİLMEZ — sadece tuş dinlenir; kanalda
+/// biriken olaylar oturum kurulduktan sonra sessizce sindirilir (bkz. `run`).
 #[allow(clippy::too_many_arguments)]
 async fn ask_topic(
     tui: &mut Tui,
@@ -266,6 +267,15 @@ pub async fn run(
     let mut files = feedback::FileMemory::new();
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
+
+    // Konu girişi sırasında biriken watcher olaylarını sessizce sindir — kullanıcı
+    // konuyu yazarken kaydedilen dosyalar oturum başlar başlamaz sürpriz feedback
+    // üretmesin (FileMemory senkronlanır, sonraki gerçek değişiklik ona göre diff'lenir).
+    while let Ok(path) = watch_rx.try_recv() {
+        if let Ok(c) = std::fs::read_to_string(&path) {
+            let _ = files.observe(&path, c);
+        }
+    }
 
     // Welcome: konu baştan belliyse (arg verilmişti) tam-mod öğrenme durumu
     // basılır. Aksi halde kimlik welcome ask_topic içinde zaten basıldı — tek welcome.
