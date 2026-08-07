@@ -113,6 +113,21 @@ impl Backend {
         }
     }
 
+    /// Modelin bağlam penceresi (token). Pencere modele göre değişir: Haiku
+    /// 200k, diğerleri (opus / sonnet / fable) 1M. Gösterge ve kompaksiyon
+    /// eşiği bu tabana oranlanır — sabit değil.
+    pub fn context_window(&self) -> u64 {
+        let model = match self {
+            Backend::Cli { model, .. } => model.as_str(),
+            Backend::Api { model, .. } => model.as_str(),
+        };
+        if model.contains("haiku") {
+            200_000
+        } else {
+            1_000_000
+        }
+    }
+
     /// Seçilen backend'e göre tamamlama iste, `Reply` döner.
     /// CLI modunda web kullanımı metinden tespit edilemez → `false`.
     pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<Reply> {
@@ -258,6 +273,14 @@ async fn run_claude_cli(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_window_is_1m_for_opus_200k_for_haiku() {
+        let opus = Backend::Cli { model: "opus".into(), session_id: None };
+        assert_eq!(opus.context_window(), 1_000_000);
+        let haiku = Backend::Cli { model: "claude-haiku-4-5".into(), session_id: None };
+        assert_eq!(haiku.context_window(), 200_000);
+    }
 
     #[test]
     fn transcript_labels_roles_and_orders() {

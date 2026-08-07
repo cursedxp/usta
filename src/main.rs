@@ -25,8 +25,6 @@ use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::session::Session;
 
-/// Opus bağlam penceresi — gösterge ve kompaksiyon eşiği bu tabana oranlanır.
-const CONTEXT_WINDOW: u64 = 200_000;
 
 /// Bu orana ulaşınca ara-kayıt + kompaksiyon tetiklenir.
 const COMPACT_THRESHOLD: f64 = 0.70;
@@ -88,7 +86,7 @@ async fn main() -> Result<()> {
         session.push_user(&progress::opening_prompt(&topic));
         match ask_usta(&mut backend, &session.system, session.history()).await {
             Ok(reply) => {
-                print_reply(&reply);
+                print_reply(&reply, backend.context_window());
                 session.push_assistant(reply.text);
             }
             // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
@@ -99,7 +97,7 @@ async fn main() -> Result<()> {
         session.push_user(&progress::onboarding_prompt(&topic));
         match ask_usta(&mut backend, &session.system, session.history()).await {
             Ok(reply) => {
-                print_reply(&reply);
+                print_reply(&reply, backend.context_window());
                 session.push_assistant(reply.text);
             }
             Err(e) => ui::warn(&format!("tanışma turu atlandı: {e}")),
@@ -120,7 +118,7 @@ async fn main() -> Result<()> {
                         session.push_user(&line);
                         match ask_usta(&mut backend, &session.system, session.history()).await {
                             Ok(reply) => {
-                                print_reply(&reply);
+                                print_reply(&reply, backend.context_window());
                                 let tokens = reply.context_tokens;
                                 session.push_assistant(reply.text);
                                 maybe_compact(&mut backend, &mut session, &project_root, tokens).await;
@@ -239,7 +237,7 @@ async fn maybe_compact(
     tokens: Option<u64>,
 ) {
     let Some(t) = tokens else { return };
-    if (t as f64) < COMPACT_THRESHOLD * CONTEXT_WINDOW as f64 {
+    if (t as f64) < COMPACT_THRESHOLD * backend.context_window() as f64 {
         return;
     }
     if session.history().len() <= COMPACT_KEEP_LAST {
@@ -616,15 +614,15 @@ async fn handle_file_change(
     session.push_user(&injected);
     let reply = ask_usta(backend, &session.system, session.history()).await?;
     let tokens = reply.context_tokens;
-    print_reply(&reply);
+    print_reply(&reply, backend.context_window());
     session.push_assistant(reply.text);
     Ok(tokens)
 }
 
 /// Usta yanıtını sunum katmanına devret.
-fn print_reply(reply: &backend::Reply) {
+fn print_reply(reply: &backend::Reply, window: u64) {
     ui::print_usta_reply(&reply.text, reply.web);
-    ui::context_gauge(reply.context_tokens, CONTEXT_WINDOW);
+    ui::context_gauge(reply.context_tokens, window);
 }
 
 #[cfg(test)]

@@ -84,7 +84,7 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 
 ## 4.9 Bağlam Yönetimi (v0.7)
 
-- **Gösterge:** her yanıt altında `▓▓░░░░░░ bağlam 41k/200k` (son çağrının input+cache toplamı / 200k pencere); ≥%70 sarı. Düz modda ve token bilgisi yoksa çizilmez.
+- **Gösterge:** her yanıt altında `▓▓░░░░░░ bağlam 41k/1000k` (son çağrının input+cache toplamı / **modele göre pencere**); ≥%70 sarı. Düz modda ve token bilgisi yoksa çizilmez.
 - **Otomatik ara-kayıt + kompaksiyon:** %70 eşiğinde flush çalışır (progress/approach/curriculum diske iner), system prompt taze dosyalarla yeniden yüklenir, history `[ARA KAYIT]` notu + son 4 turn'e kırpılır, CLI `session_id` sıfırlanır. Kullanıcı akışı kesilmez. Flush başarısızsa kompaksiyon iptal — veri yazılmadan history atılmaz. Kayıp minimal: önemli olan zaten dosyalarda (progress = damıtılmış oturum).
 - **Görsel:** banner model etiketi taşır (`opus · cli`), kullanıcı promptu `❯`, Usta bloğu 2 boşluk padding + genişliğe sarma.
 
@@ -174,7 +174,7 @@ usta/
 - **Sunum katmanı (v0.5):** roller ikonla ayrılır — `●` (turuncu 208) Usta bloğu, `■` kullanıcı promptu, soluk `·`/`!` sistem bildirimi. Usta yanıtları termimad ile markdown render edilir; LLM beklerken spinner. TTY değilse veya `NO_COLOR` set'liyse düz çıktı (pipe/test uyumu). Davranış katmanına dokunulmadı.
 - **Konu girişi (v0.5):** TTY promptunda tek kelime zorunlu — cümle girilirse yeniden sorulur (3 deneme, sonra ilk kelime açık bildirimle alınır). `usta start <konu>` ve pipe davranışı değişmedi.
 - **Her-konu (v0.6):** yaklaşım dosyaları elle değil ilk-oturum tanışmasıyla üretilir; curriculum proje-lokal (`.usta/learner/curriculum/`) yaşar — §7'deki global `learner/curriculum/` yerine (izolasyon: harita da konu+proje bağlamına ait). Kapanış bölücü formatı `===DOSYA: <ad>===`.
-- **Bağlam (v0.7):** pencere sabiti 200k (Opus); kompaksiyon eşiği %70, korunan kuyruk 4 mesaj; ölçüm = son çağrının `usage` toplamı (input + cache_read + cache_creation) — ayrı sayaç tutulmaz, kaynak API/CLI raporudur.
+- **Bağlam (v0.7):** pencere **modele göre türetilir** (`backend.context_window()`: opus/sonnet/fable 1M, haiku 200k) — sabit değil; kompaksiyon eşiği %70, korunan kuyruk 4 mesaj; ölçüm = son çağrının `usage` toplamı (input + cache_read + cache_creation) — ayrı sayaç tutulmaz, kaynak API/CLI raporudur.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
