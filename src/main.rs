@@ -557,6 +557,11 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     }
 }
 
+/// Yeni konu onay metni — TUI notice ve plain confirm aynı dili kullanır.
+pub(crate) fn new_topic_confirm_msg(slug: &str) -> String {
+    format!("yeni konu: {slug} — açayım mı? [e = evet / başka tuş = geri dön]")
+}
+
 /// Konu girişi yorumu: devam mı, yeni konu mu? (spec K1)
 #[derive(Debug)]
 pub(crate) enum TopicChoice {
@@ -1162,5 +1167,12 @@ mod tests {
     fn interpret_other_input_is_new() {
         let local = vec!["son-konu".to_string()];
         assert!(matches!(interpret_topic_input("docker compose", &local), Some(TopicChoice::New(r)) if r == "docker compose"));
+    }
+
+    #[test]
+    fn new_topic_confirm_msg_names_slug_and_keys() {
+        let m = new_topic_confirm_msg("rust-cli");
+        assert!(m.contains("rust-cli"));
+        assert!(m.contains("[e"));
     }
 }

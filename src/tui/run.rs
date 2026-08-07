@@ -160,13 +160,18 @@ async fn ask_topic(
     dir: &str,
     local: &[String],
     other: &[String],
+    show_welcome: bool,
 ) -> Result<Option<String>> {
     // Konu listeleri (proje-yerel + diğer projeler) çağıran tarafından hesaplanır
     // ve buraya geçirilir — burada global katalog okunmaz (bkz. `run`).
-    let name = profile.and_then(welcome::extract_name);
-    let width = current_width(tui);
-    page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, width))?;
-    page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
+    // `show_welcome=false`: yeni-konu onayı reddedilip giriş sorusuna geri
+    // dönüldüğünde kimlik welcome + ilk notice TEKRAR basılmaz.
+    if show_welcome {
+        let name = profile.and_then(welcome::extract_name);
+        let width = current_width(tui);
+        page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, width))?;
+        page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
+    }
 
     loop {
         draw(tui, editor, &Status::Idle, None, 0)?;
@@ -257,68 +262,85 @@ pub async fn run(
                 o.truncate(4);
                 o
             };
-            let raw = match ask_topic(
-                &mut tui,
-                &mut editor,
-                &mut events,
-                read(global.join("learner/profile.md")).as_deref(),
-                &backend.label(),
-                &short_dir(project_root),
-                &local,
-                &other,
-            )
-            .await?
-            {
-                Some(line) => line,
-                None => return Ok(None), // konu vermeden çıktı
-            };
-            match crate::interpret_topic_input(&raw, &local) {
-                // GÜVENLİ FALLBACK (spec/brief zorunlu): interpret yalnız
-                // (boş girdi + local boş) durumunda None döner; ask_topic boş-Enter
-                // sentinelini yalnız local doluyken üretir, yani buraya normalde
-                // düşülmez. Yine de `unreachable!` panik riski taşır — girdiyi
-                // "genel"e düşürüp güvenli kalırız (yeni konu gibi, notice ile).
-                None => {
-                    page_notice(&mut tui, "konu: genel — detayı sohbette anlatırsın")?;
-                    "genel".to_string()
-                }
-                Some(crate::TopicChoice::Resume(t)) => {
-                    page_notice(&mut tui, &format!("devam: {t}"))?;
-                    resumed = true; // aşağıda tam-mod welcome için
-                    t
-                }
-                Some(crate::TopicChoice::New(raw)) => {
-                    // Yeni-konu akışı: ≤2 kelime yerel slug; cümle → LLM slug (spinner).
-                    let slug = if raw.split_whitespace().count() <= 2 {
-                        crate::slugify_topic(&raw)
-                    } else {
-                        let slug = match ask_live(
-                            &mut tui,
-                            &mut editor,
-                            &mut events,
-                            backend,
-                            &crate::slug_system(&local),
-                            &[Message::user(raw.as_str())],
-                            None,
-                        )
-                        .await
-                        {
-                            Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
-                            Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
-                        };
-                        // Slug mini-oturumu öğrenme oturumuna taşınmasın (spec B1).
-                        backend.reset_session();
-                        slug
-                    };
-                    // LLM/kısa slug yerel bir konuya denk düştüyse bu da DEVAM sayılır
-                    // (spec K2): notice devam olur, tam-mod welcome basılır.
-                    if local.contains(&slug) {
-                        page_notice(&mut tui, &format!("devam: {slug}"))?;
-                        resumed = true;
-                    } else {
-                        page_notice(&mut tui, &format!("konu: {slug} — detayı sohbette anlatırsın"))?;
+            // Kimlik welcome yalnız ilk turda basılır — yeni-konu onayı reddedilip
+            // giriş sorusuna geri dönüldüğünde tekrar basılmaz.
+            let mut welcome_shown = false;
+            loop {
+                let raw = match ask_topic(
+                    &mut tui,
+                    &mut editor,
+                    &mut events,
+                    read(global.join("learner/profile.md")).as_deref(),
+                    &backend.label(),
+                    &short_dir(project_root),
+                    &local,
+                    &other,
+                    !welcome_shown,
+                )
+                .await?
+                {
+                    Some(line) => line,
+                    None => return Ok(None), // konu vermeden çıktı
+                };
+                welcome_shown = true;
+                match crate::interpret_topic_input(&raw, &local) {
+                    // GÜVENLİ FALLBACK: interpret yalnız (boş girdi + local boş)
+                    // durumunda None döner; ask_topic boş-Enter sentinelini yalnız
+                    // local doluyken üretir, yani buraya normalde düşülmez. Döngü
+                    // içinde doğal karşılığı "yut, tekrar sor" — güvenli düşüş budur.
+                    None => {}
+                    Some(crate::TopicChoice::Resume(t)) => {
+                        page_notice(&mut tui, &format!("devam: {t}"))?;
+                        resumed = true; // aşağıda tam-mod welcome için
+                        break t;
                     }
-                    slug
+                    Some(crate::TopicChoice::New(raw)) => {
+                        // Yeni-konu akışı: ≤2 kelime yerel slug; cümle → LLM slug (spinner).
+                        let slug = if raw.split_whitespace().count() <= 2 {
+                            crate::slugify_topic(&raw)
+                        } else {
+                            let slug = match ask_live(
+                                &mut tui,
+                                &mut editor,
+                                &mut events,
+                                backend,
+                                &crate::slug_system(&local),
+                                &[Message::user(raw.as_str())],
+                                None,
+                            )
+                            .await
+                            {
+                                Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
+                                Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
+                            };
+                            // Slug mini-oturumu öğrenme oturumuna taşınmasın (spec B1).
+                            backend.reset_session();
+                            slug
+                        };
+                        // LLM/kısa slug yerel bir konuya denk düştüyse bu da DEVAM sayılır
+                        // (spec K2): notice devam olur, tam-mod welcome basılır, onay YOK.
+                        if local.contains(&slug) {
+                            page_notice(&mut tui, &format!("devam: {slug}"))?;
+                            resumed = true;
+                            break slug;
+                        }
+                        // Yeni konu onayı: yalnız devam edilebilir konu varken sorulur
+                        // (spec §2) — ilk-çalıştırma/boş-yerel'de onaysız açılır.
+                        if local.is_empty()
+                            || tui_confirm(
+                                &mut tui,
+                                &editor,
+                                &mut events,
+                                &crate::new_topic_confirm_msg(&slug),
+                            )
+                            .await?
+                        {
+                            page_notice(&mut tui, &format!("konu: {slug} — detayı sohbette anlatırsın"))?;
+                            break slug;
+                        }
+                        // Ret → giriş sorusuna geri dön (welcome tekrar basılmaz).
+                        page_notice(&mut tui, "vazgeçildi — Enter = devam, ya da başka konu yaz")?;
+                    }
                 }
             }
         }
