@@ -183,6 +183,11 @@ pub async fn run(
     }
 
     loop {
+        // Tamponu her iterasyon başında boşalt — transcript yazım hatası gibi
+        // maybe_compact dışında biriken bildirimler de asla kaybolmasın.
+        for m in ui::drain_tui_notices() {
+            page_notice(&mut tui, &m)?;
+        }
         draw(&mut tui, &editor, &Status::Idle, last_tokens, window)?;
         tokio::select! {
             Some(Ok(ev)) = events.next() => {
@@ -206,11 +211,6 @@ pub async fn run(
                                 recorder.assistant(&reply.text);
                                 session.push_assistant(reply.text);
                                 crate::maybe_compact(backend, session, project_root, last_tokens).await;
-                                // Kompaksiyon sırasında ui::notice/warn tamponlandıysa
-                                // scrollback'e temiz şekilde bas.
-                                for m in ui::drain_tui_notices() {
-                                    page_notice(&mut tui, &m)?;
-                                }
                             }
                             Err(e) => page_notice(&mut tui, &format!("hata: {e}"))?,
                         }
@@ -242,9 +242,6 @@ pub async fn run(
                                 if let Some(t) = tokens { last_tokens = Some(t); }
                                 page_reply(&mut tui, &reply.text, width)?;
                                 crate::maybe_compact(backend, session, project_root, tokens).await;
-                                for m in ui::drain_tui_notices() {
-                                    page_notice(&mut tui, &m)?;
-                                }
                             }
                             Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,
                         }
@@ -252,6 +249,11 @@ pub async fn run(
                 }
             }
         }
+    }
+    // Çıkıştan hemen önce son iterasyonun bildirimlerini boşalt — /quit veya
+    // Exit yolunda buffer'a düşen bir transcript uyarısı TUI hâlâ ayaktayken görünsün.
+    for m in ui::drain_tui_notices() {
+        page_notice(&mut tui, &m)?;
     }
     Ok(()) // Tui drop → restore
 }
