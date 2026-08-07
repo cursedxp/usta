@@ -499,26 +499,30 @@ async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Resu
     Ok(slug)
 }
 
-/// Cümleden konu slug'ını modele çıkart — o "ne öğrenmek istiyor"u anlar,
-/// en mantıklı kısa slug'ı seçer. Format yine `slugify_topic`'le garantilenir;
-/// çağrı hata verirse yerel slug'a düşülür (oturum engellenmez).
+/// Cümleden konu slug'ı çıkaran system prompt — hem plain (`derive_slug`) hem
+/// TUI konu girişi kullanır.
+pub(crate) const SLUG_SYSTEM: &str = "Kullanıcının öğrenmek/yapmak istediğini TEK kısa dosya-adı slug'ına indir. \
+    Kurallar: yalnız küçük harf, ascii (Türkçe karakter yok), kelimeler tire ile ayrılır, \
+    EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
+    SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
+    Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
+
+/// Model slug cevabını nihai slug'a çevir — tireleri boşluğa çevirip `slugify_topic`
+/// ile garantile; "genel"e düşerse ham girdiden yerel slug türet. Saf.
+pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
+    let s = slugify_topic(&model_reply.trim().replace(['-', '_'], " "));
+    if s == "genel" {
+        slugify_topic(raw)
+    } else {
+        s
+    }
+}
+
+/// Cümleden konu slug'ını modele çıkart (plain yol). Hata → yerel slug.
 async fn derive_slug(backend: &mut Backend, raw: &str) -> String {
-    let system = "Kullanıcının öğrenmek/yapmak istediğini TEK kısa dosya-adı slug'ına indir. \
-        Kurallar: yalnız küçük harf, ascii (Türkçe karakter yok), kelimeler tire ile ayrılır, \
-        EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
-        SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
-        Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
     let history = [Message::user(raw)];
-    match ask_usta(backend, system, &history).await {
-        Ok(reply) => {
-            // Tireleri boşluğa çevirip slugify — modelin verdiği tireler korunur.
-            let s = slugify_topic(&reply.text.trim().replace(['-', '_'], " "));
-            if s == "genel" {
-                slugify_topic(raw)
-            } else {
-                s
-            }
-        }
+    match ask_usta(backend, SLUG_SYSTEM, &history).await {
+        Ok(reply) => finalize_slug(raw, &reply.text),
         Err(_) => slugify_topic(raw),
     }
 }
@@ -1001,5 +1005,19 @@ mod tests {
         assert!(results2.iter().all(|(_, wrote)| !*wrote));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn finalize_slug_uses_model_reply_then_slugifies() {
+        // Model tire'li slug döndürür → tireler korunur, slugify garantiler.
+        assert_eq!(finalize_slug("ben golang öğrenmek istiyorum", "golang-web"), "golang-web");
+        // Model gürültülü döndürürse yine slug'lanır.
+        assert_eq!(finalize_slug("x", "Rust Todo"), "rust-todo");
+    }
+
+    #[test]
+    fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
+        // Model "genel" derse ham girdiden yerel slug türet.
+        assert_eq!(finalize_slug("temel linux güvenliği", "genel"), "temel-linux-guvenligi");
     }
 }
