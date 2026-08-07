@@ -26,6 +26,7 @@ use rustyline::DefaultEditor;
 use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::session::Session;
+use crate::transcript::Recorder;
 
 
 /// Bu orana ulaşınca ara-kayıt + kompaksiyon tetiklenir.
@@ -64,14 +65,9 @@ async fn main() -> Result<()> {
         ui::notice(".usta/ kuruldu");
     }
 
-    let topic = resolve_topic(&mut backend, topic_arg).await?;
-
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
-    // model — bkz. brain.rs).
+    // model — bkz. brain.rs). build_session bunu kullanır.
     let global = config::global_root()?;
-    let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
-
-    let mut session = Session::new(topic.clone(), system);
 
     // Dosya izleyici — TEK kez spawn edilir (thread başlatır), sonra çalışan
     // yola (&mut) geçirilir. Girdi thread'i + debounce durumu yola özgü:
@@ -82,59 +78,59 @@ async fn main() -> Result<()> {
         ui::warn(&format!("yarım oturum kaydı bulundu (flush edilememiş olabilir): {}", p.display()));
     }
 
-    let lock = lock_path(&project_root, &topic);
-    if lock.exists() {
-        let pid = std::fs::read_to_string(&lock).unwrap_or_default();
-        if std::io::stdin().is_terminal() {
-            let msg = format!(
-                "Bu konuda başka bir oturum açık görünüyor (pid {}). İki oturum aynı anda \
-                 kapanırsa progress birbirini EZER. Yine de devam? [e/H] ",
-                pid.trim()
-            );
-            if !confirm(&msg, &["e", "evet"])? {
-                println!("vazgeçildi — önce diğer oturumu kapat (veya kalıntıysa sil: {})", lock.display());
-                return Ok(());
-            }
-        } else {
-            ui::warn("kalıntı konu kilidi bulundu — pipe modunda devam ediliyor");
-        }
-    }
-    if let Err(e) = std::fs::write(&lock, std::process::id().to_string()) {
-        ui::warn(&format!("konu kilidi yazılamadı: {e}"));
-    }
-
-    let recorder = transcript::Recorder::new(transcript::session_path(
-        &project_root, &topic, &now_stamp(),
-    ));
-
-    // Açılış drilli için önce progress var mı bak (her iki yol da kullanır):
-    // önceki oturumlardan progress varsa Usta ilk sözü alır (testing effect).
-    let has_progress = std::fs::read_to_string(progress::progress_path(&project_root, &topic))
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-
-    // TUI yolu: etkileşimli terminal → ratatui inline viewport (alt-ekran yok,
-    // scrollback korunur). Plain yol (TTY yok / NO_COLOR) mevcut satır REPL'i —
-    // davranış birebir korunur.
-    if !ui::is_plain() {
+    // İki yol da `(Session, Recorder, PathBuf)` üretir; kapanış paylaşımlı.
+    // TUI yolu: konu girişi + slug/onay + build_session hepsi run() içinde —
+    // topic_arg ham geçer, `None` dönüşü kullanıcının konu vermeden çıkışıdır.
+    // Plain yol (TTY yok / NO_COLOR): resolve_topic + lock-çakışma + build_session
+    // + banner + run_plain_loop burada — davranış birebir korunur.
+    let (session, recorder, lock) = if !ui::is_plain() {
         // TUI aktifken notice/warn/Spinner ham ANSI basmasın diye bayrağı
         // aç — run() dönünce (hata dahil) mutlaka kapat, sonra hatayı fırlat.
         ui::set_tui_active(true);
-        let tui_result = tui::run::run(
+        let r = tui::run::run(
             &mut backend,
-            &mut session,
-            &recorder,
-            &project_root,
             &global,
-            &topic,
-            has_progress,
+            &project_root,
+            &today(),
+            topic_arg,
             MAX_FEEDBACK_BATCH,
             &mut watch_rx,
         )
         .await;
         ui::set_tui_active(false);
-        tui_result?;
+        match r? {
+            Some(artifacts) => artifacts,
+            None => {
+                // Konu verilmeden çıkıldı — oturum/kilit yok, kapanacak şey yok.
+                ui::notice("Görüşürüz — suya girmeye devam et.");
+                return Ok(());
+            }
+        }
     } else {
+        let topic = resolve_topic(&mut backend, topic_arg).await?;
+
+        // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi
+        // lock'unu yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile.)
+        let lock = lock_path(&project_root, &topic);
+        if lock.exists() {
+            let pid = std::fs::read_to_string(&lock).unwrap_or_default();
+            if std::io::stdin().is_terminal() {
+                let msg = format!(
+                    "Bu konuda başka bir oturum açık görünüyor (pid {}). İki oturum aynı anda \
+                     kapanırsa progress birbirini EZER. Yine de devam? [e/H] ",
+                    pid.trim()
+                );
+                if !confirm(&msg, &["e", "evet"])? {
+                    println!("vazgeçildi — önce diğer oturumu kapat (veya kalıntıysa sil: {})", lock.display());
+                    return Ok(());
+                }
+            } else {
+                ui::warn("kalıntı konu kilidi bulundu — pipe modunda devam ediliyor");
+            }
+        }
+
+        let (mut session, recorder, lock, has_progress) =
+            build_session(&global, &project_root, &topic, &today())?;
         ui::banner(&topic, &backend.label());
         run_plain_loop(
             &mut backend,
@@ -146,7 +142,8 @@ async fn main() -> Result<()> {
             &mut watch_rx,
         )
         .await?;
-    }
+        (session, recorder, lock)
+    };
 
     if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
         ui::warn(&format!("progress güncellenemedi: {e} — ham kayıt duruyor: {}", recorder.path().display()));
@@ -292,6 +289,33 @@ async fn ask_usta(
     result
 }
 
+/// Konu belli olduktan sonra oturum kurulumu — system prompt + Session + kendi
+/// kilidini yaz + recorder + has_progress. Lock-ÇAKIŞMASI onayı burada DEĞİL
+/// (çağıran yola göre halleder: plain stdin, TUI tek-tuş). Döner:
+/// `(session, recorder, lock_yolu, has_progress)`.
+fn build_session(
+    global: &Path,
+    project_root: &Path,
+    topic: &str,
+    today: &str,
+) -> Result<(Session, Recorder, PathBuf, bool)> {
+    let system = brain::load_system_prompt(global, Some(project_root), topic, today);
+    let session = Session::new(topic.to_string(), system);
+
+    let lock = lock_path(project_root, topic);
+    if let Err(e) = std::fs::write(&lock, std::process::id().to_string()) {
+        ui::warn(&format!("konu kilidi yazılamadı: {e}"));
+    }
+
+    let recorder = Recorder::new(transcript::session_path(project_root, topic, &now_stamp()));
+
+    let has_progress = std::fs::read_to_string(progress::progress_path(project_root, topic))
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    Ok((session, recorder, lock, has_progress))
+}
+
 /// Oturum kapanışında progress/approach/curriculum dosyalarını LLM'e üretir.
 /// Boş oturumda dokunmaz; bilinmeyen dosya adı uyarıyla atlanır (keyfi yola
 /// asla yazılmaz).
@@ -397,7 +421,7 @@ fn now_stamp() -> String {
 
 /// Konu kilidi: `.usta/.lock-<konu>` — eşzamanlı iki oturumun aynı progress'i
 /// sessizce ezmesini önler. İçerik: pid (teşhis için).
-fn lock_path(project_root: &Path, topic: &str) -> PathBuf {
+pub(crate) fn lock_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root.join(".usta").join(format!(".lock-{topic}"))
 }
 
@@ -482,26 +506,30 @@ async fn resolve_topic(backend: &mut Backend, topic_arg: Option<String>) -> Resu
     Ok(slug)
 }
 
-/// Cümleden konu slug'ını modele çıkart — o "ne öğrenmek istiyor"u anlar,
-/// en mantıklı kısa slug'ı seçer. Format yine `slugify_topic`'le garantilenir;
-/// çağrı hata verirse yerel slug'a düşülür (oturum engellenmez).
+/// Cümleden konu slug'ı çıkaran system prompt — hem plain (`derive_slug`) hem
+/// TUI konu girişi kullanır.
+pub(crate) const SLUG_SYSTEM: &str = "Kullanıcının öğrenmek/yapmak istediğini TEK kısa dosya-adı slug'ına indir. \
+    Kurallar: yalnız küçük harf, ascii (Türkçe karakter yok), kelimeler tire ile ayrılır, \
+    EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
+    SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
+    Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
+
+/// Model slug cevabını nihai slug'a çevir — tireleri boşluğa çevirip `slugify_topic`
+/// ile garantile; "genel"e düşerse ham girdiden yerel slug türet. Saf.
+pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
+    let s = slugify_topic(&model_reply.trim().replace(['-', '_'], " "));
+    if s == "genel" {
+        slugify_topic(raw)
+    } else {
+        s
+    }
+}
+
+/// Cümleden konu slug'ını modele çıkart (plain yol). Hata → yerel slug.
 async fn derive_slug(backend: &mut Backend, raw: &str) -> String {
-    let system = "Kullanıcının öğrenmek/yapmak istediğini TEK kısa dosya-adı slug'ına indir. \
-        Kurallar: yalnız küçük harf, ascii (Türkçe karakter yok), kelimeler tire ile ayrılır, \
-        EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
-        SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
-        Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
     let history = [Message::user(raw)];
-    match ask_usta(backend, system, &history).await {
-        Ok(reply) => {
-            // Tireleri boşluğa çevirip slugify — modelin verdiği tireler korunur.
-            let s = slugify_topic(&reply.text.trim().replace(['-', '_'], " "));
-            if s == "genel" {
-                slugify_topic(raw)
-            } else {
-                s
-            }
-        }
+    match ask_usta(backend, SLUG_SYSTEM, &history).await {
+        Ok(reply) => finalize_slug(raw, &reply.text),
         Err(_) => slugify_topic(raw),
     }
 }
@@ -984,5 +1012,19 @@ mod tests {
         assert!(results2.iter().all(|(_, wrote)| !*wrote));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn finalize_slug_uses_model_reply_then_slugifies() {
+        // Model tire'li slug döndürür → tireler korunur, slugify garantiler.
+        assert_eq!(finalize_slug("ben golang öğrenmek istiyorum", "golang-web"), "golang-web");
+        // Model gürültülü döndürürse yine slug'lanır.
+        assert_eq!(finalize_slug("x", "Rust Todo"), "rust-todo");
+    }
+
+    #[test]
+    fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
+        // Model "genel" derse ham girdiden yerel slug türet.
+        assert_eq!(finalize_slug("temel linux güvenliği", "genel"), "temel-linux-guvenligi");
     }
 }

@@ -75,6 +75,8 @@ usta start gtm            # rust olabilir, gtm olabilir, ne olursa
 
 Etkileşimli terminalde Usta **ratatui inline-viewport TUI**'si açar: alt bölgede canlı girdi kutusu + durum satırı yaşar, kalıcı akış (Usta yanıtları, dosya feedback'i) normal **scrollback**'e basılır — yukarı kaydırıp geçmişi okuyabilir/kopyalayabilirsin. Alternate screen kullanılmaz; terminal geçmişin korunur.
 
+Konusuz `usta` çalıştırıldığında (Claude Code tarzı): önce **kimlik-welcome** kutusu üstte görünür (logo + kayıtlı konuların), altındaki girdi kutusu konuyu sorar — kısa yaz ya da cümleyle anlat (cümleyi model kısa bir slug'a indirir). `usta start <konu>` ise **tam-mod welcome** (öğrenme durumu: seviye, harita %, sırada ne var) gösterip doğrudan başlar.
+
 TTY yoksa veya `NO_COLOR=1` ise TUI hiç açılmaz — mevcut düz satır moduna düşer (pipe/CI/script güvenli).
 
 ## Nasıl çalışır — "ince kabuk, kalın beyin"

@@ -118,47 +118,184 @@ async fn ask_live(
     }
 }
 
-/// TUI oturumu: açılış kutusu + drill/tanışma + ana döngü. Dönüşte Tui drop
-/// olur → terminal restore; kapanış flush'ı main'de plain yolla koşar.
+/// Kimlik welcome'ı basıp konuyu girdi kutusundan okur. `None` = kullanıcı
+/// konu vermeden çıktı (Ctrl-C/D). Slug çözümü çağırana bırakılır. Konu
+/// girişinde watcher olayları burada TÜKETİLMEZ — sadece tuş dinlenir; kanalda
+/// biriken olaylar oturum kurulduktan sonra sessizce sindirilir (bkz. `run`).
 #[allow(clippy::too_many_arguments)]
+async fn ask_topic(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    global: &Path,
+    profile: Option<&str>,
+    model: &str,
+    dir: &str,
+    width: u16,
+) -> Result<Option<String>> {
+    // Kayıtlı konular (global katalog) — boşsa ilk-oturum mesajı.
+    let idx = std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
+    let topics: Vec<String> = {
+        let mut t: Vec<String> = crate::index::entries(&idx).into_iter().map(|e| e.topic).collect();
+        t.dedup();
+        t.truncate(6);
+        t
+    };
+    let name = profile.and_then(welcome::extract_name);
+    page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, &topics, width))?;
+    page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
+
+    loop {
+        draw(tui, editor, &Status::Idle, None, 0)?;
+        if let Some(Ok(Event::Key(k))) = events.next().await {
+            match editor.handle_key(k) {
+                Action::Submit(line) => return Ok(Some(line)),
+                Action::Exit => return Ok(None),
+                Action::None => {}
+            }
+        }
+    }
+}
+
+/// TUI'de tek-tuş onay: mesajı bas, bir tuş bekle. `e`/`E` → true, diğer → false.
+async fn tui_confirm(
+    tui: &mut Tui,
+    editor: &InputBox,
+    events: &mut EventStream,
+    msg: &str,
+) -> Result<bool> {
+    page_notice(tui, msg)?;
+    loop {
+        draw(tui, editor, &Status::Idle, None, 0)?;
+        if let Some(Ok(Event::Key(k))) = events.next().await {
+            match k.code {
+                KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
+                _ => return Ok(false),
+            }
+        }
+    }
+}
+
+/// TUI oturumu: konu girişi (arg yoksa) + açılış kutusu + drill/tanışma + ana
+/// döngü. Session/recorder içeride `build_session` ile kurulur. Dönüş:
+/// `Some((session, recorder, lock))` — kapanış main'de plain yolla paylaşımlı;
+/// `None` — kullanıcı konu vermeden çıktı (oturum yok, kilit yok). Dönüşte Tui
+/// drop olur → terminal restore.
 pub async fn run(
     backend: &mut Backend,
-    session: &mut Session,
-    recorder: &Recorder,
-    project_root: &Path,
     global: &Path,
-    topic: &str,
-    has_progress: bool,
+    project_root: &Path,
+    today: &str,
+    topic_arg: Option<String>,
     max_feedback_batch: usize,
     watch_rx: &mut UnboundedReceiver<PathBuf>,
-) -> Result<()> {
+) -> Result<Option<(Session, Recorder, PathBuf)>> {
     // setup() panic hook'u kurar → SÜREÇ BAŞINA TAM BİR KEZ çağrılır (döngüde değil).
     let mut tui = crate::tui::term::setup()?;
     let mut editor = InputBox::new();
     let mut events = EventStream::new();
+    let width = tui.terminal.size()?.width;
+    let read = |p: PathBuf| std::fs::read_to_string(p).ok();
+
+    // Konu belirle: argüman verildiyse yerel slug'la (`usta start "JavaScript
+    // Basics"` çalışsın). Argüman yoksa kimlik welcome + girdi kutusundan sor.
+    let had_topic_arg = topic_arg.is_some();
+    let topic = match topic_arg {
+        Some(t) => crate::slugify_topic(&t),
+        None => {
+            let raw = match ask_topic(
+                &mut tui,
+                &mut editor,
+                &mut events,
+                global,
+                read(global.join("learner/profile.md")).as_deref(),
+                &backend.label(),
+                &short_dir(project_root),
+                width,
+            )
+            .await?
+            {
+                Some(line) => line,
+                None => return Ok(None), // konu vermeden çıktı
+            };
+            // Kısa girdi → yerel slug; cümle → LLM slug (spinner), hata → yerel.
+            if raw.split_whitespace().count() <= 2 {
+                crate::slugify_topic(&raw)
+            } else {
+                match ask_live(
+                    &mut tui,
+                    &mut editor,
+                    &mut events,
+                    backend,
+                    crate::SLUG_SYSTEM,
+                    &[Message::user(raw.as_str())],
+                    None,
+                )
+                .await
+                {
+                    Ok(reply) => crate::finalize_slug(&raw, &reply.text),
+                    Err(_) => crate::slugify_topic(&raw),
+                }
+            }
+        }
+    };
+    if !had_topic_arg {
+        page_notice(&mut tui, &format!("konu: {topic} — detayı sohbette anlatırsın"))?;
+    }
+
+    // Lock-çakışma onayı (TUI tek-tuş) — build_session'dan ÖNCE, kendi kilidini
+    // yazmadan. Reddedilirse session/kilit yok → Tui drop restore.
+    let lock = crate::lock_path(project_root, &topic);
+    if lock.exists()
+        && !tui_confirm(
+            &mut tui,
+            &editor,
+            &mut events,
+            "Bu konuda başka oturum açık olabilir — progress çakışabilir. Devam? [e/H]",
+        )
+        .await?
+    {
+        page_notice(&mut tui, "vazgeçildi")?;
+        return Ok(None);
+    }
+
+    // build_session kendi kilidini yazar; dönen lock = aynı yol.
+    let (mut session, recorder, lock, has_progress) =
+        crate::build_session(global, project_root, &topic, today)?;
+
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
 
-    // Açılış kutusu — bir kere, scrollback'e.
-    let width = tui.terminal.size()?.width;
-    let read = |p: PathBuf| std::fs::read_to_string(p).ok();
-    let data = welcome::gather(
-        read(global.join("learner/profile.md")).as_deref(),
-        read(progress::progress_path(project_root, topic)).as_deref(),
-        read(progress::curriculum_path(project_root, topic)).as_deref(),
-        topic,
-        &backend.label(),
-        &short_dir(project_root),
-    );
-    page(&mut tui, welcome::render_welcome(&data, width))?;
+    // Konu girişi sırasında biriken watcher olaylarını sessizce sindir — kullanıcı
+    // konuyu yazarken kaydedilen dosyalar oturum başlar başlamaz sürpriz feedback
+    // üretmesin (FileMemory senkronlanır, sonraki gerçek değişiklik ona göre diff'lenir).
+    while let Ok(path) = watch_rx.try_recv() {
+        if let Ok(c) = std::fs::read_to_string(&path) {
+            let _ = files.observe(&path, c);
+        }
+    }
+
+    // Welcome: konu baştan belliyse (arg verilmişti) tam-mod öğrenme durumu
+    // basılır. Aksi halde kimlik welcome ask_topic içinde zaten basıldı — tek welcome.
+    if had_topic_arg {
+        let data = welcome::gather(
+            read(global.join("learner/profile.md")).as_deref(),
+            read(progress::progress_path(project_root, &topic)).as_deref(),
+            read(progress::curriculum_path(project_root, &topic)).as_deref(),
+            &topic,
+            &backend.label(),
+            &short_dir(project_root),
+        );
+        page(&mut tui, welcome::render_welcome(&data, width))?;
+    }
 
     // Açılış drilli / tanışma (main.rs plain yolunun TUI karşılığı).
     let opening = if has_progress {
-        progress::opening_prompt(topic)
+        progress::opening_prompt(&topic)
     } else {
-        progress::onboarding_prompt(topic)
+        progress::onboarding_prompt(&topic)
     };
     session.push_user(&opening);
     recorder.user(&opening);
@@ -210,7 +347,7 @@ pub async fn run(
                                 page_reply(&mut tui, &reply.text, width)?;
                                 recorder.assistant(&reply.text);
                                 session.push_assistant(reply.text);
-                                crate::maybe_compact(backend, session, project_root, last_tokens).await;
+                                crate::maybe_compact(backend, &mut session, project_root, last_tokens).await;
                             }
                             Err(e) => page_notice(&mut tui, &format!("hata: {e}"))?,
                         }
@@ -235,13 +372,13 @@ pub async fn run(
                     }
                 } else {
                     for path in batch {
-                        match crate::handle_file_change(backend, session, &mut files, project_root, &path, recorder).await {
+                        match crate::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
                             Ok(crate::FileFeedback::Sessiz) => {}
                             Ok(crate::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
                             Ok(crate::FileFeedback::Yanit { tokens, reply }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
                                 page_reply(&mut tui, &reply.text, width)?;
-                                crate::maybe_compact(backend, session, project_root, tokens).await;
+                                crate::maybe_compact(backend, &mut session, project_root, tokens).await;
                             }
                             Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,
                         }
@@ -255,7 +392,7 @@ pub async fn run(
     for m in ui::drain_tui_notices() {
         page_notice(&mut tui, &m)?;
     }
-    Ok(()) // Tui drop → restore
+    Ok(Some((session, recorder, lock))) // Tui drop → restore
 }
 
 /// `$HOME` → `~` kısaltmalı proje dizini.
