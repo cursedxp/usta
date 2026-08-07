@@ -31,7 +31,18 @@ pub fn print_usta_reply(reply: &str, web: bool) {
     let width = termimad::terminal_size().0.max(40) as usize;
     let skin = skin();
     let text = skin.text(reply, Some(width.saturating_sub(4)));
-    for line in format!("{text}").lines() {
+    // termimad başlık/bold ile başlayınca öne-sona boş satır ekliyor —
+    // `●`'dan sonra gap olmasın diye baş/son boş satırları at (iç boşluklar
+    // paragraf ayracı olarak kalır).
+    let block = format!("{text}");
+    let lines: Vec<&str> = block.lines().collect();
+    let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
+    let end = lines
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    for line in &lines[start..end] {
         println!("  {line}");
     }
     if web {
