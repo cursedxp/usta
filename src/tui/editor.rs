@@ -68,6 +68,17 @@ impl InputBox {
         }
     }
 
+    /// Yapıştırılan metni imleç konumuna ekle (bracketed paste). Satır sonları
+    /// KORUNUR — model liste/log yapısını görsün; kutu tek satır olduğundan
+    /// render'da ⏎ olarak gösterilir. CRLF → LF normalize edilir.
+    pub fn insert_str(&mut self, s: &str) {
+        self.cursor = None;
+        let cleaned = s.replace("\r\n", "\n").replace('\r', "\n");
+        for ch in cleaned.chars() {
+            self.input.handle(tui_input::InputRequest::InsertChar(ch));
+        }
+    }
+
     fn recall_prev(&mut self) {
         if self.history.is_empty() { return; }
         let next = match self.cursor {
@@ -98,7 +109,7 @@ impl InputBox {
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let inner_w = area.width.saturating_sub(4) as usize; // kenarlar + "> "
         let scroll = self.input.visual_scroll(inner_w);
-        let shown: String = self.input.value().chars().skip(scroll).collect();
+        let shown = sanitize_for_display(&self.input.value().chars().skip(scroll).collect::<String>());
         let para = Paragraph::new(Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::Indexed(208))),
             Span::raw(shown),
@@ -113,6 +124,12 @@ impl InputBox {
         let x = area.x + 3 + (self.input.visual_cursor().saturating_sub(scroll)) as u16;
         f.set_cursor_position((x.min(area.x + area.width - 2), area.y + 1));
     }
+}
+
+/// Tek satırlık kutuda görünmez karakterler görünür işarete çevrilir —
+/// değer (Submit edilen metin) DEĞİŞMEZ, sadece görüntü.
+fn sanitize_for_display(s: &str) -> String {
+    s.chars().map(|c| if c == '\n' { '⏎' } else { c }).collect()
 }
 
 #[cfg(test)]
@@ -168,6 +185,32 @@ mod tests {
         assert_eq!(b.value(), "iki");
         b.handle_key(code(KeyCode::Down));
         assert_eq!(b.value(), "");
+    }
+
+    #[test]
+    fn insert_str_preserves_newlines_and_normalizes_crlf() {
+        let mut b = InputBox::new();
+        b.insert_str("satır1\r\nsatır2\rsatır3");
+        assert_eq!(b.value(), "satır1\nsatır2\nsatır3");
+        // Yapıştırma Submit tetiklemez; Enter sonrası tek mesaj, yapı korunur.
+        match b.handle_key(code(KeyCode::Enter)) {
+            Action::Submit(s) => assert_eq!(s, "satır1\nsatır2\nsatır3"),
+            other => panic!("Submit bekleniyordu: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn insert_str_appends_at_cursor_after_typing() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "log: ");
+        b.insert_str("a\nb");
+        assert_eq!(b.value(), "log: a\nb");
+    }
+
+    #[test]
+    fn sanitize_for_display_maps_newline_keeps_value_chars() {
+        assert_eq!(sanitize_for_display("a\nb"), "a⏎b");
+        assert_eq!(sanitize_for_display("çğş"), "çğş");
     }
 
     #[test]

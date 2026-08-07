@@ -120,7 +120,10 @@ async fn ask_live(
         tokio::select! {
             r = &mut fut => return Ok(AskOutcome::Reply(r?)),
             Some(Ok(ev)) = events.next() => {
-                if let Event::Key(k) = ev {
+                // Yapıştırma kilitliyken de editöre işler (göndermez).
+                if let Event::Paste(s) = &ev {
+                    editor.insert_str(s);
+                } else if let Event::Key(k) = ev {
                     match classify_locked_key(k) {
                         LockedKey::CancelRequest if cancel_armed => {
                             // fut düşer → kill_on_drop çocuğu öldürür (backend.rs).
@@ -178,6 +181,7 @@ async fn ask_topic(
                 Action::Exit => return Ok(None),
                 Action::None => {}
             },
+            Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
             Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
             None => return Ok(None), // stream bitti — sıcak döngüye girme (spec B4)
         }
@@ -368,7 +372,12 @@ pub async fn run(
                     if maybe_ev.is_none() { break; } // stream bitti = Eof (spec B4)
                     continue; // tek olay hatası — yoksay
                 };
-                let Event::Key(k) = ev else { continue };
+                let k = match ev {
+                    Event::Key(k) => k,
+                    // Bracketed paste: tek olay, Enter tetiklenmez, yapı korunur.
+                    Event::Paste(s) => { editor.insert_str(&s); continue }
+                    _ => continue,
+                };
                 match editor.handle_key(k) {
                     Action::None => {}
                     Action::Exit => break,

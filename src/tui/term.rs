@@ -19,6 +19,10 @@ pub struct Tui {
 /// hook korunur (test harness'inin hook'u ezilmez).
 pub fn setup() -> Result<Tui> {
     crossterm::terminal::enable_raw_mode()?;
+    // Bracketed paste: yapıştırma tek Event::Paste olarak gelir — satır sonları
+    // Enter sayılıp mesajı bölmez. Desteklemeyen terminalde sessizce geçilir
+    // (eski davranışa düşer).
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -33,6 +37,7 @@ pub fn setup() -> Result<Tui> {
 
 /// Raw mode'u kapat — idempotent, hata yutar (kapanış yolunda panik yok).
 pub fn restore() {
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     let _ = crossterm::terminal::disable_raw_mode();
 }
 
