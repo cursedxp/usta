@@ -525,7 +525,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `SPEC.md`
 
-- [ ] **Step 1: §4.8'den sonra yeni bölüm ekle**
+- [x] **Step 1: §4.8'den sonra yeni bölüm ekle**
 
 ```markdown
 ## 4.9 Bağlam Yönetimi (v0.7)
@@ -535,13 +535,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Görsel:** banner model etiketi taşır (`opus · cli`), kullanıcı promptu `❯`, Usta bloğu 2 boşluk padding + genişliğe sarma.
 ```
 
-- [ ] **Step 2: "Alınan Kararlar" bölümüne ekle**
+- [x] **Step 2: "Alınan Kararlar" bölümüne ekle**
 
 ```markdown
 - **Bağlam (v0.7):** pencere sabiti 200k (Opus); kompaksiyon eşiği %70, korunan kuyruk 4 mesaj; ölçüm = son çağrının `usage` toplamı (input + cache_read + cache_creation) — ayrı sayaç tutulmaz, kaynak API/CLI raporudur.
 ```
 
-- [ ] **Step 3: Commit + push**
+- [x] **Step 3: Commit + push**
 
 ```bash
 git add SPEC.md
