@@ -89,6 +89,48 @@ pub fn record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<
     crate::progress::write_atomic(&path, &updated)
 }
 
+/// Bu projede devam edilebilir konular: `.usta/learner/progress/*.md`
+/// (boş olmayan) dosya adları. Sıralama: global index tarihi yeniden-eskiye;
+/// index kaydı olmayan konu dosya mtime'ına düşer (factory reset sonrası
+/// katalog boş olabilir — progress hâlâ gerçek kaynak). `[0]` = son konu.
+/// Henüz hiçbir çağıran yok (kamu API) — welcome box + resume mantığı bir
+/// sonraki task'ta buna bağlanacak; o zamana kadar clippy için allow.
+#[allow(dead_code)]
+pub fn local_topics(project_root: &Path, index_content: &str) -> Vec<String> {
+    let dir = project_root.join(".usta/learner/progress");
+    let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let idx = entries(index_content);
+    let date_of = |topic: &str| -> Option<String> {
+        idx.iter()
+            .find(|e| e.topic == topic && e.project == project_root)
+            .map(|e| e.date.clone())
+    };
+    let mut out: Vec<(String, String)> = rd
+        .flatten()
+        .filter_map(|f| {
+            let p = f.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("md") { return None; }
+            let stem = p.file_stem()?.to_str()?.to_string();
+            let content = std::fs::read_to_string(&p).ok()?;
+            if content.trim().is_empty() { return None; }
+            // Sıralama anahtarı: index tarihi (YYYY-MM-DD sıralanabilir);
+            // yoksa mtime'dan üretilmiş kaba anahtar (epoch saniye, sabit genişlik).
+            let key = date_of(&stem).unwrap_or_else(|| {
+                let secs = f.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                format!("0000-epoch-{secs:020}")
+            });
+            Some((key, stem))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0)); // yeniden-eskiye
+    out.into_iter().map(|(_, t)| t).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +199,35 @@ mod tests {
         let v = upsert("", "rust", Path::new("/p/a"), "2026-08-07");
         let out = remove(&v, "rust", Path::new("/p/BASKA"));
         assert_eq!(entries(&out).len(), 1);
+    }
+
+    #[test]
+    fn local_topics_lists_progress_stems_sorted_by_index_date_desc() {
+        let base = std::env::temp_dir().join(format!("usta_localtopics_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let pdir = base.join(".usta/learner/progress");
+        std::fs::create_dir_all(&pdir).unwrap();
+        std::fs::write(pdir.join("eski-konu.md"), "içerik").unwrap();
+        std::fs::write(pdir.join("yeni-konu.md"), "içerik").unwrap();
+        std::fs::write(pdir.join("bos.md"), "  ").unwrap(); // boş → listelenmez
+        let index = format!(
+            "## Kayıtlar\n- eski-konu | {p} | 2026-08-01\n- yeni-konu | {p} | 2026-08-07\n- baska-proje-konu | /tmp/baska | 2026-08-06\n",
+            p = base.display()
+        );
+        let t = local_topics(&base, &index);
+        assert_eq!(t, vec!["yeni-konu".to_string(), "eski-konu".to_string()]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn local_topics_without_index_entry_still_lists_by_mtime() {
+        let base = std::env::temp_dir().join(format!("usta_localtopics_mtime_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let pdir = base.join(".usta/learner/progress");
+        std::fs::create_dir_all(&pdir).unwrap();
+        std::fs::write(pdir.join("tek-konu.md"), "içerik").unwrap();
+        let t = local_topics(&base, ""); // index boş (factory reset senaryosu)
+        assert_eq!(t, vec!["tek-konu".to_string()]);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
