@@ -183,7 +183,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `USTA.md`
 
-- [ ] **Step 1: Bölümü ekle**
+- [x] **Step 1: Bölümü ekle**
 
 "Kapsam Bekçiliği" bölümünden sonra:
 
@@ -204,7 +204,7 @@ Hedef kuralları:
 6. **Hedefe ulaşınca:** kutla (gerçekten — cesur işti), sonra sor: yeni hedef mi, keşfe geçiş mi? Progress arşivlenmez, seviye kaydı olarak kalır.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add USTA.md
