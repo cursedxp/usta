@@ -206,6 +206,11 @@ pub async fn run(
                                 recorder.assistant(&reply.text);
                                 session.push_assistant(reply.text);
                                 crate::maybe_compact(backend, session, project_root, last_tokens).await;
+                                // Kompaksiyon sırasında ui::notice/warn tamponlandıysa
+                                // scrollback'e temiz şekilde bas.
+                                for m in ui::drain_tui_notices() {
+                                    page_notice(&mut tui, &m)?;
+                                }
                             }
                             Err(e) => page_notice(&mut tui, &format!("hata: {e}"))?,
                         }
@@ -237,6 +242,9 @@ pub async fn run(
                                 if let Some(t) = tokens { last_tokens = Some(t); }
                                 page_reply(&mut tui, &reply.text, width)?;
                                 crate::maybe_compact(backend, session, project_root, tokens).await;
+                                for m in ui::drain_tui_notices() {
+                                    page_notice(&mut tui, &m)?;
+                                }
                             }
                             Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,
                         }

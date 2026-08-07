@@ -5,6 +5,8 @@
 //! Davranış burada yaşamaz — sadece görünüm.
 
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use termimad::MadSkin;
 
@@ -12,6 +14,39 @@ pub const ORANGE: &str = "\x1b[38;5;208m";
 pub const DIM: &str = "\x1b[2m";
 pub const YELLOW: &str = "\x1b[33m";
 pub const RESET: &str = "\x1b[0m";
+
+/// TUI aktif mi? true iken notice/warn/Spinner ham ANSI basmaz — ratatui
+/// inline viewport'u ile çakışmasınlar diye tamponlanır/no-op olur.
+static TUI_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// TUI aktifken biriken bildirimler — run.rs bunları page_notice ile
+/// scrollback'e boşaltır.
+static TUI_NOTICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// TUI döngüsüne girerken/çıkarken bayrağı ayarla (main.rs sorumlu).
+pub fn set_tui_active(on: bool) {
+    TUI_ACTIVE.store(on, Ordering::SeqCst);
+}
+
+fn tui_active() -> bool {
+    TUI_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// Biriken TUI bildirimlerini al ve tamponu boşalt.
+pub fn drain_tui_notices() -> Vec<String> {
+    match TUI_NOTICES.lock() {
+        Ok(mut guard) => std::mem::take(&mut *guard),
+        // Poison olsa bile temizlik yolunda panic yok — kilidi kurtar.
+        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    }
+}
+
+fn push_tui_notice(msg: String) {
+    match TUI_NOTICES.lock() {
+        Ok(mut guard) => guard.push(msg),
+        Err(poisoned) => poisoned.into_inner().push(msg),
+    }
+}
 
 /// Düz mod: stdout TTY değil veya kullanıcı NO_COLOR istemiş.
 pub fn is_plain() -> bool {
@@ -53,6 +88,11 @@ pub fn print_usta_reply(reply: &str, web: bool) {
 
 /// Soluk bilgi satırı (stdout) — ana akıştan görsel olarak ayrılır.
 pub fn notice(msg: &str) {
+    if tui_active() {
+        // TUI canlı viewport'u basıyor — ham ANSI çakışmasın, biriktir.
+        push_tui_notice(msg.to_string());
+        return;
+    }
     if is_plain() {
         println!("({msg})");
     } else {
@@ -62,6 +102,10 @@ pub fn notice(msg: &str) {
 
 /// Soluk uyarı satırı (stderr).
 pub fn warn(msg: &str) {
+    if tui_active() {
+        push_tui_notice(format!("⚠ {msg}"));
+        return;
+    }
     if is_plain() {
         eprintln!("({msg})");
     } else {
@@ -101,7 +145,9 @@ pub struct Spinner {
 
 impl Spinner {
     pub fn start(msg: &'static str) -> Spinner {
-        if is_plain() {
+        // TUI aktifken de no-op: kendi spinner'ı var (Status::Thinking),
+        // burada başlarsa arka plan print! task'ı viewport'u ezer.
+        if is_plain() || tui_active() {
             return Spinner { stop_tx: None, handle: None };
         }
         let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();

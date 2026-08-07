@@ -117,7 +117,10 @@ async fn main() -> Result<()> {
     // scrollback korunur). Plain yol (TTY yok / NO_COLOR) mevcut satır REPL'i —
     // davranış birebir korunur.
     if !ui::is_plain() {
-        tui::run::run(
+        // TUI aktifken notice/warn/Spinner ham ANSI basmasın diye bayrağı
+        // aç — run() dönünce (hata dahil) mutlaka kapat, sonra hatayı fırlat.
+        ui::set_tui_active(true);
+        let tui_result = tui::run::run(
             &mut backend,
             &mut session,
             &recorder,
@@ -128,7 +131,9 @@ async fn main() -> Result<()> {
             MAX_FEEDBACK_BATCH,
             &mut watch_rx,
         )
-        .await?;
+        .await;
+        ui::set_tui_active(false);
+        tui_result?;
     } else {
         ui::banner(&topic, &backend.label());
         run_plain_loop(
