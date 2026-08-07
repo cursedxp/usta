@@ -58,8 +58,15 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
 pub fn is_ignored(path: &Path) -> bool {
     path.components().any(|c| match c {
         std::path::Component::Normal(s) => {
-            let s = s.to_string_lossy();
-            s == "target" || s == "node_modules" || s.starts_with('.')
+            let s = s.to_string_lossy().to_ascii_lowercase();
+            s == "target"
+                || s == "node_modules"
+                || s.starts_with('.')
+                // Sır dosyaları LLM'e asla gitmez.
+                || s.ends_with(".pem")
+                || s.ends_with(".key")
+                || s.contains("secret")
+                || s.contains("credential")
         }
         _ => false,
     })
@@ -163,5 +170,18 @@ mod tests {
     #[test]
     fn is_ignored_allows_arbitrary_extension() {
         assert!(!is_ignored(Path::new("foo.py")));
+    }
+
+    #[test]
+    fn is_ignored_blocks_secret_files() {
+        assert!(is_ignored(Path::new("config/server.pem")));
+        assert!(is_ignored(Path::new("keys/deploy.key")));
+        assert!(is_ignored(Path::new("config/client_secrets.yaml")));
+        assert!(is_ignored(Path::new("aws/CREDENTIALS.json")));
+    }
+
+    #[test]
+    fn is_ignored_allows_normal_config() {
+        assert!(!is_ignored(Path::new("config/settings.yaml")));
     }
 }

@@ -468,7 +468,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - `closing_prompt` kurallarına dosya-şişmesi budaması eklenir.
 - `is_ignored` sır desenlerini de eler: `.pem`, `.key`, adında `secret`/`credential` geçen dosyalar (büyük/küçük harf duyarsız).
 
-- [ ] **Step 1: Failing testleri yaz**
+- [x] **Step 1: Failing testleri yaz**
 
 `src/watcher.rs` test modülüne:
 
@@ -500,7 +500,7 @@ fn closing_prompt_includes_pruning_rule() {
 Run: `cargo test is_ignored && cargo test pruning`
 Expected: FAIL.
 
-- [ ] **Step 2: Implemente et**
+- [x] **Step 2: Implemente et**
 
 `is_ignored` closure'ındaki `Normal(s)` kolunu genişlet:
 
@@ -526,7 +526,7 @@ Expected: FAIL.
  kaldır; curriculum'da değişmeyen bölümleri olduğu gibi koru (yeniden üretme).
 ```
 
-- [ ] **Step 3: Test + build + commit**
+- [x] **Step 3: Test + build + commit**
 
 Run: `cargo test && cargo build && cargo clippy` → PASS (mevcut `is_ignored_allows_src_file` vb. bozulmadan).
 

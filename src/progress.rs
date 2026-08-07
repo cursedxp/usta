@@ -86,6 +86,9 @@ pub fn closing_prompt(
          madde `görülmedi/görüldü/oturdu/derinleşildi` durumuyla; gerekiyorsa web \
          araştırmasına dayan); sonraki oturumlarda yalnız durum değiştiyse üretilir. \
          Kapsanmamış kritik madde haritada görünür kalmalı.\n\
+         - Dosyaları ŞİŞİRME: `Kapatılanlar` 20 maddeyi aşarsa en eskileri tek satırlık \
+         dönem özetine indir; `Hata günlüğü`nde çözülüp uzun süredir görülmeyen satırları \
+         kaldır; curriculum'da değişmeyen bölümleri olduğu gibi koru (yeniden üretme).\n\
          - Oturumda kanıtı olmayanı ekleme; mevcut dosyalardaki geçerli bilgiyi koru \
          (kullanıcı elle düzenlemiş olabilir — düzenlemesini ez-me).\n\
          - Bölücü satırları dışında açıklama/selamlama yazma; her dosya saf markdown."
@@ -183,6 +186,12 @@ mod tests {
     fn closing_prompt_marks_missing_file() {
         let s = closing_prompt("rust", None, None, None);
         assert!(s.contains("(dosya henüz yok)"));
+    }
+
+    #[test]
+    fn closing_prompt_includes_pruning_rule() {
+        let s = closing_prompt("rust", None, None, None);
+        assert!(s.contains("20 madde"));
     }
 
     #[test]
