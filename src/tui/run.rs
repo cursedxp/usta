@@ -231,11 +231,11 @@ pub async fn run(
                 } else {
                     for path in batch {
                         match crate::handle_file_change(backend, session, &mut files, project_root, &path, recorder).await {
-                            Ok((tokens, reply)) => {
-                                if let Some(text) = reply {
-                                    if let Some(t) = tokens { last_tokens = Some(t); }
-                                    page_reply(&mut tui, &text, width)?;
-                                }
+                            Ok(crate::FileFeedback::Sessiz) => {}
+                            Ok(crate::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
+                            Ok(crate::FileFeedback::Yanit { tokens, reply }) => {
+                                if let Some(t) = tokens { last_tokens = Some(t); }
+                                page_reply(&mut tui, &reply.text, width)?;
                                 crate::maybe_compact(backend, session, project_root, tokens).await;
                             }
                             Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,

@@ -255,13 +255,12 @@ async fn run_plain_loop(
                 } else {
                     for path in batch {
                         match handle_file_change(backend, session, &mut files, project_root, &path, recorder).await {
-                            // handle_file_change artık basmaz — dönen metni plain
-                            // yol kendisi basar (print_reply eşdeğeri: yanıt + gauge).
-                            Ok((tokens, reply)) => {
-                                if let Some(text) = reply {
-                                    ui::print_usta_reply(&text, false);
-                                    ui::context_gauge(tokens, backend.context_window());
-                                }
+                            // handle_file_change artık basmaz — plain yol kendi
+                            // sunum dilini uygular (print_reply: web + gauge).
+                            Ok(FileFeedback::Sessiz) => {}
+                            Ok(FileFeedback::Bildirim(m)) => println!("{m}"),
+                            Ok(FileFeedback::Yanit { tokens, reply }) => {
+                                print_reply(&reply, backend.context_window());
                                 maybe_compact(backend, session, project_root, tokens).await;
                             }
                             // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
@@ -752,12 +751,28 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
     Ok(results)
 }
 
+/// Dosya değişikliği feedback sonucu — çağıran (plain/TUI) kendi basar.
+/// `handle_file_change` hiçbir şey println! etmez (raw-mode'da stdout
+/// bozulmasın); tam `Reply` taşınır ki `web` bayrağı ve context gauge
+/// çağıran tarafta orijinal davranışla (print_reply) yeniden üretilebilsin.
+pub(crate) enum FileFeedback {
+    /// Skip — çıktı yok.
+    Sessiz,
+    /// Büyük dosya bildirimi — çağıran kendi yolunda gösterir
+    /// (plain: `println!`, TUI: `page_notice`).
+    Bildirim(String),
+    /// Gerçek yanıt — bağlam token'ı + tam `Reply` (web bayrağı korunur).
+    Yanit {
+        tokens: Option<u64>,
+        reply: backend::Reply,
+    },
+}
+
 /// Kaydedilen dosyayı FileMemory'den geçir; ilk görüşte tam içerik, sonrasında
 /// diff olarak sentetik user turn'e çevir → Socratic feedback. Cargo projesiyse
 /// check sonucu "sadece Usta'nın gözü için" bloğuyla eklenir (tahmin protokolü).
-/// Dönüş: `(bağlam token'ı, Usta yanıt metni)`. Çıktı BASMAZ — hem plain hem
-/// TUI yolu dönen metni kendi sunum diliyle basar (raw-mode'da stdout bozulmasın).
-/// Skip/TooLarge → `(None, None)`.
+/// Çıktı BASMAZ — hem plain hem TUI yolu dönen `FileFeedback`'i kendi sunum
+/// diliyle basar (raw-mode'da stdout bozulmasın).
 pub(crate) async fn handle_file_change(
     backend: &mut Backend,
     session: &mut Session,
@@ -765,13 +780,15 @@ pub(crate) async fn handle_file_change(
     project_root: &Path,
     path: &Path,
     recorder: &transcript::Recorder,
-) -> Result<(Option<u64>, Option<String>)> {
+) -> Result<FileFeedback> {
     let contents = std::fs::read_to_string(path)?;
     let mut injected = match files.observe(path, contents) {
-        feedback::ChangePayload::Skip => return Ok((None, None)),
+        feedback::ChangePayload::Skip => return Ok(FileFeedback::Sessiz),
         feedback::ChangePayload::TooLarge(len) => {
-            println!("(büyük dosya izleme dışı: {} — {len} bayt)", path.display());
-            return Ok((None, None));
+            return Ok(FileFeedback::Bildirim(format!(
+                "(büyük dosya izleme dışı: {} — {len} bayt)",
+                path.display()
+            )));
         }
         feedback::ChangePayload::FirstSight(full) => format!(
             "[Dosya kaydedildi: {}]\n{full}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver.",
@@ -792,9 +809,8 @@ pub(crate) async fn handle_file_change(
     let reply = ask_usta(backend, &session.system, session.history()).await?;
     let tokens = reply.context_tokens;
     recorder.assistant(&reply.text);
-    let text = reply.text.clone();
-    session.push_assistant(reply.text);
-    Ok((tokens, Some(text)))
+    session.push_assistant(reply.text.clone());
+    Ok(FileFeedback::Yanit { tokens, reply })
 }
 
 /// Usta yanıtını sunum katmanına devret.
