@@ -223,7 +223,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `SPEC.md`
 
-- [ ] **Step 1: §4.9'dan sonra yeni bölüm ekle**
+- [x] **Step 1: §4.9'dan sonra yeni bölüm ekle**
 
 ```markdown
 ## 4.10 Hedefli Öğrenme (v0.8)
@@ -237,13 +237,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Medium sınırı:** terminalde çalışmayan modüller haritada `dış kaynak gerekli` olarak işaretlenir — sahte tamlık yok.
 ```
 
-- [ ] **Step 2: "Alınan Kararlar" bölümüne ekle**
+- [x] **Step 2: "Alınan Kararlar" bölümüne ekle**
 
 ```markdown
 - **Hedefli öğrenme (v0.8):** hedef ayrı mod değil approach alanı; tarih referansı system prompt `BUGÜN` bölümünden (`load_system_prompt` `today` parametresi aldı — model saati güvenilmez). Tempo/ölçüm progress'te yaşar, kod tarafında hedef mantığı YOK (ince kabuk korundu).
 ```
 
-- [ ] **Step 3: Commit + push**
+- [x] **Step 3: Commit + push**
 
 ```bash
 git add SPEC.md

@@ -88,6 +88,16 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 - **Otomatik ara-kayıt + kompaksiyon:** %70 eşiğinde flush çalışır (progress/approach/curriculum diske iner), system prompt taze dosyalarla yeniden yüklenir, history `[ARA KAYIT]` notu + son 4 turn'e kırpılır, CLI `session_id` sıfırlanır. Kullanıcı akışı kesilmez. Flush başarısızsa kompaksiyon iptal — veri yazılmadan history atılmaz. Kayıp minimal: önemli olan zaten dosyalarda (progress = damıtılmış oturum).
 - **Görsel:** banner model etiketi taşır (`opus · cli`), kullanıcı promptu `❯`, Usta bloğu 2 boşluk padding + genişliğe sarma.
 
+## 4.10 Hedefli Öğrenme (v0.8)
+
+Öğrenmenin iki modu tek sistemde: **keşif** (açık uçlu merak) ve **hedef** (sertifika/seviye/teslim — tarih + eşik). Tanışma hangisi olduğunu netleştirir.
+
+- **Hedef kaydı jenerik:** approach `## Hedef` (ne / tarih / eşik / format), progress `## Hedef Durumu` (kalan süre / harita % / tempo / ölçüm logu). AWS SAA da Goethe B1 de aynı kalıp.
+- **Harita resmi çerçeveden:** sınav müfredatı / exam guide / CEFR — web araştırmalı, tahmin değil.
+- **Tempo bekçiliği:** system prompt'un `===== BUGÜN =====` bölümü sayesinde kalan süre hesaplanır; her açılışta tek satır durum, riskliyse plan revizesi.
+- **Format-uyumlu drill:** senaryo çoktan-seçmeli / yazma görevi / prova — hedefin gerçek sınav formatı.
+- **Medium sınırı:** terminalde çalışmayan modüller haritada `dış kaynak gerekli` olarak işaretlenir — sahte tamlık yok.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -175,6 +185,7 @@ usta/
 - **Konu girişi (v0.5):** TTY promptunda tek kelime zorunlu — cümle girilirse yeniden sorulur (3 deneme, sonra ilk kelime açık bildirimle alınır). `usta start <konu>` ve pipe davranışı değişmedi.
 - **Her-konu (v0.6):** yaklaşım dosyaları elle değil ilk-oturum tanışmasıyla üretilir; curriculum proje-lokal (`.usta/learner/curriculum/`) yaşar — §7'deki global `learner/curriculum/` yerine (izolasyon: harita da konu+proje bağlamına ait). Kapanış bölücü formatı `===DOSYA: <ad>===`.
 - **Bağlam (v0.7):** pencere **modele göre türetilir** (`backend.context_window()`: opus/sonnet/fable 1M, haiku 200k) — sabit değil; kompaksiyon eşiği %70, korunan kuyruk 4 mesaj; ölçüm = son çağrının `usage` toplamı (input + cache_read + cache_creation) — ayrı sayaç tutulmaz, kaynak API/CLI raporudur.
+- **Hedefli öğrenme (v0.8):** hedef ayrı mod değil approach alanı; tarih referansı system prompt `BUGÜN` bölümünden (`load_system_prompt` `today` parametresi aldı — model saati güvenilmez). Tempo/ölçüm progress'te yaşar, kod tarafında hedef mantığı YOK (ince kabuk korundu).
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
