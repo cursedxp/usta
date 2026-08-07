@@ -65,8 +65,6 @@ async fn main() -> Result<()> {
         ui::notice(".usta/ kuruldu");
     }
 
-    let topic = resolve_topic(&mut backend, topic_arg).await?;
-
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
     // model — bkz. brain.rs). build_session bunu kullanır.
     let global = config::global_root()?;
@@ -80,51 +78,59 @@ async fn main() -> Result<()> {
         ui::warn(&format!("yarım oturum kaydı bulundu (flush edilememiş olabilir): {}", p.display()));
     }
 
-    // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi lock'unu
-    // yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile yapılır — Task 4.)
-    let lock = lock_path(&project_root, &topic);
-    if lock.exists() {
-        let pid = std::fs::read_to_string(&lock).unwrap_or_default();
-        if std::io::stdin().is_terminal() {
-            let msg = format!(
-                "Bu konuda başka bir oturum açık görünüyor (pid {}). İki oturum aynı anda \
-                 kapanırsa progress birbirini EZER. Yine de devam? [e/H] ",
-                pid.trim()
-            );
-            if !confirm(&msg, &["e", "evet"])? {
-                println!("vazgeçildi — önce diğer oturumu kapat (veya kalıntıysa sil: {})", lock.display());
-                return Ok(());
-            }
-        } else {
-            ui::warn("kalıntı konu kilidi bulundu — pipe modunda devam ediliyor");
-        }
-    }
-
-    let (mut session, recorder, lock, has_progress) =
-        build_session(&global, &project_root, &topic, &today())?;
-
-    // TUI yolu: etkileşimli terminal → ratatui inline viewport (alt-ekran yok,
-    // scrollback korunur). Plain yol (TTY yok / NO_COLOR) mevcut satır REPL'i —
-    // davranış birebir korunur.
-    if !ui::is_plain() {
+    // İki yol da `(Session, Recorder, PathBuf)` üretir; kapanış paylaşımlı.
+    // TUI yolu: konu girişi + slug/onay + build_session hepsi run() içinde —
+    // topic_arg ham geçer, `None` dönüşü kullanıcının konu vermeden çıkışıdır.
+    // Plain yol (TTY yok / NO_COLOR): resolve_topic + lock-çakışma + build_session
+    // + banner + run_plain_loop burada — davranış birebir korunur.
+    let (session, recorder, lock) = if !ui::is_plain() {
         // TUI aktifken notice/warn/Spinner ham ANSI basmasın diye bayrağı
         // aç — run() dönünce (hata dahil) mutlaka kapat, sonra hatayı fırlat.
         ui::set_tui_active(true);
-        let tui_result = tui::run::run(
+        let r = tui::run::run(
             &mut backend,
-            &mut session,
-            &recorder,
-            &project_root,
             &global,
-            &topic,
-            has_progress,
+            &project_root,
+            &today(),
+            topic_arg,
             MAX_FEEDBACK_BATCH,
             &mut watch_rx,
         )
         .await;
         ui::set_tui_active(false);
-        tui_result?;
+        match r? {
+            Some(artifacts) => artifacts,
+            None => {
+                // Konu verilmeden çıkıldı — oturum/kilit yok, kapanacak şey yok.
+                ui::notice("Görüşürüz — suya girmeye devam et.");
+                return Ok(());
+            }
+        }
     } else {
+        let topic = resolve_topic(&mut backend, topic_arg).await?;
+
+        // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi
+        // lock'unu yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile.)
+        let lock = lock_path(&project_root, &topic);
+        if lock.exists() {
+            let pid = std::fs::read_to_string(&lock).unwrap_or_default();
+            if std::io::stdin().is_terminal() {
+                let msg = format!(
+                    "Bu konuda başka bir oturum açık görünüyor (pid {}). İki oturum aynı anda \
+                     kapanırsa progress birbirini EZER. Yine de devam? [e/H] ",
+                    pid.trim()
+                );
+                if !confirm(&msg, &["e", "evet"])? {
+                    println!("vazgeçildi — önce diğer oturumu kapat (veya kalıntıysa sil: {})", lock.display());
+                    return Ok(());
+                }
+            } else {
+                ui::warn("kalıntı konu kilidi bulundu — pipe modunda devam ediliyor");
+            }
+        }
+
+        let (mut session, recorder, lock, has_progress) =
+            build_session(&global, &project_root, &topic, &today())?;
         ui::banner(&topic, &backend.label());
         run_plain_loop(
             &mut backend,
@@ -136,7 +142,8 @@ async fn main() -> Result<()> {
             &mut watch_rx,
         )
         .await?;
-    }
+        (session, recorder, lock)
+    };
 
     if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
         ui::warn(&format!("progress güncellenemedi: {e} — ham kayıt duruyor: {}", recorder.path().display()));

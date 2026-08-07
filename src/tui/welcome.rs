@@ -168,9 +168,7 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
 /// Kimlik modu: konu YOK. Sol kolon logo + selam + model + dizin; sağ kolon
 /// "Ne öğrenmek istiyorsun?" + kayıtlı konular (veya ilk-oturum mesajı).
 /// Konu seçilmeden gösterilir (Claude tarzı: welcome üstte, soru altta).
-// NOT: run.rs açılış akışına henüz bağlanmadı (ayrı bir task) — şimdilik
-// sadece testlerden çağrılıyor, bu yüzden dead_code uyarısı bastırılıyor.
-#[allow(dead_code)]
+/// run.rs konu girişinde (`ask_topic`) bağlı.
 pub fn render_welcome_identity(
     name: Option<&str>,
     model: &str,
