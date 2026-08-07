@@ -547,7 +547,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `SPEC.md`
 
-- [ ] **Step 1: §4.10'dan sonra ekle**
+- [x] **Step 1: §4.10'dan sonra ekle**
 
 ```markdown
 ## 4.11 Sağlamlaştırma (v0.9)
@@ -559,13 +559,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Budama + sır filtresi:** progress 20-madde eşiğiyle budanır; `.pem`/`.key`/`secret`/`credential` dosyaları watcher'dan LLM'e asla gitmez.
 ```
 
-- [ ] **Step 2: "Alınan Kararlar" bölümüne ekle**
+- [x] **Step 2: "Alınan Kararlar" bölümüne ekle**
 
 ```markdown
 - **Sağlamlaştırma (v0.9):** transcript/lock hataları warn-and-continue (ana akışı asla kırmaz); batch tavanı 5; yedek tek nesil (`.bak`); yarım oturum otomatik işlenmez, sadece bildirilir (kurtarma kullanıcı kararı — YAGNI).
 ```
 
-- [ ] **Step 3: Commit + push**
+- [x] **Step 3: Commit + push**
 
 ```bash
 git add SPEC.md

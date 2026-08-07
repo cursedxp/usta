@@ -98,6 +98,14 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 - **Format-uyumlu drill:** senaryo çoktan-seçmeli / yazma görevi / prova — hedefin gerçek sınav formatı.
 - **Medium sınırı:** terminalde çalışmayan modüller haritada `dış kaynak gerekli` olarak işaretlenir — sahte tamlık yok.
 
+## 4.11 Sağlamlaştırma (v0.9)
+
+- **Ham oturum kaydı:** her turn anında `.usta/sessions/<konu>-<zaman>.jsonl`'e iner; başarılı kapanışta `.done.jsonl`. Flush ölse/terminal çökse oturum diskte — açılışta yarım oturum bildirilir.
+- **Olay seli tavanı:** 5+ dosyalık debounce batch'i (git checkout, format-all) LLM'siz geçer; `FileMemory` sessizce senkronlanır.
+- **Konu kilidi:** `.usta/.lock-<konu>` — eşzamanlı ikinci oturum onayla açılır, progress sessizce ezilmez. Pipe modunda uyarı + devam.
+- **Yedek:** `write_atomic` önceki sürümü `.bak`'a kopyalar — kötü model çıktısı geri alınabilir.
+- **Budama + sır filtresi:** progress 20-madde eşiğiyle budanır; `.pem`/`.key`/`secret`/`credential` dosyaları watcher'dan LLM'e asla gitmez.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -186,6 +194,7 @@ usta/
 - **Her-konu (v0.6):** yaklaşım dosyaları elle değil ilk-oturum tanışmasıyla üretilir; curriculum proje-lokal (`.usta/learner/curriculum/`) yaşar — §7'deki global `learner/curriculum/` yerine (izolasyon: harita da konu+proje bağlamına ait). Kapanış bölücü formatı `===DOSYA: <ad>===`.
 - **Bağlam (v0.7):** pencere **modele göre türetilir** (`backend.context_window()`: opus/sonnet/fable 1M, haiku 200k) — sabit değil; kompaksiyon eşiği %70, korunan kuyruk 4 mesaj; ölçüm = son çağrının `usage` toplamı (input + cache_read + cache_creation) — ayrı sayaç tutulmaz, kaynak API/CLI raporudur.
 - **Hedefli öğrenme (v0.8):** hedef ayrı mod değil approach alanı; tarih referansı system prompt `BUGÜN` bölümünden (`load_system_prompt` `today` parametresi aldı — model saati güvenilmez). Tempo/ölçüm progress'te yaşar, kod tarafında hedef mantığı YOK (ince kabuk korundu).
+- **Sağlamlaştırma (v0.9):** transcript/lock hataları warn-and-continue (ana akışı asla kırmaz); batch tavanı 5; yedek tek nesil (`.bak`); yarım oturum otomatik işlenmez, sadece bildirilir (kurtarma kullanıcı kararı — YAGNI).
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
