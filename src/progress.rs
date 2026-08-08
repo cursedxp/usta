@@ -29,6 +29,12 @@ pub fn curriculum_path(project_root: &Path, topic: &str) -> PathBuf {
 /// Kapanış yanıtı bölücüsü — model her dosyayı bununla başlatır.
 pub const FILE_DELIM: &str = "===DOSYA:";
 
+/// Profil boşken açılış turn'lerine eklenen tanışma talimatı (spec Ç3a).
+const MEET_BLOCK: &str = "\n[PROFİL BOŞ] Kullanıcıyı henüz tanımıyorsun. Sohbetin \
+başında kısaca tanış — adı, bu alanla geçmişi, nasıl öğrenmeyi sevdiği. En fazla \
+1-2 soru, form değil; konuya girmeyi geciktirme. Kullanıcı kendini zaten anlattıysa \
+tekrar sorma. Öğrendiklerin oturum kapanışında profiline yazılacak.\n";
+
 /// Kapanış yanıtını (ad, içerik) çiftlerine ayır. Bölücü yoksa tüm yanıt
 /// tek "progress" dosyası sayılır — eski format geriye uyumlu kalır.
 pub fn split_files(reply: &str) -> Vec<(String, String)> {
@@ -98,9 +104,10 @@ pub fn closing_prompt(
 /// Açılış drilli turn'ü: progress varsa oturum başında Usta ilk sözü alır ve
 /// geri çağırma sorusu sorar (testing effect — USTA.md "Açılış Drilli" kuralı).
 /// main.rs'e bağlandığı yer: Task 3 (açılış drilli tetiği).
-pub fn opening_prompt(topic: &str) -> String {
+pub fn opening_prompt(topic: &str, profile_generic: bool) -> String {
+    let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     format!(
-        "[OTURUM AÇILIŞI — GERİ ÇAĞIRMA DRİLLİ]\n\
+        "[OTURUM AÇILIŞI — GERİ ÇAĞIRMA DRİLLİ]\n{meet_block}\
          Konu: {topic}. Progress dosyandaki 'Geri çağırma soruları'ndan 2-3 tanesini seç \
          ve bana SOR — cevaplarını verme, anlatma. Kısa tut: 2 dakikalık ısınma, sonra \
          günün işine geçeriz. Progress'te soru yoksa seviyeme uygun 2 küçük hatırlama \
@@ -112,7 +119,7 @@ pub fn opening_prompt(topic: &str) -> String {
 /// Yeni konu tanışma turn'ü: yaklaşım + müfredat haritası henüz yok — Usta
 /// açık sohbetle türetir (USTA.md "Yeni Konu Tanışması"). Sabit form değil:
 /// kullanıcının söylediğinden türetilir, yön kullanıcıda kalır.
-pub fn onboarding_prompt(topic: &str, intro: Option<&str>) -> String {
+pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool) -> String {
     // Kullanıcının konu girişinde yazdığı ham metin tanışmanın İLK CEVABIDIR —
     // slug'a indirgenip atılırsa model zaten söylenenleri yeniden sorar
     // ("müşterime Coolify kuracağım, Fedora..." → "ne peşindesin?" faciası).
@@ -126,9 +133,10 @@ pub fn onboarding_prompt(topic: &str, intro: Option<&str>) -> String {
         ),
         _ => String::new(),
     };
+    let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     format!(
         "[YENİ KONU — TANIŞMA]\n\
-         Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n{intro_block}\
+         Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n{intro_block}{meet_block}\
          Kısa, DOĞAL bir tanışma yap — bu bir form değil: tek mesajda en fazla iki soru \
          sor, cevaba göre devam et; numaralı soru listesi basma. Öğren: ne yapmak/öğrenmek \
          istiyor, elinde ne var. Keşif/hedef ayrımını KENDİN çıkar — kullanıcıya bu \
@@ -276,18 +284,19 @@ mod tests {
         let s = onboarding_prompt(
             "hosting",
             Some("müşterimin hesabına coolify kuracağım, Fedora, temel güvenlik lazım"),
+            false,
         );
         assert!(s.contains("coolify kuracağım"));
         assert!(s.contains("İLK CEVABI"));
         assert!(s.contains("tekrar sorma"));
         // Intro yoksa blok hiç girmez.
-        let bare = onboarding_prompt("hosting", None);
+        let bare = onboarding_prompt("hosting", None, false);
         assert!(!bare.contains("İLK CEVABI"));
     }
 
     #[test]
     fn onboarding_prompt_infers_goal_without_jargon_and_limits_questions() {
-        let s = onboarding_prompt("almanca", None);
+        let s = onboarding_prompt("almanca", None, false);
         // Keşif/hedef terimleri kullanıcıya SORULMAZ — model kendisi çıkarır.
         assert!(!s.contains("keşif mi"));
         assert!(s.contains("KENDİN çıkar"));
@@ -299,7 +308,7 @@ mod tests {
 
     #[test]
     fn opening_prompt_embeds_topic_and_asks_to_quiz() {
-        let s = opening_prompt("rust");
+        let s = opening_prompt("rust", false);
         assert!(s.contains("rust"));
         assert!(s.contains("GERİ ÇAĞIRMA DRİLLİ"));
         assert!(s.contains("SOR"));
@@ -307,7 +316,7 @@ mod tests {
 
     #[test]
     fn onboarding_prompt_embeds_topic_and_open_conversation() {
-        let s = onboarding_prompt("linux-guvenlik", None);
+        let s = onboarding_prompt("linux-guvenlik", None, false);
         assert!(s.contains("linux-guvenlik"));
         assert!(s.contains("TANIŞMA"));
         assert!(s.contains("form"));
@@ -317,15 +326,27 @@ mod tests {
     fn onboarding_prompt_does_not_tell_model_it_writes_files() {
         // Sert Kural 6: modelin dosya yazma aracı yok — kapanış içeriğini üretir,
         // dosyayı kabuk yazar. Prompt modeli yazma denemesine itmemeli.
-        let s = onboarding_prompt("rust", None);
+        let s = onboarding_prompt("rust", None, false);
         assert!(!s.contains("dosyalara yazacaksın"));
         assert!(s.contains("kabuğu yazar"));
     }
 
     #[test]
     fn opening_prompt_mentions_curriculum_position() {
-        let s = opening_prompt("rust");
+        let s = opening_prompt("rust", false);
         assert!(s.contains("harita"));
+    }
+
+    #[test]
+    fn opening_prompts_include_meet_block_only_when_profile_generic() {
+        let on = onboarding_prompt("rust", None, true);
+        assert!(on.contains("[PROFİL BOŞ]"));
+        assert!(on.contains("1-2 soru"));
+        assert!(!onboarding_prompt("rust", None, false).contains("[PROFİL BOŞ]"));
+
+        let op = opening_prompt("rust", true);
+        assert!(op.contains("[PROFİL BOŞ]"));
+        assert!(!opening_prompt("rust", false).contains("[PROFİL BOŞ]"));
     }
 
     #[test]

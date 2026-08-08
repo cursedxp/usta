@@ -133,6 +133,13 @@ async fn main() -> Result<()> {
         let (mut session, recorder, lock, has_progress) =
             build_session(&global, &project_root, &topic, &today())?;
         ui::banner(&topic, &backend.label());
+        // Profil hâlâ gömülü jenerik şablonsa (veya hiç yoksa) Usta kullanıcıyı
+        // tanımıyor demektir — açılış turn'üne kısa tanışma talimatı eklenir (spec Ç3a).
+        let profile_generic = std::fs::read_to_string(global.join("learner/profile.md"))
+            .ok()
+            .as_deref()
+            .map(profile_is_generic)
+            .unwrap_or(true);
         run_plain_loop(
             &mut backend,
             &mut session,
@@ -141,6 +148,7 @@ async fn main() -> Result<()> {
             &topic,
             has_progress,
             intro.as_deref(),
+            profile_generic,
             &mut watch_rx,
         )
         .await?;
@@ -172,6 +180,7 @@ async fn run_plain_loop(
     topic: &str,
     has_progress: bool,
     intro: Option<&str>,
+    profile_generic: bool,
     watch_rx: &mut tokio::sync::mpsc::UnboundedReceiver<PathBuf>,
 ) -> Result<()> {
     // Girdi thread'i + debounce durumu — plain yola özgü (rustyline).
@@ -183,7 +192,7 @@ async fn run_plain_loop(
     // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
     // 2-3 geri çağırma sorusuyla ısındırır (testing effect — USTA.md kuralı).
     if has_progress {
-        let opening = progress::opening_prompt(topic);
+        let opening = progress::opening_prompt(topic, profile_generic);
         session.push_user(&opening);
         recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
@@ -197,7 +206,7 @@ async fn run_plain_loop(
         }
     } else {
         // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
-        let onboarding = progress::onboarding_prompt(topic, intro);
+        let onboarding = progress::onboarding_prompt(topic, intro, profile_generic);
         session.push_user(&onboarding);
         recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
@@ -817,6 +826,16 @@ fn run_reset_factory() -> Result<()> {
     Ok(())
 }
 
+/// Profil hâlâ gömülü jenerik şablon mu? (= Usta kullanıcıyı henüz tanımıyor.)
+/// Trim'li karşılaştırma — satır sonu/boşluk farkı yanlış-negatif üretmesin.
+pub(crate) fn profile_is_generic(disk: &str) -> bool {
+    defaults::global_defaults()
+        .into_iter()
+        .find(|(rel, _, _)| *rel == "learner/profile.md")
+        .map(|(_, c, _)| c.trim() == disk.trim())
+        .unwrap_or(false)
+}
+
 /// Profil sıfırlama çekirdeği — SAF (onay yok, global_root yok): mevcut
 /// profili `.bak`'a al, gömülü jenerik şablonu yaz. Konu progress'lerine
 /// DOKUNMAZ (spec Ç2).
@@ -1121,6 +1140,18 @@ mod tests {
         // Regresyon: konu ve factory aynen.
         assert_eq!(parse_command(&args("--factory")).unwrap(), Command::Reset(ResetTarget::Factory));
         assert!(matches!(parse_command(&args("rust")).unwrap(), Command::Reset(ResetTarget::Topic(t)) if t == "rust"));
+    }
+
+    #[test]
+    fn profile_is_generic_matches_embedded_template_only() {
+        let sablon = defaults::global_defaults()
+            .into_iter()
+            .find(|(rel, _, _)| *rel == "learner/profile.md")
+            .map(|(_, c, _)| c)
+            .unwrap();
+        assert!(profile_is_generic(sablon));
+        assert!(profile_is_generic(&format!("{sablon}\n"))); // satır sonu toleransı
+        assert!(!profile_is_generic("# Öğrenci Profili — Anil\nkişisel"));
     }
 
     #[test]

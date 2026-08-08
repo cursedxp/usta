@@ -431,11 +431,17 @@ pub async fn run(
         page(&mut tui, welcome::render_welcome(&data, w))?;
     }
 
-    // Açılış drilli / tanışma (main.rs plain yolunun TUI karşılığı).
+    // Açılış drilli / tanışma (main.rs plain yolunun TUI karşılığı). Profil
+    // hâlâ gömülü jenerik şablonsa (veya hiç yoksa) Usta kullanıcıyı tanımıyor
+    // demektir — açılış turn'üne kısa tanışma talimatı eklenir (spec Ç3a).
+    let profile_generic = read(global.join("learner/profile.md"))
+        .as_deref()
+        .map(crate::profile_is_generic)
+        .unwrap_or(true);
     let opening = if has_progress {
-        progress::opening_prompt(&topic)
+        progress::opening_prompt(&topic, profile_generic)
     } else {
-        progress::onboarding_prompt(&topic, intro.as_deref())
+        progress::onboarding_prompt(&topic, intro.as_deref(), profile_generic)
     };
     session.push_user(&opening);
     recorder.user(&opening);
