@@ -51,24 +51,53 @@ fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
 /// Kullanıcı bloğu: boş ayraç satırı + turuncu `❯ ` önek + NORMAL renkli metin.
 /// DIM KULLANMA — koyu temalarda zemine karışıp görünmez oluyordu (spec S1).
 /// Çok satırlı gönderimde devam satırları 2 boşluk girintili — yapıştırma yapısı korunur.
-fn user_echo_text(line: &str) -> Text<'static> {
+fn user_echo_text(line: &str, width: u16) -> Text<'static> {
+    // Önek 2 sütun ("❯ " / "  "); metin bu payı düşen genişliğe sarılır ki
+    // uzun mesaj tek satırda kesilmesin (page_reply markdown'ı zaten sarar,
+    // echo sarmayınca kırpılıyordu). İlk GÖRSEL satır ❯, gerisi 2 boşluk —
+    // hem çok-satırlı yapıştırma hem tek-satır sarma aynı hizada okunur.
+    let inner = (width as usize).saturating_sub(2).max(1);
     let mut lines: Vec<Line> = vec![Line::raw("")];
-    for (i, l) in line.lines().enumerate() {
-        if i == 0 {
-            lines.push(Line::from(vec![
-                Span::styled("❯ ", ratatui::style::Style::default().fg(ratatui::style::Color::Indexed(208))),
-                Span::raw(l.to_string()),
-            ]));
-        } else {
-            lines.push(Line::from(vec![Span::raw("  "), Span::raw(l.to_string())]));
+    let mut first_visual = true;
+    for logical in line.split('\n') {
+        for chunk in wrap_cells(logical, inner) {
+            let prefix = if first_visual {
+                Span::styled("❯ ", ratatui::style::Style::default().fg(ratatui::style::Color::Indexed(208)))
+            } else {
+                Span::raw("  ")
+            };
+            lines.push(Line::from(vec![prefix, Span::raw(chunk)]));
+            first_visual = false;
         }
     }
     Text::from(lines)
 }
 
-/// Kullanıcının gönderdiği satırı scrollback'e bas.
+/// Metni HÜCRE genişliğine (unicode-width) böl — kelime değil karakter bazlı,
+/// input kutusunun `wrap_visual`'ıyla tutarlı. Boş girdi → tek boş satır.
+fn wrap_cells(s: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let width = width.max(1);
+    let mut rows: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut col = 0usize;
+    for ch in s.chars() {
+        let w = ch.width().unwrap_or(0).max(1);
+        if col + w > width && !cur.is_empty() {
+            rows.push(std::mem::take(&mut cur));
+            col = 0;
+        }
+        cur.push(ch);
+        col += w;
+    }
+    rows.push(cur);
+    rows
+}
+
+/// Kullanıcının gönderdiği satırı scrollback'e bas — anlık genişliğe sararak.
 fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
-    page(tui, user_echo_text(line))
+    let w = current_width(tui);
+    page(tui, user_echo_text(line, w))
 }
 
 /// Anlık terminal genişliği — resize sonrası sarma doğru kalsın (spec B3).
@@ -584,7 +613,8 @@ mod tests {
 
     #[test]
     fn user_echo_prefixes_first_line_and_indents_rest() {
-        let t = user_echo_text("satır1\nsatır2");
+        // Geniş genişlik → sarma yok, yalnız \n bölünmesi.
+        let t = user_echo_text("satır1\nsatır2", 80);
         let lines: Vec<String> = t.lines.iter().map(line_text).collect();
         // [0] boş ayraç satırı, [1] ❯ + metin, [2] girintili devam.
         assert_eq!(lines[0], "");
@@ -593,8 +623,23 @@ mod tests {
     }
 
     #[test]
+    fn user_echo_wraps_long_line_to_width() {
+        // 50 'a', genişlik 20 → iç genişlik 18 → 18+18+14 = 3 içerik satırı.
+        // Uzun tek satır KESİLMEZ, sarılır (bug: page_reply sarar, echo sarmıyordu).
+        let t = user_echo_text(&"a".repeat(50), 20);
+        let lines: Vec<String> = t.lines.iter().map(line_text).collect();
+        assert_eq!(lines[0], "");
+        assert!(lines[1].starts_with("❯ "), "ilk görsel satır ❯: {:?}", lines[1]);
+        assert_eq!(lines[1].chars().filter(|c| *c == 'a').count(), 18, "ilk satır iç genişlik kadar");
+        assert!(lines[2].starts_with("  "), "devam satırı girintili: {:?}", lines[2]);
+        let total: usize = lines.iter().map(|l| l.chars().filter(|c| *c == 'a').count()).sum();
+        assert_eq!(total, 50, "hiçbir karakter kaybolmaz");
+        assert!(t.lines.len() >= 4, "birden çok görsel satıra bölündü: {}", t.lines.len());
+    }
+
+    #[test]
     fn user_echo_text_is_not_dim() {
-        let t = user_echo_text("merhaba");
+        let t = user_echo_text("merhaba", 80);
         // Hiçbir span DIM taşımaz — görünürlük sorununun kökü buydu (spec S1).
         for l in &t.lines {
             for s in &l.spans {
@@ -605,7 +650,7 @@ mod tests {
 
     #[test]
     fn user_echo_prefix_is_orange() {
-        let t = user_echo_text("x");
+        let t = user_echo_text("x", 80);
         let first = &t.lines[1].spans[0];
         assert_eq!(first.content.as_ref(), "❯ ");
         assert_eq!(first.style.fg, Some(ratatui::style::Color::Indexed(208)));
