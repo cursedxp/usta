@@ -11,7 +11,7 @@ use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures_util::StreamExt;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -46,6 +46,29 @@ fn page_reply(tui: &mut Tui, reply: &str, width: u16) -> Result<()> {
 /// Soluk sistem bildirimi (ui::notice'un TUI karşılığı).
 fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
     page(tui, ansi_to_text(&format!("\x1b[2m· {msg}\x1b[0m")))
+}
+
+/// Kullanıcı bloğu: boş ayraç satırı + turuncu `❯ ` önek + NORMAL renkli metin.
+/// DIM KULLANMA — koyu temalarda zemine karışıp görünmez oluyordu (spec S1).
+/// Çok satırlı gönderimde devam satırları 2 boşluk girintili — yapıştırma yapısı korunur.
+fn user_echo_text(line: &str) -> Text<'static> {
+    let mut lines: Vec<Line> = vec![Line::raw("")];
+    for (i, l) in line.lines().enumerate() {
+        if i == 0 {
+            lines.push(Line::from(vec![
+                Span::styled("❯ ", ratatui::style::Style::default().fg(ratatui::style::Color::Indexed(208))),
+                Span::raw(l.to_string()),
+            ]));
+        } else {
+            lines.push(Line::from(vec![Span::raw("  "), Span::raw(l.to_string())]));
+        }
+    }
+    Text::from(lines)
+}
+
+/// Kullanıcının gönderdiği satırı scrollback'e bas.
+fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
+    page(tui, user_echo_text(line))
 }
 
 /// Anlık terminal genişliği — resize sonrası sarma doğru kalsın (spec B3).
@@ -290,6 +313,9 @@ pub async fn run(
                     None => return Ok(None), // konu vermeden çıktı
                 };
                 welcome_shown = true;
+                if !raw.trim().is_empty() {
+                    page_user_echo(&mut tui, raw.trim())?;
+                }
                 match crate::interpret_topic_input(&raw, &local) {
                     // GÜVENLİ FALLBACK: interpret yalnız (boş girdi + local boş)
                     // durumunda None döner; ask_topic boş-Enter sentinelini yalnız
@@ -462,8 +488,8 @@ pub async fn run(
                     Action::Exit => break,
                     Action::Submit(line) => {
                         if line == "/quit" { break; }
-                        // Gönderilen satırı soluk iz olarak scrollback'e bas.
-                        page(&mut tui, ansi_to_text(&format!("\x1b[2m│ > {line}\x1b[0m")))?;
+                        // Gönderilen satırı belirgin kullanıcı bloğu olarak scrollback'e bas.
+                        page_user_echo(&mut tui, &line)?;
                         session.push_user(&line);
                         recorder.user(&line);
                         match ask_live(
@@ -544,6 +570,40 @@ fn short_dir(p: &Path) -> String {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::style::Modifier;
+
+    fn line_text(l: &ratatui::text::Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn user_echo_prefixes_first_line_and_indents_rest() {
+        let t = user_echo_text("satır1\nsatır2");
+        let lines: Vec<String> = t.lines.iter().map(line_text).collect();
+        // [0] boş ayraç satırı, [1] ❯ + metin, [2] girintili devam.
+        assert_eq!(lines[0], "");
+        assert_eq!(lines[1], "❯ satır1");
+        assert_eq!(lines[2], "  satır2");
+    }
+
+    #[test]
+    fn user_echo_text_is_not_dim() {
+        let t = user_echo_text("merhaba");
+        // Hiçbir span DIM taşımaz — görünürlük sorununun kökü buydu (spec S1).
+        for l in &t.lines {
+            for s in &l.spans {
+                assert!(!s.style.add_modifier.contains(Modifier::DIM), "DIM span: {:?}", s.content);
+            }
+        }
+    }
+
+    #[test]
+    fn user_echo_prefix_is_orange() {
+        let t = user_echo_text("x");
+        let first = &t.lines[1].spans[0];
+        assert_eq!(first.content.as_ref(), "❯ ");
+        assert_eq!(first.style.fg, Some(ratatui::style::Color::Indexed(208)));
+    }
 
     #[test]
     fn classify_locked_key_ctrl_c_and_d_are_cancel_requests() {
