@@ -116,14 +116,14 @@ pub fn onboarding_prompt(topic: &str) -> String {
     format!(
         "[YENİ KONU — TANIŞMA]\n\
          Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n\
-         Kısa bir tanışma başlat: ne öğrenmek istiyorum, neden, hedefim ne, elimde ne \
-         var? Bu bir form değil — AÇIK sohbet; ben ne söylersem oradan türet, başka bir \
-         şey istiyorsam onu takip et. Şunu mutlaka netleştir: bu keşif mi (merak, açık \
-         uçlu), yoksa somut bir hedef mi (sertifika, seviye, tarihli çıktı — ör. AWS SAA, \
-         Goethe B1, PMP)? Hedefliyse: ne, hangi tarihte, geçme eşiği ne, formatı ne — \
-         approach'un `## Hedef` bölümüne yazılacak. Harita resmi çerçeveden kurulur (sınav \
-         müfredatı / exam guide / CEFR) — web'de araştır. Alanı yeterince bilmiyorsan web'de \
-         araştır. \
+         Kısa, DOĞAL bir tanışma yap — bu bir form değil: tek mesajda en fazla iki soru \
+         sor, cevaba göre devam et; numaralı soru listesi basma. Öğren: ne yapmak/öğrenmek \
+         istiyor, elinde ne var. Keşif/hedef ayrımını KENDİN çıkar — kullanıcıya bu \
+         terimlerle sorma; söylediklerinden belli olmuyorsa jargonsuz tek soru: 'belirli \
+         bir tarihe/sınava mı hazırlanıyorsun, yoksa merakına mı bakıyoruz?'. Hedefliyse \
+         ne/tarih/eşik/format bilgisini sohbet içinde topla — approach'un `## Hedef` \
+         bölümüne yazılacak; harita resmi çerçeveden kurulur (sınav müfredatı / exam \
+         guide / CEFR) — web'de araştır. Alanı yeterince bilmiyorsan web'de araştır. \
          Oturum kapanışında senden yaklaşım + TAM müfredat haritası İÇERİĞİ istenecek; \
          dosyaları Usta kabuğu yazar, sen oturum içinde dosya yazmaya çalışma (Sert Kural 6) — \
          tanışmayı buna göre derinleştir ama derse çevirme, kısa tut."
@@ -259,10 +259,15 @@ mod tests {
     }
 
     #[test]
-    fn onboarding_prompt_asks_exploration_or_goal() {
+    fn onboarding_prompt_infers_goal_without_jargon_and_limits_questions() {
         let s = onboarding_prompt("almanca");
-        assert!(s.contains("keşif mi"));
-        assert!(s.contains("hedef"));
+        // Keşif/hedef terimleri kullanıcıya SORULMAZ — model kendisi çıkarır.
+        assert!(!s.contains("keşif mi"));
+        assert!(s.contains("KENDİN çıkar"));
+        // Jargonsuz yedek soru + soru limiti.
+        assert!(s.contains("tarihe/sınava"));
+        assert!(s.contains("en fazla iki soru"));
+        assert!(s.contains("Hedef"));
     }
 
     #[test]
