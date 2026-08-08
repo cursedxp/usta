@@ -72,29 +72,45 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     let mut parts: Vec<String> = Vec::new();
 
     // Model bugünü güvenilir bilmez — "sınava kaç hafta kaldı" gibi hesaplar
-    // için sabit referans en başta verilir (USTA.md "Hedefli Öğrenme").
+    // için sabit referans en başta verilir (GOAL.md "Hedefli Öğrenme").
     parts.push(format!("===== BUGÜN =====\n{today}"));
 
-    read_section(&global.join("USTA.md"), "USTA.md", &mut parts);
-    read_section(
-        &global.join("learner/profile.md"),
-        "learner/profile.md",
-        &mut parts,
-    );
+    read_section(&global.join("SOUL.md"), "SOUL.md", &mut parts);
+    read_section(&global.join("RULES.md"), "RULES.md", &mut parts);
+    read_section(&global.join("TEACHING.md"), "TEACHING.md", &mut parts);
+
+    let project_usta: Option<PathBuf> = project.map(|p| p.join(".usta"));
+
+    // GOAL yalnız hedefli konuda yüklenir — hedefsiz oturumda ~1.5KB tasarruf,
+    // model alakasız sınav-tempo/format kurallarını taşımaz (spec §3 koşullu
+    // satır). Konunun approach dosyası (proje override varsa o, yoksa global
+    // — read_approach_with_override'daki ÖNCELİK aynı) burada YALNIZ "## Hedef"
+    // var mı diye tek seferlik okunur; tam içerik aşağıdaki read_all_approaches
+    // zaten ayrıca yükleyeceği için burada İKİNCİ kez prompt'a eklenmez.
+    let topic_rel = format!("{topic}.md");
+    let topic_approach_path = project_usta
+        .as_ref()
+        .map(|d| d.join("approaches").join(&topic_rel))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| global.join("approaches").join(&topic_rel));
+    let approach_konu = std::fs::read_to_string(&topic_approach_path).unwrap_or_default();
+    if approach_konu.contains("## Hedef") {
+        read_section(&global.join("GOAL.md"), "GOAL.md", &mut parts);
+    }
+
+    read_all_approaches(project_usta.as_ref(), global, &mut parts);
+
+    read_section(&global.join("USER.md"), "USER.md", &mut parts);
     read_section(
         &global.join("learner/index.md"),
         "learner/index.md",
         &mut parts,
     );
 
-    let project_usta: Option<PathBuf> = project.map(|p| p.join(".usta"));
-
-    read_all_approaches(project_usta.as_ref(), global, &mut parts);
-
     if let Some(dir) = &project_usta {
         for rel in [
-            format!("learner/curriculum/{topic}.md"),
             format!("learner/progress/{topic}.md"),
+            format!("learner/curriculum/{topic}.md"),
         ] {
             read_section(&dir.join(&rel), &rel, &mut parts);
         }
@@ -135,15 +151,68 @@ mod tests {
     fn concatenates_existing_files_skips_missing() {
         let (global, _project) = temp_pair("concat");
         fs::create_dir_all(global.join("learner")).unwrap();
-        fs::write(global.join("USTA.md"), "ÇEKIRDEK KURAL").unwrap();
-        fs::write(global.join("learner/profile.md"), "ANIL PROFILI").unwrap();
+        fs::write(global.join("SOUL.md"), "ÇEKIRDEK KURAL").unwrap();
+        fs::write(global.join("USER.md"), "ANIL PROFILI").unwrap();
         // approaches/software.md ve proje/progress bilerek yok.
 
         let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys.contains("ÇEKIRDEK KURAL"));
         assert!(sys.contains("ANIL PROFILI"));
-        assert!(sys.contains("USTA.md"));
+        assert!(sys.contains("SOUL.md"));
         assert!(!sys.contains("software.md"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn system_prompt_loads_split_files_not_index() {
+        let (global, _project) = temp_pair("split");
+        fs::write(global.join("SOUL.md"), "SOUL-İÇERİK").unwrap();
+        fs::write(global.join("RULES.md"), "RULES-İÇERİK").unwrap();
+        fs::write(global.join("TEACHING.md"), "TEACHING-İÇERİK").unwrap();
+        fs::write(global.join("USTA.md"), "İNDEKS-İÇERİK").unwrap();
+
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(sys.contains("SOUL-İÇERİK"));
+        assert!(sys.contains("RULES-İÇERİK"));
+        assert!(sys.contains("TEACHING-İÇERİK"));
+        assert!(!sys.contains("İNDEKS-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn goal_loaded_only_when_approach_has_hedef_section() {
+        let (global, _project) = temp_pair("goal");
+        fs::create_dir_all(global.join("approaches")).unwrap();
+        fs::write(global.join("GOAL.md"), "GOAL-İÇERİK").unwrap();
+        fs::write(global.join("approaches/rust.md"), "YAKLAŞIM — hedef yok").unwrap();
+
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(!sys.contains("GOAL-İÇERİK"));
+
+        fs::write(
+            global.join("approaches/rust.md"),
+            "YAKLAŞIM\n## Hedef\n2026-12-01",
+        )
+        .unwrap();
+
+        let sys2 = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(sys2.contains("GOAL-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn user_md_replaces_profile_in_prompt() {
+        let (global, _project) = temp_pair("usermd");
+        fs::create_dir_all(global.join("learner")).unwrap();
+        fs::write(global.join("USER.md"), "USER-İÇERİK").unwrap();
+        fs::write(global.join("learner/profile.md"), "PROFILE-İÇERİK").unwrap();
+
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(sys.contains("USER-İÇERİK"));
+        assert!(!sys.contains("PROFILE-İÇERİK"));
 
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }
@@ -184,7 +253,7 @@ mod tests {
     #[test]
     fn project_progress_included_when_present() {
         let (global, project) = temp_pair("progress");
-        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        fs::write(global.join("SOUL.md"), "ÇEKIRDEK").unwrap();
 
         let progress_dir = project.join(".usta/learner/progress");
         fs::create_dir_all(&progress_dir).unwrap();
@@ -200,7 +269,7 @@ mod tests {
     #[test]
     fn project_none_skips_progress_without_panicking() {
         let (global, _project) = temp_pair("noproject");
-        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        fs::write(global.join("SOUL.md"), "ÇEKIRDEK").unwrap();
         let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys.contains("ÇEKIRDEK"));
         assert!(!sys.contains("progress/rust.md"));
@@ -226,7 +295,7 @@ mod tests {
     #[test]
     fn project_only_approach_is_loaded_too() {
         let (global, project) = temp_pair("projonly");
-        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        fs::write(global.join("SOUL.md"), "ÇEKIRDEK").unwrap();
         let pa = project.join(".usta/approaches");
         fs::create_dir_all(&pa).unwrap();
         fs::write(pa.join("linux-guvenlik.md"), "KONUYA ÖZEL YAKLAŞIM").unwrap();
@@ -240,7 +309,7 @@ mod tests {
     #[test]
     fn curriculum_included_when_present() {
         let (global, project) = temp_pair("curriculum");
-        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        fs::write(global.join("SOUL.md"), "ÇEKIRDEK").unwrap();
         let cdir = project.join(".usta/learner/curriculum");
         fs::create_dir_all(&cdir).unwrap();
         fs::write(cdir.join("rust.md"), "HARITA: ownership görüldü").unwrap();
@@ -255,7 +324,7 @@ mod tests {
     #[test]
     fn system_prompt_starts_with_today_section() {
         let (global, _project) = temp_pair("today");
-        fs::write(global.join("USTA.md"), "ÇEKIRDEK").unwrap();
+        fs::write(global.join("SOUL.md"), "ÇEKIRDEK").unwrap();
         let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys.starts_with("===== BUGÜN =====\n2026-08-07"));
         let _ = fs::remove_dir_all(global.parent().unwrap());
