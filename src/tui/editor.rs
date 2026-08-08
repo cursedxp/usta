@@ -103,32 +103,77 @@ impl InputBox {
         }
     }
 
-    /// Kutuyu çiz: yuvarlak kenar + `> ` öneki + imleç. Uzun satırda
-    /// tui-input'un visual_scroll'u son kısmı gösterir (iç kaydırma).
+    /// Kutuyu çiz: yuvarlak kenar + `> ` öneki + imleç. Uzun metin kutunun
+    /// iç genişliğinde ALT SATIRA SARILIR (yatay kaydırma yok); iç satır
+    /// sayısını aşarsa dikey pencere imleci takip eder.
     pub fn render(&self, f: &mut Frame, area: Rect) {
-        let inner_w = area.width.saturating_sub(4) as usize; // kenarlar + "> "
-        let scroll = self.input.visual_scroll(inner_w);
-        let shown = sanitize_for_display(&self.input.value().chars().skip(scroll).collect::<String>());
-        let para = Paragraph::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Indexed(208))),
-            Span::raw(shown),
-        ]))
-        .block(
+        let inner_w = area.width.saturating_sub(4) as usize; // kenarlar + "> " öneki
+        let visible = area.height.saturating_sub(2).max(1) as usize; // iç satırlar
+        let (rows, cur_row, cur_col) = wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
+        // Dikey pencere: imleç görünür kalacak şekilde son `visible` satır.
+        let start = (cur_row + 1).saturating_sub(visible);
+        let lines: Vec<Line> = rows
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible)
+            .map(|(i, r)| {
+                let prefix = if i == 0 { "> " } else { "  " };
+                Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(Color::Indexed(208))),
+                    Span::raw(r.clone()),
+                ])
+            })
+            .collect();
+        let para = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray)),
         );
         f.render_widget(para, area);
-        let x = area.x + 3 + (self.input.visual_cursor().saturating_sub(scroll)) as u16;
-        f.set_cursor_position((x.min(area.x + area.width - 2), area.y + 1));
+        let x = area.x + 3 + cur_col as u16;
+        let y = area.y + 1 + (cur_row - start) as u16;
+        f.set_cursor_position((x.min(area.x + area.width - 2), y.min(area.y + area.height - 2)));
     }
 }
 
-/// Tek satırlık kutuda görünmez karakterler görünür işarete çevrilir —
-/// değer (Submit edilen metin) DEĞİŞMEZ, sadece görüntü.
-fn sanitize_for_display(s: &str) -> String {
-    s.chars().map(|c| if c == '\n' { '⏎' } else { c }).collect()
+/// Değeri görsel satırlara sar — genişlik HÜCRE bazlı (unicode-width),
+/// `\n` satırı böler ve satır sonunda ⏎ olarak görünür. İmlecin (karakter
+/// indeksi) satır/sütun karşılığını da döndürür. Saf — render bundan çizer,
+/// Submit edilen değer DEĞİŞMEZ.
+fn wrap_visual(value: &str, width: usize, cursor: usize) -> (Vec<String>, usize, usize) {
+    use unicode_width::UnicodeWidthChar;
+    let width = width.max(1);
+    let mut rows: Vec<String> = vec![String::new()];
+    let mut col = 0usize;
+    let (mut cur_row, mut cur_col) = (0usize, 0usize);
+    for (i, ch) in value.chars().enumerate() {
+        let (ch, w, breaks) = if ch == '\n' {
+            ('⏎', 1usize, true)
+        } else {
+            (ch, ch.width().unwrap_or(0).max(1), false)
+        };
+        if col + w > width {
+            rows.push(String::new());
+            col = 0;
+        }
+        if i == cursor {
+            cur_row = rows.len() - 1;
+            cur_col = col;
+        }
+        rows.last_mut().expect("rows boş olamaz").push(ch);
+        col += w;
+        if breaks {
+            rows.push(String::new());
+            col = 0;
+        }
+    }
+    if cursor >= value.chars().count() {
+        cur_row = rows.len() - 1;
+        cur_col = col;
+    }
+    (rows, cur_row, cur_col)
 }
 
 #[cfg(test)]
@@ -207,9 +252,42 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_for_display_maps_newline_keeps_value_chars() {
-        assert_eq!(sanitize_for_display("a\nb"), "a⏎b");
-        assert_eq!(sanitize_for_display("çğş"), "çğş");
+    fn wrap_visual_wraps_long_text_at_cell_width() {
+        // 10 hücre genişlik, 25 karakter → 3 satır (10+10+5).
+        let v = "a".repeat(25);
+        let (rows, cur_row, cur_col) = wrap_visual(&v, 10, 25);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].chars().count(), 10);
+        assert_eq!(rows[2].chars().count(), 5);
+        // İmleç sondaysa son satırın sonunda.
+        assert_eq!((cur_row, cur_col), (2, 5));
+    }
+
+    #[test]
+    fn wrap_visual_breaks_on_newline_with_visible_marker() {
+        let (rows, _, _) = wrap_visual("ab\ncd", 10, 0);
+        assert_eq!(rows, vec!["ab⏎".to_string(), "cd".to_string()]);
+    }
+
+    #[test]
+    fn wrap_visual_cursor_mid_text_lands_on_correct_row() {
+        let v = "a".repeat(15); // genişlik 10 → satır0: 0..9, satır1: 10..14
+        let (_, cur_row, cur_col) = wrap_visual(&v, 10, 12);
+        assert_eq!((cur_row, cur_col), (1, 2));
+    }
+
+    #[test]
+    fn wrap_visual_turkish_chars_count_one_cell() {
+        let (rows, _, _) = wrap_visual("çğşöüiçğşöüi", 6, 0); // 12 karakter, 6 hücre → 2 satır
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], "çğşöüi");
+    }
+
+    #[test]
+    fn wrap_visual_empty_value_single_empty_row() {
+        let (rows, cur_row, cur_col) = wrap_visual("", 10, 0);
+        assert_eq!(rows, vec![String::new()]);
+        assert_eq!((cur_row, cur_col), (0, 0));
     }
 
     #[test]
