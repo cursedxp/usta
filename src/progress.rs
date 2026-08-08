@@ -112,10 +112,23 @@ pub fn opening_prompt(topic: &str) -> String {
 /// Yeni konu tanışma turn'ü: yaklaşım + müfredat haritası henüz yok — Usta
 /// açık sohbetle türetir (USTA.md "Yeni Konu Tanışması"). Sabit form değil:
 /// kullanıcının söylediğinden türetilir, yön kullanıcıda kalır.
-pub fn onboarding_prompt(topic: &str) -> String {
+pub fn onboarding_prompt(topic: &str, intro: Option<&str>) -> String {
+    // Kullanıcının konu girişinde yazdığı ham metin tanışmanın İLK CEVABIDIR —
+    // slug'a indirgenip atılırsa model zaten söylenenleri yeniden sorar
+    // ("müşterime Coolify kuracağım, Fedora..." → "ne peşindesin?" faciası).
+    let intro_block = match intro {
+        Some(s) if !s.trim().is_empty() => format!(
+            "\nKullanıcı konuyu açarken şunu yazdı — bu, tanışmanın İLK CEVABI sayılır:\n\
+             \"{}\"\n\
+             Buradaki bilgiyi KULLAN: zaten söylediklerini tekrar sorma; söylediklerine \
+             bağlanarak başla ve yalnız eksik kalanları sor.\n",
+            s.trim()
+        ),
+        _ => String::new(),
+    };
     format!(
         "[YENİ KONU — TANIŞMA]\n\
-         Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n\
+         Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n{intro_block}\
          Kısa, DOĞAL bir tanışma yap — bu bir form değil: tek mesajda en fazla iki soru \
          sor, cevaba göre devam et; numaralı soru listesi basma. Öğren: ne yapmak/öğrenmek \
          istiyor, elinde ne var. Keşif/hedef ayrımını KENDİN çıkar — kullanıcıya bu \
@@ -259,8 +272,22 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_prompt_carries_user_intro_and_forbids_reasking() {
+        let s = onboarding_prompt(
+            "hosting",
+            Some("müşterimin hesabına coolify kuracağım, Fedora, temel güvenlik lazım"),
+        );
+        assert!(s.contains("coolify kuracağım"));
+        assert!(s.contains("İLK CEVABI"));
+        assert!(s.contains("tekrar sorma"));
+        // Intro yoksa blok hiç girmez.
+        let bare = onboarding_prompt("hosting", None);
+        assert!(!bare.contains("İLK CEVABI"));
+    }
+
+    #[test]
     fn onboarding_prompt_infers_goal_without_jargon_and_limits_questions() {
-        let s = onboarding_prompt("almanca");
+        let s = onboarding_prompt("almanca", None);
         // Keşif/hedef terimleri kullanıcıya SORULMAZ — model kendisi çıkarır.
         assert!(!s.contains("keşif mi"));
         assert!(s.contains("KENDİN çıkar"));
@@ -280,7 +307,7 @@ mod tests {
 
     #[test]
     fn onboarding_prompt_embeds_topic_and_open_conversation() {
-        let s = onboarding_prompt("linux-guvenlik");
+        let s = onboarding_prompt("linux-guvenlik", None);
         assert!(s.contains("linux-guvenlik"));
         assert!(s.contains("TANIŞMA"));
         assert!(s.contains("form"));
@@ -290,7 +317,7 @@ mod tests {
     fn onboarding_prompt_does_not_tell_model_it_writes_files() {
         // Sert Kural 6: modelin dosya yazma aracı yok — kapanış içeriğini üretir,
         // dosyayı kabuk yazar. Prompt modeli yazma denemesine itmemeli.
-        let s = onboarding_prompt("rust");
+        let s = onboarding_prompt("rust", None);
         assert!(!s.contains("dosyalara yazacaksın"));
         assert!(s.contains("kabuğu yazar"));
     }

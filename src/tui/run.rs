@@ -243,8 +243,15 @@ pub async fn run(
     // Basics"` çalışsın). Argüman yoksa kimlik welcome + girdi kutusundan sor.
     let had_topic_arg = topic_arg.is_some();
     let mut resumed = false; // devam (resume) akışı seçildi mi — tam-mod welcome'ı tetikler
+    // Kullanıcının konu girişindeki HAM metin — yeni konuda tanışma turn'üne
+    // "ilk cevap" olarak taşınır; slug'a indirgeyip atmak modeli zaten
+    // söylenenleri yeniden sormaya mahkum eder. Devam akışında kullanılmaz.
+    let mut intro: Option<String> = None;
     let topic = match topic_arg {
-        Some(t) => crate::slugify_topic(&t),
+        Some(t) => {
+            intro = Some(t.clone());
+            crate::slugify_topic(&t)
+        }
         None => {
             // Konu listeleri burada hesaplanır ve ask_topic'e geçirilir:
             //  - `local`: bu projede devam edilebilir konular (yeni → eski, [0]=son)
@@ -336,6 +343,7 @@ pub async fn run(
                             .await?
                         {
                             page_notice(&mut tui, &format!("konu: {slug} — detayı sohbette anlatırsın"))?;
+                            intro = Some(raw);
                             break slug;
                         }
                         // Ret → giriş sorusuna geri dön (welcome tekrar basılmaz).
@@ -401,7 +409,7 @@ pub async fn run(
     let opening = if has_progress {
         progress::opening_prompt(&topic)
     } else {
-        progress::onboarding_prompt(&topic)
+        progress::onboarding_prompt(&topic, intro.as_deref())
     };
     session.push_user(&opening);
     recorder.user(&opening);

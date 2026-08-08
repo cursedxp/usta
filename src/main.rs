@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        let topic = resolve_topic(&mut backend, topic_arg, &project_root, &global).await?;
+        let (topic, intro) = resolve_topic(&mut backend, topic_arg, &project_root, &global).await?;
 
         // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi
         // lock'unu yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile.)
@@ -139,6 +139,7 @@ async fn main() -> Result<()> {
             &project_root,
             &topic,
             has_progress,
+            intro.as_deref(),
             &mut watch_rx,
         )
         .await?;
@@ -169,6 +170,7 @@ async fn run_plain_loop(
     project_root: &Path,
     topic: &str,
     has_progress: bool,
+    intro: Option<&str>,
     watch_rx: &mut tokio::sync::mpsc::UnboundedReceiver<PathBuf>,
 ) -> Result<()> {
     // Girdi thread'i + debounce durumu — plain yola özgü (rustyline).
@@ -194,7 +196,7 @@ async fn run_plain_loop(
         }
     } else {
         // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
-        let onboarding = progress::onboarding_prompt(topic);
+        let onboarding = progress::onboarding_prompt(topic, intro);
         session.push_user(&onboarding);
         recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
@@ -484,13 +486,16 @@ async fn resolve_topic(
     topic_arg: Option<String>,
     project_root: &Path,
     global: &Path,
-) -> Result<String> {
+) -> Result<(String, Option<String>)> {
+    // Dönüş: (konu, intro) — intro = kullanıcının ham konu girişi; yeni konuda
+    // tanışma turn'üne "ilk cevap" olarak taşınır (devam/pipe yollarında None).
     if let Some(raw) = topic_arg {
-        return Ok(slugify_topic(&raw));
+        let slug = slugify_topic(&raw);
+        return Ok((slug, Some(raw)));
     }
     // Boş-stdin / pipe yolu DOKUNULMAZ: cevaplanamayacak prompt'a takılmadan "genel".
     if !std::io::stdin().is_terminal() {
-        return Ok("genel".to_string());
+        return Ok(("genel".to_string(), None));
     }
     // Bu projede devam edilebilir konuları göster — Enter = en sonuncusuna devam.
     let index_content =
@@ -507,14 +512,14 @@ async fn resolve_topic(
         let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
             Ok(l) => l,
             // Ctrl-D / Ctrl-C → engellemeden "genel"e düş.
-            Err(_) => return Ok("genel".to_string()),
+            Err(_) => return Ok(("genel".to_string(), None)),
         };
         let raw = line.trim();
         // Konu girişi yorumu: devam mı, yeni konu mu? (spec K1). Plain yolda devam/yeni
         // ayrımı yalnız slug'a yansır — TUI'deki görsel notice farkı burada yok.
         match interpret_topic_input(raw, &local) {
-            None => return Ok("genel".to_string()),
-            Some(TopicChoice::Resume(t)) => return Ok(t),
+            None => return Ok(("genel".to_string(), None)),
+            Some(TopicChoice::Resume(t)) => return Ok((t, None)),
             Some(TopicChoice::New(raw)) => {
                 // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
                 let slug = if raw.split_whitespace().count() <= 2 {
@@ -525,13 +530,13 @@ async fn resolve_topic(
                 };
                 if local.contains(&slug) {
                     // Model devam niyetini mevcut slug'a çözdü — onaysız devam.
-                    return Ok(slug);
+                    return Ok((slug, None));
                 }
                 // İlk oturum (kayıtlı konu yok) → onay muafiyeti. Aksi halde sor.
                 if local.is_empty()
                     || confirm(&format!("Yeni konu '{slug}' açılsın mı? [e/H] "), &["e", "evet"])?
                 {
-                    return Ok(slug);
+                    return Ok((slug, Some(raw)));
                 }
                 println!(
                     "vazgeçildi — Enter = {}'e devam, ya da başka konu yaz",
