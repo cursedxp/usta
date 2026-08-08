@@ -50,6 +50,7 @@ async fn main() -> Result<()> {
         Command::Topics => return run_topics(),
         Command::Reset(ResetTarget::Topic(t)) => return run_reset_topic(&t),
         Command::Reset(ResetTarget::Factory) => return run_reset_factory(),
+        Command::Reset(ResetTarget::Profile) => return run_reset_profile(),
         Command::Start(t) => t,
     };
 
@@ -443,6 +444,8 @@ pub enum ResetTarget {
     Topic(String),
     /// Bilinen tüm proje `.usta/`'ları + global brain — sıfır nokta.
     Factory,
+    /// Global kullanıcı profili — gömülü jenerik şablona döner (yedekli).
+    Profile,
 }
 
 /// Komut satırı komutu — argüman ayrıştırma tek yerde, saf ve test edilebilir.
@@ -468,11 +471,12 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
         Some("topics") => Ok(Command::Topics),
         Some("reset") => match rest.next().map(String::as_str) {
             Some("--factory") => Ok(Command::Reset(ResetTarget::Factory)),
+            Some("--profile") | Some("--profil") => Ok(Command::Reset(ResetTarget::Profile)),
             Some(topic) => Ok(Command::Reset(ResetTarget::Topic(slugify_topic(topic)))),
-            None => anyhow::bail!("kullanım: usta reset <konu>  veya  usta reset --factory"),
+            None => anyhow::bail!("kullanım: usta reset <konu>  |  --factory  |  --profile"),
         },
         Some(other) => anyhow::bail!(
-            "bilinmeyen komut: '{other}'. Komutlar: start [konu], init, topics"
+            "bilinmeyen komut: '{other}'. Komutlar: start [konu], init, topics, reset <konu>|--factory|--profile"
         ),
     }
 }
@@ -813,6 +817,54 @@ fn run_reset_factory() -> Result<()> {
     Ok(())
 }
 
+/// Profil sıfırlama çekirdeği — SAF (onay yok, global_root yok): mevcut
+/// profili `.bak`'a al, gömülü jenerik şablonu yaz. Konu progress'lerine
+/// DOKUNMAZ (spec Ç2).
+fn reset_profile_files(global: &Path) -> Result<()> {
+    let sablon = defaults::global_defaults()
+        .into_iter()
+        .find(|(rel, _, _)| *rel == "learner/profile.md")
+        .map(|(_, c, _)| c)
+        .context("gömülü profil şablonu bulunamadı")?;
+    let path = global.join("learner/profile.md");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
+    }
+    if path.exists() {
+        std::fs::copy(&path, path.with_extension("md.bak"))
+            .with_context(|| format!("yedek alınamadı: {}", path.display()))?;
+    }
+    std::fs::write(&path, sablon)
+        .with_context(|| format!("yazılamadı: {}", path.display()))?;
+    Ok(())
+}
+
+/// `usta reset --profile` — onaylı; Usta kullanıcıyı "tanımadan" başlar.
+/// Yıkıcı işlem: TTY yoksa (onay alınamayacak durumda) sessizce koşmak
+/// yerine hatayla çıkar — `confirm()` boş stdin'de "hayır"a düşse de, bu
+/// davranış pipe'ın içeriğine bağımlı kalmasın diye burada açıkça bekleniyor.
+fn run_reset_profile() -> Result<()> {
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("TTY yok — onay alınamıyor, profil sıfırlanmadı. Etkileşimli terminalde çalıştır.");
+    }
+    let global = config::global_root()?;
+    let path = global.join("learner/profile.md");
+    if !confirm(
+        &format!(
+            "Profil sıfırlanacak — Usta seni tanımadan başlayacak (yedek: {}.bak). Devam? [e/H] ",
+            path.display()
+        ),
+        &["e", "evet"],
+    )? {
+        println!("vazgeçildi — profil değişmedi.");
+        return Ok(());
+    }
+    reset_profile_files(&global)?;
+    println!("profil sıfırlandı: {} (eski hali .bak'ta)", path.display());
+    Ok(())
+}
+
 /// Onay iste: stdin'den tek satır oku, kabul listesiyle (küçük harf)
 /// karşılaştır. Stdin kapalı/boş = hayır — güvenli varsayılan.
 fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
@@ -1059,6 +1111,49 @@ mod tests {
             parse_command(&args).unwrap(),
             Command::Reset(ResetTarget::Factory)
         );
+    }
+
+    #[test]
+    fn parse_reset_profile_flag_both_spellings() {
+        let args = |s: &str| vec!["usta".to_string(), "reset".to_string(), s.to_string()];
+        assert_eq!(parse_command(&args("--profile")).unwrap(), Command::Reset(ResetTarget::Profile));
+        assert_eq!(parse_command(&args("--profil")).unwrap(), Command::Reset(ResetTarget::Profile));
+        // Regresyon: konu ve factory aynen.
+        assert_eq!(parse_command(&args("--factory")).unwrap(), Command::Reset(ResetTarget::Factory));
+        assert!(matches!(parse_command(&args("rust")).unwrap(), Command::Reset(ResetTarget::Topic(t)) if t == "rust"));
+    }
+
+    #[test]
+    fn reset_profile_files_backs_up_and_writes_generic_template() {
+        let base = std::env::temp_dir().join(format!("usta_reset_profile_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("learner")).unwrap();
+        std::fs::write(base.join("learner/profile.md"), "# Öğrenci Profili — Anil\nkişisel notlar").unwrap();
+
+        reset_profile_files(&base).unwrap();
+
+        let yeni = std::fs::read_to_string(base.join("learner/profile.md")).unwrap();
+        let sablon = defaults::global_defaults()
+            .into_iter()
+            .find(|(rel, _, _)| *rel == "learner/profile.md")
+            .map(|(_, c, _)| c)
+            .unwrap();
+        assert_eq!(yeni, sablon); // jenerik şablona eşit
+        assert_eq!(
+            std::fs::read_to_string(base.join("learner/profile.md.bak")).unwrap(),
+            "# Öğrenci Profili — Anil\nkişisel notlar"
+        ); // eski içerik yedekte
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reset_profile_files_works_without_existing_profile() {
+        let base = std::env::temp_dir().join(format!("usta_reset_profile_yok_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        reset_profile_files(&base).unwrap(); // dosya yokken de: dizin kurulur, şablon yazılır, .bak yok
+        assert!(base.join("learner/profile.md").exists());
+        assert!(!base.join("learner/profile.md.bak").exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// `write_project_scaffold` bir temp dizinde `.usta/` iskeletini kurar —
