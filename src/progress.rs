@@ -63,17 +63,21 @@ pub fn closing_prompt(
     progress: Option<&str>,
     approach: Option<&str>,
     curriculum: Option<&str>,
+    profile: Option<&str>,
 ) -> String {
     let p = progress.unwrap_or("(dosya henüz yok)");
     let a = approach.unwrap_or("(dosya henüz yok)");
     let c = curriculum.unwrap_or("(dosya henüz yok)");
+    let pr = profile.unwrap_or("(dosya henüz yok)");
     format!(
         "[OTURUM KAPANIYOR — DOSYA GÜNCELLEME]\n\
-         Görev: aşağıdaki üç dosyadan güncellenmesi gerekenleri üret. Her dosyayı şu \
-         satırla başlat: `===DOSYA: <ad>===` (ad: progress | approach | curriculum).\n\n\
+         Görev: aşağıdaki dosyalardan güncellenmesi gerekenleri üret. Her dosyayı şu \
+         satırla başlat: `===DOSYA: <ad>===` (ad: progress | approach | curriculum | \
+         profile — örn. profil üretilecekse `===DOSYA: profile===`).\n\n\
          Mevcut progress ({topic}):\n---\n{p}\n---\n\n\
          Mevcut approach:\n---\n{a}\n---\n\n\
          Mevcut curriculum:\n---\n{c}\n---\n\n\
+         Mevcut profil:\n---\n{pr}\n---\n\n\
          Kurallar:\n\
          - `progress` HER ZAMAN üretilir. Yapı: `# {topic} — İlerleme` başlığı + \
          `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (KANITLA) / \
@@ -97,6 +101,12 @@ pub fn closing_prompt(
          kaldır; curriculum'da değişmeyen bölümleri olduğu gibi koru (yeniden üretme).\n\
          - Oturumda kanıtı olmayanı ekleme; mevcut dosyalardaki geçerli bilgiyi koru \
          (kullanıcı elle düzenlemiş olabilir — düzenlemesini ez-me).\n\
+         - `profile` YALNIZ kullanıcı hakkında bu oturumda yeni/değişen kalıcı bilgi \
+         öğrenildiyse üretilir: ad, geçmiş/deneyim, öğrenme tarzı, tercihler, \
+         tekrarlayan güçlü/zayıf yönler. KONU BİLGİSİ YAZILMAZ — 'X kavramını öğrendi' \
+         progress'in işidir; 'örnek üzerinden öğrenmeyi sever' profile girer. Mevcut \
+         profildeki geçerli bilgiyi KORU (kullanıcı elle düzenlemiş olabilir), ~1 sayfa \
+         tavan, yinelenenleri birleştir. Değişiklik yoksa bu dosyayı HİÇ üretme.\n\
          - Bölücü satırları dışında açıklama/selamlama yazma; her dosya saf markdown."
     )
 }
@@ -199,26 +209,26 @@ mod tests {
 
     #[test]
     fn closing_prompt_embeds_topic_and_existing() {
-        let s = closing_prompt("rust", Some("- Seviye: orta"), None, None);
+        let s = closing_prompt("rust", Some("- Seviye: orta"), None, None, None);
         assert!(s.contains("rust"));
         assert!(s.contains("- Seviye: orta"));
     }
 
     #[test]
     fn closing_prompt_marks_missing_file() {
-        let s = closing_prompt("rust", None, None, None);
+        let s = closing_prompt("rust", None, None, None, None);
         assert!(s.contains("(dosya henüz yok)"));
     }
 
     #[test]
     fn closing_prompt_includes_pruning_rule() {
-        let s = closing_prompt("rust", None, None, None);
+        let s = closing_prompt("rust", None, None, None, None);
         assert!(s.contains("20 madde"));
     }
 
     #[test]
     fn closing_prompt_requests_rich_sections() {
-        let s = closing_prompt("rust", None, None, None);
+        let s = closing_prompt("rust", None, None, None, None);
         assert!(s.contains("Geri çağırma soruları"));
         assert!(s.contains("Hata günlüğü"));
         assert!(s.contains("İpucu merdiveni"));
@@ -263,7 +273,7 @@ mod tests {
 
     #[test]
     fn closing_prompt_embeds_all_three_currents_and_delimiter() {
-        let s = closing_prompt("rust", Some("PMEVCUT"), Some("AMEVCUT"), Some("CMEVCUT"));
+        let s = closing_prompt("rust", Some("PMEVCUT"), Some("AMEVCUT"), Some("CMEVCUT"), None);
         assert!(s.contains("PMEVCUT"));
         assert!(s.contains("AMEVCUT"));
         assert!(s.contains("CMEVCUT"));
@@ -273,10 +283,19 @@ mod tests {
 
     #[test]
     fn closing_prompt_defines_goal_sections() {
-        let s = closing_prompt("almanca", None, None, None);
+        let s = closing_prompt("almanca", None, None, None, None);
         assert!(s.contains("## Hedef Durumu"));
         assert!(s.contains("## Hedef"));
         assert!(s.contains("tempo"));
+    }
+
+    #[test]
+    fn closing_prompt_defines_profile_rules() {
+        let s = closing_prompt("rust", None, None, None, Some("MEVCUT PROFİL"));
+        assert!(s.contains("===DOSYA: profile==="));
+        assert!(s.contains("MEVCUT PROFİL"));
+        assert!(s.contains("KONU BİLGİSİ YAZILMAZ"));
+        assert!(s.contains("yalnız")); // yalnız yeni/değişen bilgi varsa üretilir
     }
 
     #[test]

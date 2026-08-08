@@ -331,6 +331,21 @@ fn build_session(
 /// Oturum kapanışında progress/approach/curriculum dosyalarını LLM'e üretir.
 /// Boş oturumda dokunmaz; bilinmeyen dosya adı uyarıyla atlanır (keyfi yola
 /// asla yazılmaz).
+/// Kapanış dosya adını yazma hedefine çözer — SAF: I/O yok, sadece yol
+/// hesabı. `profile` GLOBAL köke (`global`) yazılır (kişi-hakkında, tüm
+/// konularda ortak); `progress`/`approach`/`curriculum` PROJE köküne
+/// (`project_root`). Bilinmeyen ad → `None` — `flush_progress`'teki
+/// "bilinmeyen dosya atlanır" güvenliği bu sayede izole test edilebilir.
+fn flush_target(name: &str, project_root: &Path, global: &Path, topic: &str) -> Option<PathBuf> {
+    match name {
+        "progress" => Some(progress::progress_path(project_root, topic)),
+        "approach" => Some(progress::approach_path(project_root, topic)),
+        "curriculum" => Some(progress::curriculum_path(project_root, topic)),
+        "profile" => Some(global.join("learner/profile.md")),
+        _ => None,
+    }
+}
+
 async fn flush_progress(
     backend: &mut Backend,
     session: &Session,
@@ -340,9 +355,26 @@ async fn flush_progress(
         return Ok(());
     }
     ui::notice("oturum özetleniyor — dosyalar yazılıyor…");
-    let p_path = progress::progress_path(project_root, &session.topic);
-    let a_path = progress::approach_path(project_root, &session.topic);
-    let c_path = progress::curriculum_path(project_root, &session.topic);
+    // Global kök tek seferde çözülür: hem mevcut profili prompt'a gömmek hem
+    // de kapanışta profile yazmak için kullanılır. Çözülemezse profil bu
+    // oturum için atlanır — progress/approach/curriculum (proje-yerel) buna
+    // bağlı değil, yazımları etkilenmez.
+    let global = match config::global_root() {
+        Ok(g) => Some(g),
+        Err(e) => {
+            ui::warn(&format!("global kök çözülemedi — profil bu oturumda atlanacak: {e}"));
+            None
+        }
+    };
+    let dummy_global = PathBuf::new();
+    let global_for_paths = global.as_deref().unwrap_or(&dummy_global);
+    let p_path = flush_target("progress", project_root, global_for_paths, &session.topic).unwrap();
+    let a_path = flush_target("approach", project_root, global_for_paths, &session.topic).unwrap();
+    let c_path = flush_target("curriculum", project_root, global_for_paths, &session.topic).unwrap();
+    let pr_path = global
+        .as_ref()
+        .map(|g| flush_target("profile", project_root, g, &session.topic).unwrap());
+
     let read = |p: &Path| std::fs::read_to_string(p).ok();
     let mut history = session.history().to_vec();
     history.push(Message::user(progress::closing_prompt(
@@ -350,6 +382,7 @@ async fn flush_progress(
         read(&p_path).as_deref(),
         read(&a_path).as_deref(),
         read(&c_path).as_deref(),
+        pr_path.as_deref().and_then(read).as_deref(),
     )));
     let reply = ask_usta(backend, &session.system, &history).await?;
     let files = progress::split_files(&reply.text);
@@ -361,6 +394,11 @@ async fn flush_progress(
             "progress" => p_path.clone(),
             "approach" => a_path.clone(),
             "curriculum" => c_path.clone(),
+            "profile" => match &pr_path {
+                Some(p) => p.clone(),
+                // global kök yoktu — uyarı zaten yukarıda verildi.
+                None => continue,
+            },
             other => {
                 ui::warn(&format!("bilinmeyen kapanış dosyası atlandı: {other}"));
                 continue;
@@ -376,13 +414,13 @@ async fn flush_progress(
 
     // Global kataloğu güncelle — başarısızlık progress yazımını geri almaz,
     // sadece not düşülür (katalog konfor katmanı, hafızanın kendisi değil).
-    match config::global_root() {
-        Ok(global) => {
-            if let Err(e) = index::record(&global, &session.topic, project_root, &today()) {
+    match &global {
+        Some(g) => {
+            if let Err(e) = index::record(g, &session.topic, project_root, &today()) {
                 ui::warn(&format!("katalog güncellenemedi: {e}"));
             }
         }
-        Err(e) => ui::warn(&format!("katalog güncellenemedi: {e}")),
+        None => ui::warn("katalog güncellenemedi: global kök yok"),
     }
 
     Ok(())
@@ -1033,6 +1071,36 @@ fn print_reply(reply: &backend::Reply, window: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flush_target_maps_profile_to_global_other_three_to_project() {
+        let project = Path::new("/proje");
+        let global = Path::new("/glob");
+        assert_eq!(
+            flush_target("profile", project, global, "rust"),
+            Some(PathBuf::from("/glob/learner/profile.md"))
+        );
+        assert_eq!(
+            flush_target("progress", project, global, "rust"),
+            Some(PathBuf::from("/proje/.usta/learner/progress/rust.md"))
+        );
+        assert_eq!(
+            flush_target("approach", project, global, "rust"),
+            Some(PathBuf::from("/proje/.usta/approaches/rust.md"))
+        );
+        assert_eq!(
+            flush_target("curriculum", project, global, "rust"),
+            Some(PathBuf::from("/proje/.usta/learner/curriculum/rust.md"))
+        );
+    }
+
+    #[test]
+    fn flush_target_rejects_unknown_name() {
+        assert_eq!(
+            flush_target("bilinmeyen", Path::new("/proje"), Path::new("/glob"), "rust"),
+            None
+        );
+    }
 
     #[test]
     fn slugify_lowercases_simple_word() {
