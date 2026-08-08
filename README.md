@@ -53,6 +53,7 @@ usta                    # başlat — konuyu sorar (en kısa yol, bunu yaz)
 usta start rust         # konuyu baştan ver — konu argümanı 'start' ister
 usta topics             # nerede ne öğreniyorum? (katalog)
 usta reset rust         # bu projedeki Rust progress'ini sıfırla (onaylı)
+usta reset --profile    # yalnız profilini sıfırla — Usta seni tanımadan başlar (yedek: profile.md.bak)
 usta reset --factory    # her şeyi sıfırla — Usta seni hiç tanımamış gibi (kelime onaylı)
 usta init               # sadece iskeleti kur (opsiyonel — start zaten kurar)
 ```
@@ -86,7 +87,7 @@ Rust yalnızca kabuk: CLI, LLM client, dosya izleyici (`notify`), `cargo check` 
 ```
 ~/.config/usta/          # GLOBAL beyin (bir kez kurulur, tüm projelerde paylaşılır)
   USTA.md                #   çekirdek davranış + pedagoji kuralları
-  learner/profile.md     #   sen kimsin (öğrenme tarzın)
+  learner/profile.md     #   sen kimsin (öğrenme tarzın) — canlı belge, aşağıya bak
   learner/index.md       #   ## Kayıtlar — konu | proje | tarih kataloğu
   approaches/            #   software.md, _default.md — domaine göre yaklaşım
 
@@ -97,6 +98,8 @@ Rust yalnızca kabuk: CLI, LLM client, dosya izleyici (`notify`), `cargo check` 
 ```
 
 Davranışı değiştirmek = markdown'ı düzenle, Rust'a dokunma. (Global davranış dosyaları güncellenince — scaffold var olanı ezmez — yenilemek için: `rm ~/.config/usta/USTA.md ~/.config/usta/approaches/_default.md` + bir kez `usta`; ya da `usta reset --factory`.)
+
+**Profil yaşam döngüsü:** `learner/profile.md` canlı belgedir — Usta seni tanımıyorken (profil jenerik) oturum başında kısaca tanışır (ad, öğrenme tarzı, 1-2 soru), oturum kapanışında öğrendiği kişi-hakkında bilgiyi (konu bilgisi değil) profiline işler. Kullandıkça seni daha iyi tanır. `usta reset --profile` ile tek komutta unutturursun (eski hali `profile.md.bak`'ta) → sonraki oturumda yeniden tanışır. Profili elle düzenlersen Usta yazdığını ezmez.
 
 ## Durum
 
