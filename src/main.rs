@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
         ui::banner(&topic, &backend.label());
         // Profil hâlâ gömülü jenerik şablonsa (veya hiç yoksa) Usta kullanıcıyı
         // tanımıyor demektir — açılış turn'üne kısa tanışma talimatı eklenir (spec Ç3a).
-        let profile_generic = std::fs::read_to_string(global.join("learner/profile.md"))
+        let profile_generic = std::fs::read_to_string(global.join("USER.md"))
             .ok()
             .as_deref()
             .map(profile_is_generic)
@@ -341,7 +341,7 @@ fn flush_target(name: &str, project_root: &Path, global: &Path, topic: &str) -> 
         "progress" => Some(progress::progress_path(project_root, topic)),
         "approach" => Some(progress::approach_path(project_root, topic)),
         "curriculum" => Some(progress::curriculum_path(project_root, topic)),
-        "profile" => Some(global.join("learner/profile.md")),
+        "profile" => Some(global.join("USER.md")),
         _ => None,
     }
 }
@@ -869,7 +869,7 @@ fn run_reset_factory() -> Result<()> {
 pub(crate) fn profile_is_generic(disk: &str) -> bool {
     defaults::global_defaults()
         .into_iter()
-        .find(|(rel, _, _)| *rel == "learner/profile.md")
+        .find(|(rel, _, _)| *rel == "USER.md")
         .map(|(_, c, _)| c.trim() == disk.trim())
         .unwrap_or(false)
 }
@@ -880,10 +880,10 @@ pub(crate) fn profile_is_generic(disk: &str) -> bool {
 fn reset_profile_files(global: &Path) -> Result<()> {
     let sablon = defaults::global_defaults()
         .into_iter()
-        .find(|(rel, _, _)| *rel == "learner/profile.md")
+        .find(|(rel, _, _)| *rel == "USER.md")
         .map(|(_, c, _)| c)
         .context("gömülü profil şablonu bulunamadı")?;
-    let path = global.join("learner/profile.md");
+    let path = global.join("USER.md");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
@@ -906,7 +906,7 @@ fn run_reset_profile() -> Result<()> {
         anyhow::bail!("TTY yok — onay alınamıyor, profil sıfırlanmadı. Etkileşimli terminalde çalıştır.");
     }
     let global = config::global_root()?;
-    let path = global.join("learner/profile.md");
+    let path = global.join("USER.md");
     if !confirm(
         &format!(
             "Profil sıfırlanacak — Usta seni tanımadan başlayacak (yedek: {}.bak). Devam? [e/H] ",
@@ -942,14 +942,35 @@ fn print_scaffold_status(path: &Path, wrote: bool) {
     }
 }
 
+/// Eski profil konumundan (önceki `learner/` alt yolu) yeni köke (`USER.md`)
+/// tek-seferlik geçiş. Eski dosya var + yeni yoksa taşır (`true`); aksi halde no-op
+/// (`false`) — mevcut `USER.md` asla ezilmez, veri kaybı riski alınmaz.
+fn migrate_profile_to_user_md(global: &Path) -> Result<bool> {
+    let old = global.join("learner/profile.md");
+    let new = global.join("USER.md");
+    if old.exists() && !new.exists() {
+        std::fs::rename(&old, &new)
+            .with_context(|| format!("profil taşınamadı: {} → {}", old.display(), new.display()))?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Global brain kökünü oluşturup varsayılan dosyaları yazar. Kod-sahipli
 /// dosyalar (USTA.md, approaches/*) gömülü içerikle senkronlanır — eskiyse
-/// üstüne yazılır; kullanıcı-sahipli dosyalar (learner/*) yalnız ilk-kez
-/// yazılır (`defaults::Ownership`). Her dosya için `(yol, yazıldı-mı)`
+/// üstüne yazılır; kullanıcı-sahipli dosyalar (learner/*, USER.md) yalnız
+/// ilk-kez yazılır (`defaults::Ownership`). Her dosya için `(yol, yazıldı-mı)`
 /// döner — `run_init` bunu yazdırır, `ensure_scaffold` sessizce yutar.
+/// Yazım döngüsünden ÖNCE eski profil konumundan `USER.md`'ye geçiş
+/// çalıştırılır (spec §5 sıra şartı) — böylece hem `ensure_scaffold` hem
+/// `run_init` (ikisi de bu fonksiyonu çağırır) mevcut kullanıcı verisini
+/// korur, `USER.md`'nin `Ownership::User` ilk-kez-yaz kuralı taşınan dosyanın
+/// üstüne yazmaz.
 fn write_global_defaults(global: &Path) -> Result<Vec<(PathBuf, bool)>> {
     std::fs::create_dir_all(global)
         .with_context(|| format!("global kök oluşturulamadı: {}", global.display()))?;
+    migrate_profile_to_user_md(global)?;
 
     let mut results = Vec::new();
     for (rel, content, ownership) in defaults::global_defaults() {
@@ -1078,7 +1099,7 @@ mod tests {
         let global = Path::new("/glob");
         assert_eq!(
             flush_target("profile", project, global, "rust"),
-            Some(PathBuf::from("/glob/learner/profile.md"))
+            Some(PathBuf::from("/glob/USER.md"))
         );
         assert_eq!(
             flush_target("progress", project, global, "rust"),
@@ -1214,7 +1235,7 @@ mod tests {
     fn profile_is_generic_matches_embedded_template_only() {
         let sablon = defaults::global_defaults()
             .into_iter()
-            .find(|(rel, _, _)| *rel == "learner/profile.md")
+            .find(|(rel, _, _)| *rel == "USER.md")
             .map(|(_, c, _)| c)
             .unwrap();
         assert!(profile_is_generic(sablon));
@@ -1226,20 +1247,20 @@ mod tests {
     fn reset_profile_files_backs_up_and_writes_generic_template() {
         let base = std::env::temp_dir().join(format!("usta_reset_profile_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("learner")).unwrap();
-        std::fs::write(base.join("learner/profile.md"), "# Öğrenci Profili — Anil\nkişisel notlar").unwrap();
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("USER.md"), "# Öğrenci Profili — Anil\nkişisel notlar").unwrap();
 
         reset_profile_files(&base).unwrap();
 
-        let yeni = std::fs::read_to_string(base.join("learner/profile.md")).unwrap();
+        let yeni = std::fs::read_to_string(base.join("USER.md")).unwrap();
         let sablon = defaults::global_defaults()
             .into_iter()
-            .find(|(rel, _, _)| *rel == "learner/profile.md")
+            .find(|(rel, _, _)| *rel == "USER.md")
             .map(|(_, c, _)| c)
             .unwrap();
         assert_eq!(yeni, sablon); // jenerik şablona eşit
         assert_eq!(
-            std::fs::read_to_string(base.join("learner/profile.md.bak")).unwrap(),
+            std::fs::read_to_string(base.join("USER.md.bak")).unwrap(),
             "# Öğrenci Profili — Anil\nkişisel notlar"
         ); // eski içerik yedekte
         let _ = std::fs::remove_dir_all(&base);
@@ -1250,8 +1271,45 @@ mod tests {
         let base = std::env::temp_dir().join(format!("usta_reset_profile_yok_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         reset_profile_files(&base).unwrap(); // dosya yokken de: dizin kurulur, şablon yazılır, .bak yok
-        assert!(base.join("learner/profile.md").exists());
-        assert!(!base.join("learner/profile.md.bak").exists());
+        assert!(base.join("USER.md").exists());
+        assert!(!base.join("USER.md.bak").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn migrate_moves_old_profile_once() {
+        let base = std::env::temp_dir().join(format!("usta_migrate_moves_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("learner")).unwrap();
+        std::fs::write(base.join("learner/profile.md"), "KIŞISEL").unwrap();
+
+        let moved = migrate_profile_to_user_md(&base).unwrap();
+        assert!(moved);
+        assert_eq!(std::fs::read_to_string(base.join("USER.md")).unwrap(), "KIŞISEL");
+        assert!(!base.join("learner/profile.md").exists());
+
+        // İkinci çağrı: eski yol artık yok → no-op.
+        let moved_again = migrate_profile_to_user_md(&base).unwrap();
+        assert!(!moved_again);
+        assert_eq!(std::fs::read_to_string(base.join("USER.md")).unwrap(), "KIŞISEL");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn migrate_never_overwrites_existing_user_md() {
+        let base = std::env::temp_dir().join(format!("usta_migrate_no_overwrite_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("learner")).unwrap();
+        std::fs::write(base.join("learner/profile.md"), "ESKİ").unwrap();
+        std::fs::write(base.join("USER.md"), "YENİ").unwrap();
+
+        let moved = migrate_profile_to_user_md(&base).unwrap();
+        assert!(!moved);
+        assert_eq!(std::fs::read_to_string(base.join("USER.md")).unwrap(), "YENİ");
+        // Veri kaybı riski alınmaz — eski dosya da yerinde bırakılır.
+        assert_eq!(std::fs::read_to_string(base.join("learner/profile.md")).unwrap(), "ESKİ");
+
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1271,16 +1329,19 @@ mod tests {
 
         // Kirlet: kod-sahipli USTA.md eskisin, kullanıcı-sahipli profile düzenlensin.
         std::fs::write(base.join("USTA.md"), "eski sürüm").unwrap();
-        std::fs::write(base.join("learner/profile.md"), "kullanıcı düzenlemesi").unwrap();
+        std::fs::write(base.join("USER.md"), "kullanıcı düzenlemesi").unwrap();
 
         write_global_defaults(&base).unwrap();
 
         // Kod-sahipli senkronlandı — gömülü güncel içerik geri geldi.
+        // Not: USTA.md, Task 1'in brain-split'iyle davranışsız bir indekse
+        // dönüştü ("Sert Kurallar" artık RULES.md'de) — assertion güncel
+        // gömülü içeriğe göre düzeltildi.
         let usta = std::fs::read_to_string(base.join("USTA.md")).unwrap();
-        assert!(usta.contains("Sert Kurallar"));
+        assert!(usta.contains("Müdahale Haritası"));
         // Kullanıcı-sahipli korundu.
         assert_eq!(
-            std::fs::read_to_string(base.join("learner/profile.md")).unwrap(),
+            std::fs::read_to_string(base.join("USER.md")).unwrap(),
             "kullanıcı düzenlemesi"
         );
 

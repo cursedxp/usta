@@ -300,7 +300,7 @@ pub async fn run(
                     &mut tui,
                     &mut editor,
                     &mut events,
-                    read(global.join("learner/profile.md")).as_deref(),
+                    read(global.join("USER.md")).as_deref(),
                     &backend.label(),
                     &short_dir(project_root),
                     &local,
@@ -420,7 +420,7 @@ pub async fn run(
     // Salt yeni konuda ise yalnız kimlik welcome kalır.
     if had_topic_arg || resumed {
         let data = welcome::gather(
-            read(global.join("learner/profile.md")).as_deref(),
+            read(global.join("USER.md")).as_deref(),
             read(progress::progress_path(project_root, &topic)).as_deref(),
             read(progress::curriculum_path(project_root, &topic)).as_deref(),
             &topic,
@@ -434,7 +434,7 @@ pub async fn run(
     // Açılış drilli / tanışma (main.rs plain yolunun TUI karşılığı). Profil
     // hâlâ gömülü jenerik şablonsa (veya hiç yoksa) Usta kullanıcıyı tanımıyor
     // demektir — açılış turn'üne kısa tanışma talimatı eklenir (spec Ç3a).
-    let profile_generic = read(global.join("learner/profile.md"))
+    let profile_generic = read(global.join("USER.md"))
         .as_deref()
         .map(crate::profile_is_generic)
         .unwrap_or(true);
