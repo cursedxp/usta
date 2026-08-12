@@ -7,11 +7,14 @@ use unicode_width::UnicodeWidthStr;
 
 const ORANGE: Color = Color::Indexed(208);
 
-const LOGO: [&str; 4] = [
+// 5 rows — a block-letter S needs top, left, middle, right AND bottom bars;
+// the old 4-row version had no bottom bar, so the S looked cut in half.
+const LOGO: [&str; 5] = [
     "██  ██ ██████ ██████ ██████",
     "██  ██ ██       ██   ██  ██",
     "██  ██ ██████   ██   ██████",
-    "██████     ██   ██   ██  ██",
+    "██  ██     ██   ██   ██  ██",
+    "██████ ██████   ██   ██  ██",
 ];
 
 /// All data for the welcome box — render draws from this struct, does no IO.
