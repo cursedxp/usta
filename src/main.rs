@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     let had_project_root = config::find_project_root(&cwd).is_some();
     let project_root = ensure_scaffold(&cwd)?;
     if !had_project_root {
-        ui::notice(".usta/ kuruldu");
+        ui::notice(".usta/ set up");
     }
 
     // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     let mut watch_rx = watcher::spawn(&project_root)?;
 
     for p in transcript::find_unfinished(&project_root) {
-        ui::warn(&format!("yarım oturum kaydı bulundu (flush edilememiş olabilir): {}", p.display()));
+        ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display()));
     }
 
     // İki yol da `(Session, Recorder, PathBuf)` üretir; kapanış paylaşımlı.
@@ -103,7 +103,7 @@ async fn main() -> Result<()> {
             Some(artifacts) => artifacts,
             None => {
                 // Konu verilmeden çıkıldı — oturum/kilit yok, kapanacak şey yok.
-                ui::notice("Görüşürüz — suya girmeye devam et.");
+                ui::notice("See you — keep getting in the water.");
                 return Ok(());
             }
         }
@@ -117,16 +117,16 @@ async fn main() -> Result<()> {
             let pid = std::fs::read_to_string(&lock).unwrap_or_default();
             if std::io::stdin().is_terminal() {
                 let msg = format!(
-                    "Bu konuda başka bir oturum açık görünüyor (pid {}). İki oturum aynı anda \
-                     kapanırsa progress birbirini EZER. Yine de devam? [e/H] ",
+                    "Another session may be open for this topic (pid {}) — progress could clash \
+                     if both sessions close at the same time. Continue anyway? [y/N] ",
                     pid.trim()
                 );
-                if !confirm(&msg, &["e", "evet"])? {
-                    println!("vazgeçildi — önce diğer oturumu kapat (veya kalıntıysa sil: {})", lock.display());
+                if !confirm(&msg, &["e", "evet", "y", "yes"])? {
+                    println!("cancelled — close the other session first (or delete the lock if it's stale: {})", lock.display());
                     return Ok(());
                 }
             } else {
-                ui::warn("kalıntı konu kilidi bulundu — pipe modunda devam ediliyor");
+                ui::warn("stale topic lock found — continuing in pipe mode");
             }
         }
 
@@ -156,16 +156,16 @@ async fn main() -> Result<()> {
     };
 
     if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
-        ui::warn(&format!("progress güncellenemedi: {e} — ham kayıt duruyor: {}", recorder.path().display()));
+        ui::warn(&format!("progress could not be updated: {e} — raw record left on disk: {}", recorder.path().display()));
     } else if session.history().is_empty() {
         // Boş oturum: dosya hiç oluşmadı, işaretlenecek şey yok.
     } else if let Err(e) = transcript::mark_done(recorder.path()) {
-        ui::warn(&format!("oturum kaydı işaretlenemedi: {e}"));
+        ui::warn(&format!("session record could not be marked done: {e}"));
     }
 
     let _ = std::fs::remove_file(&lock);
 
-    ui::notice("Görüşürüz — suya girmeye devam et.");
+    ui::notice("See you — keep getting in the water.");
     Ok(())
 }
 
@@ -310,7 +310,7 @@ async fn ask_usta(
     system: &str,
     history: &[Message],
 ) -> Result<backend::Reply> {
-    let spinner = ui::Spinner::start("Usta düşünüyor…");
+    let spinner = ui::Spinner::start("Usta is thinking…");
     let result = backend.complete(system, history).await;
     spinner.stop().await;
     result
@@ -331,7 +331,7 @@ fn build_session(
 
     let lock = lock_path(project_root, topic);
     if let Err(e) = std::fs::write(&lock, std::process::id().to_string()) {
-        ui::warn(&format!("konu kilidi yazılamadı: {e}"));
+        ui::warn(&format!("topic lock could not be written: {e}"));
     }
 
     let recorder = Recorder::new(transcript::session_path(project_root, topic, &now_stamp()));
@@ -369,7 +369,7 @@ async fn flush_progress(
     if session.history().is_empty() {
         return Ok(());
     }
-    ui::notice("oturum özetleniyor — dosyalar yazılıyor…");
+    ui::notice("summarizing session — writing files…");
     // Global kök tek seferde çözülür: hem mevcut profili prompt'a gömmek hem
     // de kapanışta profile yazmak için kullanılır. Çözülemezse profil bu
     // oturum için atlanır — progress/approach/curriculum (proje-yerel) buna
@@ -377,7 +377,7 @@ async fn flush_progress(
     let global = match config::global_root() {
         Ok(g) => Some(g),
         Err(e) => {
-            ui::warn(&format!("global kök çözülemedi — profil bu oturumda atlanacak: {e}"));
+            ui::warn(&format!("global root could not be resolved — profile will be skipped this session: {e}"));
             None
         }
     };
@@ -402,7 +402,7 @@ async fn flush_progress(
     let reply = ask_usta(backend, &session.system, &history).await?;
     let files = progress::split_files(&reply.text);
     if files.is_empty() {
-        anyhow::bail!("model dosya üretmedi — hiçbir şey yazılmadı");
+        anyhow::bail!("model produced no files — nothing was written");
     }
     for (name, content) in files {
         let path = match name.as_str() {
@@ -415,16 +415,16 @@ async fn flush_progress(
                 None => continue,
             },
             other => {
-                ui::warn(&format!("bilinmeyen kapanış dosyası atlandı: {other}"));
+                ui::warn(&format!("unknown closing file skipped: {other}"));
                 continue;
             }
         };
         if content.is_empty() {
-            ui::warn(&format!("boş içerik atlandı: {name}"));
+            ui::warn(&format!("empty content skipped: {name}"));
             continue;
         }
         progress::write_atomic(&path, &content)?;
-        ui::notice(&format!("güncellendi: {}", path.display()));
+        ui::notice(&format!("updated: {}", path.display()));
     }
 
     // Global kataloğu güncelle — başarısızlık progress yazımını geri almaz,
@@ -432,10 +432,10 @@ async fn flush_progress(
     match &global {
         Some(g) => {
             if let Err(e) = index::record(g, &session.topic, project_root, &today()) {
-                ui::warn(&format!("katalog güncellenemedi: {e}"));
+                ui::warn(&format!("catalog could not be updated: {e}"));
             }
         }
-        None => ui::warn("katalog güncellenemedi: global kök yok"),
+        None => ui::warn("catalog could not be updated: no global root"),
     }
 
     Ok(())
@@ -457,9 +457,9 @@ pub(crate) async fn maybe_compact(
     if session.history().len() <= COMPACT_KEEP_LAST {
         return;
     }
-    ui::notice("bağlam doluyor — ara kayıt alınıyor…");
+    ui::notice("context filling up — taking an interim checkpoint…");
     if let Err(e) = flush_progress(backend, session, project_root).await {
-        ui::warn(&format!("ara kayıt başarısız, kompaksiyon ertelendi: {e}"));
+        ui::warn(&format!("interim checkpoint failed, compaction postponed: {e}"));
         return;
     }
     match config::global_root() {
@@ -467,11 +467,11 @@ pub(crate) async fn maybe_compact(
             session.system =
                 brain::load_system_prompt(&global, Some(project_root), &session.topic, &today());
         }
-        Err(e) => ui::warn(&format!("system prompt yenilenemedi: {e}")),
+        Err(e) => ui::warn(&format!("system prompt could not be refreshed: {e}")),
     }
     session.compact(COMPACT_KEEP_LAST, COMPACT_NOTE);
     backend.reset_session();
-    ui::notice("bağlam sıkıştırıldı — kaldığın yerden devam");
+    ui::notice("context compacted — pick up where you left off");
 }
 
 /// Bugünün yerel tarihi — katalog satırlarının tarih alanı.
@@ -535,10 +535,10 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
             Some("--factory") => Ok(Command::Reset(ResetTarget::Factory)),
             Some("--profile") | Some("--profil") => Ok(Command::Reset(ResetTarget::Profile)),
             Some(topic) => Ok(Command::Reset(ResetTarget::Topic(slugify_topic(topic)))),
-            None => anyhow::bail!("kullanım: usta reset <konu>  |  --factory  |  --profile"),
+            None => anyhow::bail!("usage: usta reset <topic>  |  --factory  |  --profile"),
         },
         Some(other) => anyhow::bail!(
-            "bilinmeyen komut: '{other}'. Komutlar: start [konu], init, topics, reset <konu>|--factory|--profile"
+            "unknown command: '{other}'. Commands: start [topic], init, topics, reset <topic>|--factory|--profile"
         ),
     }
 }
@@ -568,14 +568,14 @@ async fn resolve_topic(
         std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
     let local = index::local_topics(project_root, &index_content);
     if !local.is_empty() {
-        println!("kayıtlı: {} — Enter = {}'e devam", local.join(", "), local[0]);
+        println!("saved: {} — Enter = continue with {}", local.join(", "), local[0]);
     }
     let mut rl = DefaultEditor::new()?;
     // Yeni-konu onayı yalnız burada (plain yol) döngüye alınır: ret cevabı
     // "Konu nedir?" promptuna geri döner — TUI'deki reddet-tekrar-sor akışının
     // eşdeğeri. Resume/ilk-oturum yolları asla bu döngüde takılmaz.
     loop {
-        let line = match rl.readline("Konu nedir? (kısa yaz ya da cümleyle anlat): ") {
+        let line = match rl.readline("What's the topic? (write it short or as a sentence): ") {
             Ok(l) => l,
             // Ctrl-D / Ctrl-C → engellemeden "genel"e düş.
             Err(_) => return Ok(("genel".to_string(), None)),
@@ -600,12 +600,12 @@ async fn resolve_topic(
                 }
                 // İlk oturum (kayıtlı konu yok) → onay muafiyeti. Aksi halde sor.
                 if local.is_empty()
-                    || confirm(&format!("Yeni konu '{slug}' açılsın mı? [e/H] "), &["e", "evet"])?
+                    || confirm(&format!("Open new topic '{slug}'? [y/N] "), &["e", "evet", "y", "yes"])?
                 {
                     return Ok((slug, Some(raw)));
                 }
                 println!(
-                    "vazgeçildi — Enter = {}'e devam, ya da başka konu yaz",
+                    "cancelled — Enter = continue with {}, or type another topic",
                     local[0]
                 );
                 // Döngü başa döner: tekrar "Konu nedir?" sorulur.
@@ -814,7 +814,7 @@ fn run_init() -> Result<()> {
         print_scaffold_status(&path, wrote);
     }
 
-    println!("Hazır. 'usta start <konu>' ile başla.");
+    println!("Ready. Start with 'usta start <topic>'.");
     Ok(())
 }
 
@@ -825,10 +825,10 @@ fn run_topics() -> Result<()> {
         std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
     let list = index::entries(&content);
     if list.is_empty() {
-        println!("Kayıtlı konu yok — 'usta start <konu>' ile başla.");
+        println!("No saved topics — start with 'usta start <topic>'.");
         return Ok(());
     }
-    println!("Konu | Proje | Son oturum");
+    println!("Topic | Project | Last session");
     for e in list {
         println!("{} | {} | {}", e.topic, e.project.display(), e.date);
     }
@@ -840,20 +840,20 @@ fn run_topics() -> Result<()> {
 fn run_reset_topic(topic: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let Some(root) = config::find_project_root(&cwd) else {
-        anyhow::bail!("bu dizinde (veya üstünde) .usta yok — resetlenecek proje bulunamadı");
+        anyhow::bail!("no .usta in this directory (or above) — no project found to reset");
     };
     let path = progress::progress_path(&root, topic);
     if !path.is_file() {
-        println!("kayıt yok: {}", path.display());
+        println!("no record: {}", path.display());
         return Ok(());
     }
-    if !confirm(&format!("{} silinecek. Emin misin? [e/H] ", path.display()), &["e", "evet"])? {
-        println!("vazgeçildi.");
+    if !confirm(&format!("{} will be deleted. Are you sure? [y/N] ", path.display()), &["e", "evet", "y", "yes"])? {
+        println!("cancelled.");
         return Ok(());
     }
     std::fs::remove_file(&path)
-        .with_context(|| format!("silinemedi: {}", path.display()))?;
-    println!("silindi: {}", path.display());
+        .with_context(|| format!("could not delete: {}", path.display()))?;
+    println!("deleted: {}", path.display());
 
     // Katalogdan da düş — katalog yoksa/okunamıyorsa sessizce geç.
     let global = config::global_root()?;
@@ -880,29 +880,29 @@ fn run_reset_factory() -> Result<()> {
     targets.sort();
     targets.dedup();
 
-    println!("FABRİKA SIFIRLAMASI — silinecekler:");
+    println!("FACTORY RESET — will be deleted:");
     for t in &targets {
         println!("  {}", t.display());
     }
     println!("  {} (global brain)", global.display());
-    println!("Not: katalogda olmayan eski projeler listede DEĞİL.");
-    println!("Kontrol: find ~ -maxdepth 5 -name .usta -type d");
+    println!("Note: old projects not in the catalog are NOT in this list.");
+    println!("Check: find ~ -maxdepth 5 -name .usta -type d");
 
-    if !confirm("Hepsi kalıcı silinecek. Onay için 'evet' yaz: ", &["evet"])? {
-        println!("vazgeçildi.");
+    if !confirm("Everything will be permanently deleted. Type 'yes' to confirm: ", &["evet", "yes"])? {
+        println!("cancelled.");
         return Ok(());
     }
     for t in &targets {
         std::fs::remove_dir_all(t)
-            .with_context(|| format!("silinemedi: {}", t.display()))?;
-        println!("silindi: {}", t.display());
+            .with_context(|| format!("could not delete: {}", t.display()))?;
+        println!("deleted: {}", t.display());
     }
     if global.is_dir() {
         std::fs::remove_dir_all(&global)
-            .with_context(|| format!("silinemedi: {}", global.display()))?;
-        println!("silindi: {}", global.display());
+            .with_context(|| format!("could not delete: {}", global.display()))?;
+        println!("deleted: {}", global.display());
     }
-    println!("Sıfır nokta. Sonraki 'usta' çalıştırması her şeyi baştan kurar.");
+    println!("Zero point. The next 'usta' run will set everything up from scratch.");
     Ok(())
 }
 
@@ -924,18 +924,18 @@ fn reset_profile_files(global: &Path) -> Result<()> {
         .into_iter()
         .find(|(rel, _, _)| *rel == "USER.md")
         .map(|(_, c, _)| c)
-        .context("gömülü profil şablonu bulunamadı")?;
+        .context("embedded profile template not found")?;
     let path = global.join("USER.md");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
+            .with_context(|| format!("could not create directory: {}", parent.display()))?;
     }
     if path.exists() {
         std::fs::copy(&path, path.with_extension("md.bak"))
-            .with_context(|| format!("yedek alınamadı: {}", path.display()))?;
+            .with_context(|| format!("could not back up: {}", path.display()))?;
     }
     std::fs::write(&path, sablon)
-        .with_context(|| format!("yazılamadı: {}", path.display()))?;
+        .with_context(|| format!("could not write: {}", path.display()))?;
     Ok(())
 }
 
@@ -945,22 +945,22 @@ fn reset_profile_files(global: &Path) -> Result<()> {
 /// davranış pipe'ın içeriğine bağımlı kalmasın diye burada açıkça bekleniyor.
 fn run_reset_profile() -> Result<()> {
     if !std::io::stdin().is_terminal() {
-        anyhow::bail!("TTY yok — onay alınamıyor, profil sıfırlanmadı. Etkileşimli terminalde çalıştır.");
+        anyhow::bail!("no TTY — cannot get confirmation, profile not reset. Run in an interactive terminal.");
     }
     let global = config::global_root()?;
     let path = global.join("USER.md");
     if !confirm(
         &format!(
-            "Profil sıfırlanacak — Usta seni tanımadan başlayacak (yedek: {}.bak). Devam? [e/H] ",
+            "Profile will be reset — Usta will start not knowing you (backup: {}.bak). Continue? [y/N] ",
             path.display()
         ),
-        &["e", "evet"],
+        &["e", "evet", "y", "yes"],
     )? {
-        println!("vazgeçildi — profil değişmedi.");
+        println!("cancelled — profile unchanged.");
         return Ok(());
     }
     reset_profile_files(&global)?;
-    println!("profil sıfırlandı: {} (eski hali .bak'ta)", path.display());
+    println!("profile reset: {} (old version in .bak)", path.display());
     Ok(())
 }
 
@@ -978,9 +978,9 @@ fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
 /// `usta init`'in per-dosya/dizin durum satırı.
 fn print_scaffold_status(path: &Path, wrote: bool) {
     if wrote {
-        println!("yazıldı: {}", path.display());
+        println!("written: {}", path.display());
     } else {
-        println!("zaten var, atlandı: {}", path.display());
+        println!("already exists, skipped: {}", path.display());
     }
 }
 
@@ -992,7 +992,7 @@ fn migrate_profile_to_user_md(global: &Path) -> Result<bool> {
     let new = global.join("USER.md");
     if old.exists() && !new.exists() {
         std::fs::rename(&old, &new)
-            .with_context(|| format!("profil taşınamadı: {} → {}", old.display(), new.display()))?;
+            .with_context(|| format!("profile could not be moved: {} → {}", old.display(), new.display()))?;
         Ok(true)
     } else {
         Ok(false)
@@ -1011,7 +1011,7 @@ fn migrate_profile_to_user_md(global: &Path) -> Result<bool> {
 /// üstüne yazmaz.
 fn write_global_defaults(global: &Path) -> Result<Vec<(PathBuf, bool)>> {
     std::fs::create_dir_all(global)
-        .with_context(|| format!("global kök oluşturulamadı: {}", global.display()))?;
+        .with_context(|| format!("could not create global root: {}", global.display()))?;
     migrate_profile_to_user_md(global)?;
 
     let mut results = Vec::new();
@@ -1024,10 +1024,10 @@ fn write_global_defaults(global: &Path) -> Result<Vec<(PathBuf, bool)>> {
         let wrote = if write_needed {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)
-                    .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
+                    .with_context(|| format!("could not create directory: {}", parent.display()))?;
             }
             std::fs::write(&path, content)
-                .with_context(|| format!("yazılamadı: {}", path.display()))?;
+                .with_context(|| format!("could not write: {}", path.display()))?;
             true
         } else {
             false
@@ -1049,14 +1049,14 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
         let dir = usta_dir.join(sub);
         let dir_existed = dir.is_dir();
         std::fs::create_dir_all(&dir)
-            .with_context(|| format!("dizin oluşturulamadı: {}", dir.display()))?;
+            .with_context(|| format!("could not create directory: {}", dir.display()))?;
         results.push((dir.clone(), !dir_existed));
 
         // .gitkeep — boş dizin de commit edilebilsin.
         let gitkeep = dir.join(".gitkeep");
         if config::should_write(&gitkeep) {
             std::fs::write(&gitkeep, "")
-                .with_context(|| format!("yazılamadı: {}", gitkeep.display()))?;
+                .with_context(|| format!("could not write: {}", gitkeep.display()))?;
         }
     }
 

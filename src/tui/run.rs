@@ -255,7 +255,7 @@ async fn ask_topic(
     }
 }
 
-/// TUI'de tek-tuş onay: mesajı bas, bir tuş bekle. `e`/`E` → true, diğer → false.
+/// TUI'de tek-tuş onay: mesajı bas, bir tuş bekle. `y`/`Y`/`e`/`E` → true, diğer → false.
 async fn tui_confirm(
     tui: &mut Tui,
     editor: &InputBox,
