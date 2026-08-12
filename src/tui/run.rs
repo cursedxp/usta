@@ -176,6 +176,10 @@ async fn ask_live(
                 if let Event::Paste(s) = &ev {
                     editor.insert_str(s);
                 } else if let Event::Key(k) = ev {
+                    // Single Esc = instant cancel (drops fut → kill_on_drop kills the child).
+                    if matches!(k.code, KeyCode::Esc) {
+                        return Ok(AskOutcome::Cancelled);
+                    }
                     match classify_locked_key(k) {
                         LockedKey::CancelRequest if cancel_armed => {
                             // fut düşer → kill_on_drop çocuğu öldürür (backend.rs).
