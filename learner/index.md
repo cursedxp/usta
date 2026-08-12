@@ -1,9 +1,9 @@
-# Öğrenme Başlıkları — Katalog
+# Learning Topics — Catalog
 
-Tüm öğrenme başlıkları burada üstten bağlanır. Her başlık **izole**: Rust oturumunda JS bağlamı karışmaz. `profile.md` paylaşılır (kullanıcı hep aynı).
+All learning topics are linked from here at the top. Each topic is **isolated**: JS context doesn't bleed into a Rust session. `profile.md` is shared (the user is always the same).
 
-| Başlık | Durum | İlerleme |
+| Topic | Status | Progress |
 |---|---|---|
-| rust | AKTİF | [[progress/rust]] |
+| rust | ACTIVE | [[progress/rust]] |
 
-> Yeni başlıklar buraya eklenir (ör. `javascript: AKTİF`, `marketing: duraklamış`). Her biri kendi `progress/<başlık>.md` dosyasını alır.
+> New topics get added here (e.g. `javascript: ACTIVE`, `marketing: paused`). Each one gets its own `progress/<topic>.md` file.

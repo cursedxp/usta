@@ -1381,7 +1381,7 @@ mod tests {
         // dönüştü ("Sert Kurallar" artık RULES.md'de) — assertion güncel
         // gömülü içeriğe göre düzeltildi.
         let usta = std::fs::read_to_string(base.join("USTA.md")).unwrap();
-        assert!(usta.contains("Müdahale Haritası"));
+        assert!(usta.contains("Intervention Map"));
         // Kullanıcı-sahipli korundu.
         assert_eq!(
             std::fs::read_to_string(base.join("USER.md")).unwrap(),

@@ -73,7 +73,7 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
 
     // Model bugünü güvenilir bilmez — "sınava kaç hafta kaldı" gibi hesaplar
     // için sabit referans en başta verilir (GOAL.md "Hedefli Öğrenme").
-    parts.push(format!("===== BUGÜN =====\n{today}"));
+    parts.push(format!("===== TODAY =====\n{today}"));
 
     read_section(&global.join("SOUL.md"), "SOUL.md", &mut parts);
     read_section(&global.join("RULES.md"), "RULES.md", &mut parts);
@@ -117,7 +117,7 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     }
 
     if parts.len() == 1 {
-        // Yalnız BUGÜN bölümü varsa brain dosyaları hiç bulunamamış demektir
+        // Yalnız TODAY bölümü varsa brain dosyaları hiç bulunamamış demektir
         // — çekirdek kural gömülü fallback.
         return FALLBACK_SYSTEM.to_string();
     }
@@ -326,7 +326,7 @@ mod tests {
         let (global, _project) = temp_pair("today");
         fs::write(global.join("SOUL.md"), "ÇEKIRDEK").unwrap();
         let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
-        assert!(sys.starts_with("===== BUGÜN =====\n2026-08-07"));
+        assert!(sys.starts_with("===== TODAY =====\n2026-08-07"));
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }
 }

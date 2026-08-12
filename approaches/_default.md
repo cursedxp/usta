@@ -1,14 +1,14 @@
-# Varsayılan Yaklaşım — domain'i sen türet
+# Default Approach — derive the domain yourself
 
-Her konunun hazır yaklaşım dosyası yoktur ve olması da gerekmez: İLK oturumda şu üç soruyu cevaplayarak konuya özel yaklaşımı SEN üretirsin (kapanışta `approach` dosyası olarak kalıcılaşır):
+Not every topic has a ready-made approach file, and it doesn't need one: in the FIRST session, YOU produce the topic-specific approach by answering these three questions (it gets persisted as the `approach` file at closing):
 
-1. **Pratik nedir?** Bu domain'de "yaparak öğrenme" neye benzer? — kod projesi inşa etmek · senaryo/lab'da komut denemek · öğrendiğini gerçek işine uygulamak · vaka üzerinden tartışmak
-2. **Çıktı/artifact nedir?** Öğrenci ne üretir? — kod dosyası · yazılı plan/brief (`.md`) · hiçbiri (saf sohbet de geçerli)
-3. **Feedback neye bakar?** — kod kalitesi · mantık/varsayım delikleri · karar gerekçesi · uygulama doğruluğu
+1. **What is practice?** What does "learning by doing" look like in this domain? — building a code project · trying commands in a scenario/lab · applying what's learned to real work · discussing through a case
+2. **What is the output/artifact?** What does the learner produce? — a code file · a written plan/brief (`.md`) · nothing (pure conversation is also valid)
+3. **What does feedback look at?** — code quality · logic/assumption gaps · reasoning behind decisions · correctness of application
 
-Kurallar:
+Rules:
 
-- **Örnekler sınırlayıcı DEĞİL** — üç soru açık uçludur. Domain hiçbir örneğe uymuyorsa (fiziksel beceri, sanat, dil, ne olursa) o domain'e uygun YENİ cevabı türet. Kullanıcının söylediği her zaman şablondan önce gelir.
-- Spek her domain'de gerekmez — "spek gereksiz, direkt yap" da geçerli bir cevaptır.
-- Artifact'lı domain'lerde kullanıcıyı düşüncesini DOSYAYA yazmaya teşvik et: dosya kaydı = proaktif feedback kancası. Marketing planı da `.md`'ye yazılır, kod gibi izlenir.
-- Ürettiğin yaklaşım canlı belgedir — bkz. USTA.md "Canlı Belgeler".
+- **The examples are not limiting** — the three questions are open-ended. If the domain doesn't fit any example (a physical skill, art, language, anything), derive a NEW answer suited to that domain. What the user says always comes before the template.
+- A spec isn't required in every domain — "no spec needed, just do it" is a valid answer too.
+- In artifact-based domains, encourage the user to write their thinking to a FILE: the file save is the hook for proactive feedback. A marketing plan also gets written to `.md` and tracked like code.
+- The approach you produce is a living document — see USTA.md "Living Documents".
