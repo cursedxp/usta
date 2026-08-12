@@ -6,8 +6,10 @@ use anyhow::{bail, Context, Result};
 
 const SKELETON: &str = include_str!("visual_skeleton.html");
 const ANIME: &str = include_str!("vendor/anime.min.js");
+const ROUGH: &str = include_str!("vendor/rough.min.js");
 const PLACEHOLDER_SCENES: &str = "/*__SCENES__*/[]";
 const PLACEHOLDER_ANIME: &str = "/*__ANIME__*/";
+const PLACEHOLDER_ROUGH: &str = "/*__ROUGH__*/";
 
 /// Validate the scene JSON and inject anime.js + scenes into the skeleton.
 /// Errors: not JSON, not an array, empty array, any scene missing a `caption`.
@@ -24,6 +26,7 @@ pub fn build_visual_html(scenes_json: &str) -> Result<String> {
         }
     }
     Ok(SKELETON
+        .replacen(PLACEHOLDER_ROUGH, ROUGH, 1)
         .replacen(PLACEHOLDER_ANIME, ANIME, 1)
         .replacen(PLACEHOLDER_SCENES, &v.to_string().replace("</", "<\\/"), 1))
 }
@@ -124,6 +127,9 @@ mod tests {
         assert!(html.contains("\"caption\":\"A request travels\""));
         assert!(!html.contains(PLACEHOLDER_ANIME), "anime placeholder must be consumed");
         assert!(!html.contains("/*__SCENES__*/"), "scenes placeholder must be consumed");
+        // rough.js (vendored Görev 2): MIT header inlined, placeholder consumed.
+        assert!(html.contains("rough.js v4.6.6"), "vendored rough.js (with MIT header) must be inlined");
+        assert!(!html.contains(PLACEHOLDER_ROUGH), "rough placeholder must be consumed");
     }
 
     #[test]
@@ -138,18 +144,27 @@ mod tests {
     fn skeleton_is_selfcontained_player() {
         assert!(SKELETON.contains(PLACEHOLDER_SCENES));
         assert!(SKELETON.contains(PLACEHOLDER_ANIME));
+        assert!(SKELETON.contains(PLACEHOLDER_ROUGH), "skeleton missing /*__ROUGH__*/ placeholder");
         assert_eq!(SKELETON.matches(PLACEHOLDER_SCENES).count(), 1);
         assert_eq!(SKELETON.matches(PLACEHOLDER_ANIME).count(), 1);
+        assert_eq!(SKELETON.matches(PLACEHOLDER_ROUGH).count(), 1);
         assert!(SKELETON.contains("prefers-color-scheme"));
         for marker in ["id=\"prev\"", "id=\"play\"", "id=\"next\"", "id=\"caption\"", "<svg"] {
             assert!(SKELETON.contains(marker), "skeleton missing {marker}");
         }
+        // Görev 2 (frozen design tokens): Excalifont embedded as data-URI @font-face, no
+        // network loads — verify the marker text and license note are present in-source.
+        assert!(SKELETON.contains("@font-face"), "skeleton missing @font-face");
+        assert!(SKELETON.contains("Excalifont"), "skeleton missing Excalifont font-family");
+        assert!(SKELETON.contains("data:font/woff2;base64,"), "font must be embedded as data-URI, not linked");
+        assert!(SKELETON.contains("OFL-1.1"), "skeleton missing OFL-1.1 license note for the embedded font");
         // Offline guarantee: no external loads at runtime. (Plain `http://` cannot be
         // asserted away — the SVG namespace URI legitimately contains it.)
         assert!(!SKELETON.contains("<script src"));
         assert!(!SKELETON.contains("<link "));
         assert!(!SKELETON.contains("fetch("));
         assert!(!ANIME.contains("<script src"));
+        assert!(!ROUGH.contains("<script src"));
     }
 
     /// Writes a demo to temp — run with `--nocapture` and open the printed path
