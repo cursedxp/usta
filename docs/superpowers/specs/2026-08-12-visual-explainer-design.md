@@ -17,7 +17,9 @@ Brainstorm kararları:
 
 ### 1. İskelet — `src/visual_skeleton.html` (gömülü, `include_str!`)
 
-Kendi kendine yeten tek HTML dosyası: inline CSS + vanilla JS, **CDN/ağ erişimi YOK** (offline çalışır). İçerik:
+Kendi kendine yeten tek HTML dosyası: inline CSS + JS, **CDN/ağ erişimi YOK** (offline çalışır).
+
+**Animasyon katmanı: vendorlanmış [anime.js v3.2.2](https://animejs.com) (MIT, ~17KB, `src/vendor/anime.min.js`, repoya commit'li).** Karar gerekçesi (2026-08-12 revizyonu): tween mekaniği (easing, kesinti, SVG path-following) el yapımı rAF yerine kanıtlanmış kütüphaneye bırakılır — "paket ok boyunca akar" animasyonu anime.js'in `anime.path()` çekirdek özelliği. Kabuk `build_visual_html` içinde `/*__ANIME__*/` placeholder'ına kütüphaneyi enjekte eder; çıktı yine tek dosya + offline. MIT lisans başlığı dosyada korunur. Oynatıcı kabuğu (sahne yönetimi, prev/next/play, deterministik replay) uygulama mantığıdır ve bizim kodumuz olarak kalır. İçerik:
 - **Sahne alanı:** SVG stage (viewBox `0 0 800 450`), responsive.
 - **Altyazı barı:** aktif sahnenin `caption`'ı.
 - **Kontroller:** ◀ önceki · ▶ oynat/duraklat · ▶| sonraki · sahne sayacı (`3/8`).
