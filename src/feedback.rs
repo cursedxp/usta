@@ -52,7 +52,7 @@ impl FileMemory {
                 let diff = TextDiff::from_lines(&prev, &current)
                     .unified_diff()
                     .context_radius(3)
-                    .header("önce", "sonra")
+                    .header("before", "after")
                     .to_string();
                 ChangePayload::Diff(diff)
             }

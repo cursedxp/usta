@@ -30,10 +30,11 @@ pub fn curriculum_path(project_root: &Path, topic: &str) -> PathBuf {
 pub const FILE_DELIM: &str = "===DOSYA:";
 
 /// Profil boşken açılış turn'lerine eklenen tanışma talimatı (spec Ç3a).
-const MEET_BLOCK: &str = "\n[PROFİL BOŞ] Kullanıcıyı henüz tanımıyorsun. Sohbetin \
-başında kısaca tanış — adı, bu alanla geçmişi, nasıl öğrenmeyi sevdiği. En fazla \
-1-2 soru, form değil; konuya girmeyi geciktirme. Kullanıcı kendini zaten anlattıysa \
-tekrar sorma. Öğrendiklerin oturum kapanışında profiline yazılacak.\n";
+const MEET_BLOCK: &str = "\n[PROFILE EMPTY] You don't know the user yet. Introduce \
+yourself briefly at the start of the conversation — ask their name, their background \
+with this topic, how they like to learn. At most 1-2 questions, not a form; don't \
+delay getting into the topic. If the user already introduced themselves, don't ask \
+again. What you learn will be written to their profile at session close.\n";
 
 /// Kapanış yanıtını (ad, içerik) çiftlerine ayır. Bölücü yoksa tüm yanıt
 /// tek "progress" dosyası sayılır — eski format geriye uyumlu kalır.
@@ -101,12 +102,13 @@ pub fn closing_prompt(
          kaldır; curriculum'da değişmeyen bölümleri olduğu gibi koru (yeniden üretme).\n\
          - Oturumda kanıtı olmayanı ekleme; mevcut dosyalardaki geçerli bilgiyi koru \
          (kullanıcı elle düzenlemiş olabilir — düzenlemesini ez-me).\n\
-         - `profile` YALNIZ kullanıcı hakkında bu oturumda yeni/değişen kalıcı bilgi \
-         öğrenildiyse üretilir: ad, geçmiş/deneyim, öğrenme tarzı, tercihler, \
-         tekrarlayan güçlü/zayıf yönler. KONU BİLGİSİ YAZILMAZ — 'X kavramını öğrendi' \
-         progress'in işidir; 'örnek üzerinden öğrenmeyi sever' profile girer. Mevcut \
-         profildeki geçerli bilgiyi KORU (kullanıcı elle düzenlemiş olabilir), ~1 sayfa \
-         tavan, yinelenenleri birleştir. Değişiklik yoksa bu dosyayı HİÇ üretme.\n\
+         - `profile` is generated only if new/changed permanent information about the \
+         user was learned this session: name, background/experience, learning style, \
+         preferences, recurring strengths/weaknesses. NO TOPIC KNOWLEDGE — 'learned \
+         concept X' is progress's job; 'likes to learn from examples' goes in profile. \
+         KEEP the valid information already in the current profile (the user may have \
+         hand-edited it), ~1 page cap, merge duplicates. If nothing changed, don't \
+         generate this file at all.\n\
          - Bölücü satırları dışında açıklama/selamlama yazma; her dosya saf markdown."
     )
 }
@@ -117,12 +119,13 @@ pub fn closing_prompt(
 pub fn opening_prompt(topic: &str, profile_generic: bool) -> String {
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     format!(
-        "[OTURUM AÇILIŞI — GERİ ÇAĞIRMA DRİLLİ]\n{meet_block}\
-         Konu: {topic}. Progress dosyandaki 'Geri çağırma soruları'ndan 2-3 tanesini seç \
-         ve bana SOR — cevaplarını verme, anlatma. Kısa tut: 2 dakikalık ısınma, sonra \
-         günün işine geçeriz. Progress'te soru yoksa seviyeme uygun 2 küçük hatırlama \
-         sorusu üret. Drill bitince haritadan tek cümle söyle: neredeyiz, sırada ne var \
-         (curriculum dosyan system prompt'ta)."
+        "[SESSION OPENING — RECALL DRILL]\n{meet_block}\
+         Topic: {topic}. Pick 2-3 questions from the 'Recall questions' section of your \
+         progress file and ASK me — don't answer them yourself, don't explain them. Keep \
+         it short: a 2-minute warm-up, then we move to today's work. If progress has no \
+         questions, come up with 2 small recall questions suited to my level. When the \
+         drill is done, say one sentence from the map: where we are, what's next (your \
+         curriculum file is in the system prompt)."
     )
 }
 
@@ -135,29 +138,34 @@ pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool
     // ("müşterime Coolify kuracağım, Fedora..." → "ne peşindesin?" faciası).
     let intro_block = match intro {
         Some(s) if !s.trim().is_empty() => format!(
-            "\nKullanıcı konuyu açarken şunu yazdı — bu, tanışmanın İLK CEVABI sayılır:\n\
+            "\nWhen the user opened the topic, they wrote this — treat it as the FIRST \
+             ANSWER of the introduction:\n\
              \"{}\"\n\
-             Buradaki bilgiyi KULLAN: zaten söylediklerini tekrar sorma; söylediklerine \
-             bağlanarak başla ve yalnız eksik kalanları sor.\n",
+             USE this information: don't ask again what they already said; start by \
+             picking up on what they said and only ask about what's still missing.\n",
             s.trim()
         ),
         _ => String::new(),
     };
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     format!(
-        "[YENİ KONU — TANIŞMA]\n\
-         Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n{intro_block}{meet_block}\
-         Kısa, DOĞAL bir tanışma yap — bu bir form değil: tek mesajda en fazla iki soru \
-         sor, cevaba göre devam et; numaralı soru listesi basma. Öğren: ne yapmak/öğrenmek \
-         istiyor, elinde ne var. Keşif/hedef ayrımını KENDİN çıkar — kullanıcıya bu \
-         terimlerle sorma; söylediklerinden belli olmuyorsa jargonsuz tek soru: 'belirli \
-         bir tarihe/sınava mı hazırlanıyorsun, yoksa merakına mı bakıyoruz?'. Hedefliyse \
-         ne/tarih/eşik/format bilgisini sohbet içinde topla — approach'un `## Hedef` \
-         bölümüne yazılacak; harita resmi çerçeveden kurulur (sınav müfredatı / exam \
-         guide / CEFR) — web'de araştır. Alanı yeterince bilmiyorsan web'de araştır. \
-         Oturum kapanışında senden yaklaşım + TAM müfredat haritası İÇERİĞİ istenecek; \
-         dosyaları Usta kabuğu yazar, sen oturum içinde dosya yazmaya çalışma (Sert Kural 6) — \
-         tanışmayı buna göre derinleştir ama derse çevirme, kısa tut."
+        "[NEW TOPIC — INTRODUCTION]\n\
+         Topic: {topic}. This topic has no approach or curriculum map yet.\n{intro_block}{meet_block}\
+         Have a short, NATURAL introduction — this is not a form: ask at most two \
+         questions in a single message, continue based on the answer; don't dump a \
+         numbered question list. Find out: what they want to do/learn, what they \
+         already have. Whether this is exploration or goal-directed — infer it \
+         YOURSELF, don't ask the user using these terms; if it's not clear from what \
+         they said, ask one jargon-free question: 'are you preparing for a deadline or \
+         exam, or is this just out of curiosity?'. If it's goal-directed, gather the \
+         what/date/threshold/format info during the conversation — it will go into the \
+         approach's `## Goal` section; the map is built from the official framework \
+         (exam syllabus / exam guide / CEFR) — research it on the web. If you don't \
+         know the domain well enough, research it on the web. At session close you'll \
+         be asked for the approach + FULL curriculum map CONTENT; the shell writes the \
+         files, don't try to write files yourself during the session (Hard Rule 6) — \
+         deepen the introduction accordingly but don't turn it into a lecture, keep it \
+         short."
     )
 }
 
@@ -291,11 +299,11 @@ mod tests {
 
     #[test]
     fn closing_prompt_defines_profile_rules() {
-        let s = closing_prompt("rust", None, None, None, Some("MEVCUT PROFİL"));
+        let s = closing_prompt("rust", None, None, None, Some("CURRENT PROFILE"));
         assert!(s.contains("===DOSYA: profile==="));
-        assert!(s.contains("MEVCUT PROFİL"));
-        assert!(s.contains("KONU BİLGİSİ YAZILMAZ"));
-        assert!(s.contains("yalnız")); // yalnız yeni/değişen bilgi varsa üretilir
+        assert!(s.contains("CURRENT PROFILE"));
+        assert!(s.contains("NO TOPIC KNOWLEDGE"));
+        assert!(s.contains("only")); // generated only if new/changed info exists
     }
 
     #[test]
@@ -306,11 +314,11 @@ mod tests {
             false,
         );
         assert!(s.contains("coolify kuracağım"));
-        assert!(s.contains("İLK CEVABI"));
-        assert!(s.contains("tekrar sorma"));
+        assert!(s.contains("FIRST ANSWER"));
+        assert!(s.contains("don't ask again"));
         // Intro yoksa blok hiç girmez.
         let bare = onboarding_prompt("hosting", None, false);
-        assert!(!bare.contains("İLK CEVABI"));
+        assert!(!bare.contains("FIRST ANSWER"));
     }
 
     #[test]
@@ -318,26 +326,26 @@ mod tests {
         let s = onboarding_prompt("almanca", None, false);
         // Keşif/hedef terimleri kullanıcıya SORULMAZ — model kendisi çıkarır.
         assert!(!s.contains("keşif mi"));
-        assert!(s.contains("KENDİN çıkar"));
+        assert!(s.contains("infer it YOURSELF"));
         // Jargonsuz yedek soru + soru limiti.
-        assert!(s.contains("tarihe/sınava"));
-        assert!(s.contains("en fazla iki soru"));
-        assert!(s.contains("Hedef"));
+        assert!(s.contains("a deadline or exam"));
+        assert!(s.contains("at most two questions"));
+        assert!(s.contains("Goal"));
     }
 
     #[test]
     fn opening_prompt_embeds_topic_and_asks_to_quiz() {
         let s = opening_prompt("rust", false);
         assert!(s.contains("rust"));
-        assert!(s.contains("GERİ ÇAĞIRMA DRİLLİ"));
-        assert!(s.contains("SOR"));
+        assert!(s.contains("RECALL DRILL"));
+        assert!(s.contains("ASK"));
     }
 
     #[test]
     fn onboarding_prompt_embeds_topic_and_open_conversation() {
         let s = onboarding_prompt("linux-guvenlik", None, false);
         assert!(s.contains("linux-guvenlik"));
-        assert!(s.contains("TANIŞMA"));
+        assert!(s.contains("INTRODUCTION"));
         assert!(s.contains("form"));
     }
 
@@ -346,26 +354,26 @@ mod tests {
         // Sert Kural 6: modelin dosya yazma aracı yok — kapanış içeriğini üretir,
         // dosyayı kabuk yazar. Prompt modeli yazma denemesine itmemeli.
         let s = onboarding_prompt("rust", None, false);
-        assert!(!s.contains("dosyalara yazacaksın"));
-        assert!(s.contains("kabuğu yazar"));
+        assert!(!s.contains("you will write files"));
+        assert!(s.contains("shell writes"));
     }
 
     #[test]
     fn opening_prompt_mentions_curriculum_position() {
         let s = opening_prompt("rust", false);
-        assert!(s.contains("harita"));
+        assert!(s.contains("map"));
     }
 
     #[test]
     fn opening_prompts_include_meet_block_only_when_profile_generic() {
         let on = onboarding_prompt("rust", None, true);
-        assert!(on.contains("[PROFİL BOŞ]"));
-        assert!(on.contains("1-2 soru"));
-        assert!(!onboarding_prompt("rust", None, false).contains("[PROFİL BOŞ]"));
+        assert!(on.contains("[PROFILE EMPTY]"));
+        assert!(on.contains("1-2 questions"));
+        assert!(!onboarding_prompt("rust", None, false).contains("[PROFILE EMPTY]"));
 
         let op = opening_prompt("rust", true);
-        assert!(op.contains("[PROFİL BOŞ]"));
-        assert!(!opening_prompt("rust", false).contains("[PROFİL BOŞ]"));
+        assert!(op.contains("[PROFILE EMPTY]"));
+        assert!(!opening_prompt("rust", false).contains("[PROFILE EMPTY]"));
     }
 
     #[test]

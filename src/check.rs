@@ -29,7 +29,7 @@ pub fn truncate_output(s: &str, max: usize) -> String {
     while !s.is_char_boundary(cut) {
         cut -= 1;
     }
-    format!("{}\n… (kırpıldı — toplam {} bayt)", &s[..cut], s.len())
+    format!("{}\n… (truncated — {} bytes total)", &s[..cut], s.len())
 }
 
 /// `cargo check --message-format=short` koştur. Cargo projesi değilse,
@@ -46,7 +46,7 @@ pub async fn run_check(root: &Path) -> Option<String> {
         .output();
     let output = tokio::time::timeout(CHECK_TIMEOUT, fut).await.ok()?.ok()?;
     if output.status.success() {
-        return Some("TEMİZ — cargo check hatasız geçti.".to_string());
+        return Some("CLEAN — cargo check passed with no errors.".to_string());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     Some(truncate_output(stderr.trim(), MAX_CHECK_BYTES))
@@ -91,7 +91,7 @@ mod tests {
         let long = "a".repeat(200);
         let out = truncate_output(&long, 100);
         assert!(out.len() < 200);
-        assert!(out.contains("kırpıldı"));
+        assert!(out.contains("truncated"));
     }
 
     #[test]
@@ -99,6 +99,6 @@ mod tests {
         // "ö" 2 bayt — tavan bir char'ın ortasına denk gelirse panik atmamalı.
         let s = "ööööö";
         let out = truncate_output(s, 3);
-        assert!(out.contains("kırpıldı"));
+        assert!(out.contains("truncated"));
     }
 }

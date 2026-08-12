@@ -643,11 +643,11 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
 
 /// Cümleden konu slug'ı çıkaran system prompt — hem plain (`derive_slug`) hem
 /// TUI konu girişi kullanır.
-pub(crate) const SLUG_SYSTEM: &str = "Kullanıcının öğrenmek/yapmak istediğini TEK kısa dosya-adı slug'ına indir. \
-    Kurallar: yalnız küçük harf, ascii (Türkçe karakter yok), kelimeler tire ile ayrılır, \
-    EN FAZLA 3 kelime, dolgu kelimeleri (ben/bir/ile/yapmak/istiyorum) atılır. \
-    SADECE slug'ı döndür — açıklama, tırnak, noktalama yok. \
-    Örnek: 'ben rust ile bir todo yapmak istiyorum' -> rust-todo";
+pub(crate) const SLUG_SYSTEM: &str = "Reduce what the user wants to learn/do to A SINGLE short \
+    file-name slug. Rules: lowercase only, ascii (no accented characters), words separated \
+    by hyphens, AT MOST 3 words, filler words (i/a/with/make/want) are dropped. \
+    RETURN ONLY the slug — no explanation, no quotes, no punctuation. \
+    Example: 'i want to build a todo app with rust' -> rust-todo";
 
 /// Slug sistem promptu — kayıtlı konular varsa devam-farkındalığı eklenir
 /// (spec K2): model devam niyetini mevcut slug'a çevirir, akış Resume sayar.
@@ -656,9 +656,10 @@ pub(crate) fn slug_system(known: &[String]) -> String {
         return SLUG_SYSTEM.to_string();
     }
     format!(
-        "{SLUG_SYSTEM}\n\nMevcut konular: {list}. Kullanıcının yazdığı bu konulardan \
-         birine DEVAM ETME isteğiyse (aynı işin sürdürülmesi, 'kaldığımız yer', önceki \
-         çalışmaya atıf) SADECE o konunun slug'ını AYNEN döndür. Yeni bir konuysa yeni slug üret.",
+        "{SLUG_SYSTEM}\n\nExisting topics: {list}. If what the user wrote is a request \
+         to CONTINUE one of these topics (picking up the same work, 'where we left \
+         off', referencing prior work), return ONLY that topic's slug VERBATIM. If \
+         it's a new topic, generate a new slug.",
         list = known.join(", ")
     )
 }
@@ -667,7 +668,7 @@ pub(crate) fn slug_system(known: &[String]) -> String {
 /// ile garantile; "genel"e düşerse ham girdiden yerel slug türet. Saf.
 pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     let s = slugify_topic(&model_reply.trim().replace(['-', '_'], " "));
-    if s == "genel" {
+    if s == "general" {
         slugify_topic(raw)
     } else {
         s
@@ -677,7 +678,7 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
 /// Yeni konu onay metni (TUI tui_confirm için). Plain yol kendi `[e/H]`
 /// rustyline formatını kullanır — sözcükler kasıtlı farklı, iki yüzey ayrı.
 pub(crate) fn new_topic_confirm_msg(slug: &str) -> String {
-    format!("yeni konu: {slug} — açayım mı? [e = evet / başka tuş = geri dön]")
+    format!("new topic: {slug} — open it? [e = yes / any other key = go back]")
 }
 
 /// Konu girişi yorumu: devam mı, yeni konu mu? (spec K1)
@@ -1103,17 +1104,17 @@ pub(crate) async fn handle_file_change(
             )));
         }
         feedback::ChangePayload::FirstSight(full) => format!(
-            "[Dosya kaydedildi: {}]\n{full}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver.",
+            "[File saved: {}]\n{full}\n\nGive project-grounded, Socratic feedback on this change.",
             path.display()
         ),
         feedback::ChangePayload::Diff(diff) => format!(
-            "[Dosya değişti: {}]\nDeğişiklik (unified diff):\n{diff}\n\nBu değişikliğe proje-temelli, Socratic geri bildirim ver — değişen kısma odaklan.",
+            "[File changed: {}]\nChange (unified diff):\n{diff}\n\nGive project-grounded, Socratic feedback on this change — focus on what changed.",
             path.display()
         ),
     };
     if let Some(check_result) = check::run_check(project_root).await {
         injected.push_str(&format!(
-            "\n\n[cargo check sonucu — SADECE SENİN GÖZÜN İÇİN, kullanıcıya doğrudan aktarma; tahmin protokolünü uygula]\n{check_result}"
+            "\n\n[cargo check result — FOR YOUR EYES ONLY, don't pass this directly to the user; apply the prediction protocol]\n{check_result}"
         ));
     }
     session.push_user(&injected);
@@ -1428,22 +1429,22 @@ mod tests {
 
     #[test]
     fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
-        // Model "genel" derse ham girdiden yerel slug türet.
-        assert_eq!(finalize_slug("temel linux güvenliği", "genel"), "temel-linux-guvenligi");
+        // Model "general" derse ham girdiden yerel slug türet.
+        assert_eq!(finalize_slug("temel linux güvenliği", "general"), "temel-linux-guvenligi");
     }
 
     #[test]
     fn slug_system_injects_known_topics() {
         let s = slug_system(&["linux-guvenlik".to_string(), "rust".to_string()]);
         assert!(s.contains("linux-guvenlik, rust"));
-        assert!(s.contains("DEVAM"));
+        assert!(s.contains("CONTINUE"));
     }
 
     #[test]
     fn slug_system_without_topics_is_base_only() {
         let s = slug_system(&[]);
         assert!(s.contains("slug"));
-        assert!(!s.contains("Mevcut konular"));
+        assert!(!s.contains("Existing topics"));
     }
 
     #[test]
