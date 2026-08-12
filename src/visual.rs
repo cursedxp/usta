@@ -29,6 +29,74 @@ pub fn build_visual_html(scenes_json: &str) -> Result<String> {
         .replacen(PLACEHOLDER_SCENES, &v.to_string(), 1))
 }
 
+/// `/show` → Some(None) (visualize the last explanation); `/show <topic>` →
+/// Some(Some(topic)). Anything else → None. Slash lines never reach the LLM session.
+#[allow(dead_code)]
+pub fn parse_show_command(line: &str) -> Option<Option<String>> {
+    let t = line.trim();
+    if t == "/show" {
+        return Some(None);
+    }
+    let rest = t.strip_prefix("/show ")?;
+    let topic = rest.trim();
+    if topic.is_empty() {
+        Some(None)
+    } else {
+        Some(Some(topic.to_string()))
+    }
+}
+
+/// System prompt for the visual mini-session: scene-JSON contract + pedagogy.
+#[allow(dead_code)]
+pub fn visual_system() -> String {
+    "You produce animation scenes for a visual explainer. Output ONLY a JSON array \
+     of scenes — no prose, no markdown fences, no HTML.\n\
+     \n\
+     Stage: 800 x 450 coordinate space.\n\
+     Scene: {\"caption\": string, \"duration\": ms (optional, default 3500), \"ops\": [...]}\n\
+     Ops:\n\
+     - {\"op\":\"add\",\"el\":{\"id\",\"type\":\"node|circle|text\",...}} — node: x,y,w,h,label; \
+       circle: cx,cy,r,label; text: x,y,text,size\n\
+     - {\"op\":\"arrow\",\"id\",\"from\",\"to\",\"label\"?} — animated arrow between two elements\n\
+     - {\"op\":\"packet\",\"along\":<arrow id>,\"label\"?} — a dot travelling along an arrow (use for flows)\n\
+     - {\"op\":\"move\",\"id\",\"x\",\"y\"} · {\"op\":\"pulse\",\"id\"} · \
+       {\"op\":\"highlight\",\"id\",\"on\":bool} · {\"op\":\"remove\",\"id\"} · \
+       {\"op\":\"note\",\"id\",\"x\",\"y\",\"text\"} — short callout\n\
+     \n\
+     Pedagogy (binding):\n\
+     - 6-12 scenes; each scene makes exactly ONE idea visible. Build up cumulatively.\n\
+     - Captions in the same language as the user's conversation; short, concrete, no jargon dumps.\n\
+     - Keep at most ~6 visible elements at a time; remove what is no longer needed.\n\
+     - Prefer motion that carries meaning (packets for data flow, pulse for 'this reacts', \
+       highlight for 'remember this').\n\
+     - Use a concrete analogy where it helps, in a note.\n\
+     - End with a summary scene that shows the whole picture once more."
+        .to_string()
+}
+
+/// Target file: `.usta/visuals/<topic>/<timestamp>-<concept-slug>.html`.
+#[allow(dead_code)]
+pub fn visual_path(project_root: &std::path::Path, topic: &str, concept: &str) -> std::path::PathBuf {
+    let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
+    let slug = crate::slugify_topic(concept);
+    project_root
+        .join(".usta/visuals")
+        .join(topic)
+        .join(format!("{stamp}-{slug}.html"))
+}
+
+/// Best-effort browser open; false = caller should just print the path.
+#[allow(dead_code)]
+pub fn open_in_browser(path: &std::path::Path) -> bool {
+    let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    std::process::Command::new(cmd)
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +162,36 @@ mod tests {
         let p = std::env::temp_dir().join("usta-visual-demo.html");
         std::fs::write(&p, html).unwrap();
         println!("demo: {}", p.display());
+    }
+
+    #[test]
+    fn parse_show_variants() {
+        assert_eq!(parse_show_command("/show"), Some(None));
+        assert_eq!(parse_show_command("  /show  "), Some(None));
+        assert_eq!(parse_show_command("/show tcp handshake"), Some(Some("tcp handshake".to_string())));
+        assert_eq!(parse_show_command("/show  dns  "), Some(Some("dns".to_string())));
+        assert_eq!(parse_show_command("/showx"), None);
+        assert_eq!(parse_show_command("show"), None);
+        assert_eq!(parse_show_command("/watch"), None);
+    }
+
+    #[test]
+    fn visual_system_carries_schema_and_pedagogy() {
+        let s = visual_system();
+        for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
+                       "6-12 scenes", "ONE idea", "same language as the user", "800", "450"] {
+            assert!(s.contains(needle), "visual_system missing: {needle}");
+        }
+        // The model must NOT be told to write files or HTML.
+        assert!(!s.contains("<html"));
+        assert!(!s.contains("write the file"));
+    }
+
+    #[test]
+    fn visual_path_shape() {
+        let p = visual_path(std::path::Path::new("/proj"), "rust", "How ownership works!");
+        let s = p.to_string_lossy();
+        assert!(s.starts_with("/proj/.usta/visuals/rust/"));
+        assert!(s.ends_with(".html") && s.contains("how-ownership-works"));
     }
 }
