@@ -93,6 +93,31 @@ pub fn visual_path(project_root: &std::path::Path, topic: &str, concept: &str) -
         .join(format!("{stamp}-{slug}.html"))
 }
 
+/// Keeps at most `keep` `*.html` files in `dir`, deleting the oldest first.
+/// Filenames are `visual_path`'s `YYYY-MM-DD-HHMMSS-<slug>.html` stamp, which
+/// sorts lexicographically = chronologically, so a plain string sort is enough
+/// (no mtime reads needed). Call this AFTER writing the new visual — `keep` is
+/// then the exact count left on disk (Görev 5: retention, "last 10 per topic").
+/// Best-effort: a missing/unreadable `dir`, or a failure to delete one file, is
+/// silently ignored — pruning must never turn a successful `/show` into an error.
+pub fn prune_visuals(dir: &std::path::Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("html"))
+        .collect();
+    if files.len() <= keep {
+        return;
+    }
+    files.sort();
+    for stale in &files[..files.len() - keep] {
+        let _ = std::fs::remove_file(stale);
+    }
+}
+
 /// Best-effort browser open; false = caller should just print the path.
 pub fn open_in_browser(path: &std::path::Path) -> bool {
     let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -375,5 +400,55 @@ mod tests {
         let (clean, topic) = extract_show_marker("işte bu.\n[[show: linux dosya ağacı]]");
         assert_eq!(clean, "işte bu.");
         assert_eq!(topic, Some("linux dosya ağacı".to_string()));
+    }
+
+    // --- prune_visuals (Görev 5) ----------------------------------------
+
+    fn temp_visuals_dir(name: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!("usta_visual_test_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn prune_visuals_keeps_only_the_newest_n() {
+        let dir = temp_visuals_dir("prune_12to10");
+        // 12 files, timestamps 00..11 — filenames sort lexicographically = chronologically.
+        for i in 0..12 {
+            std::fs::write(dir.join(format!("2026-01-01-0000{i:02}-topic.html")), "x").unwrap();
+        }
+        prune_visuals(&dir, 10);
+        let mut remaining: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining.len(), 10, "only 10 newest files should remain");
+        // The two oldest (00, 01) must be gone; the newest (02..11) must remain.
+        assert!(!remaining.iter().any(|n| n.contains("000000")));
+        assert!(!remaining.iter().any(|n| n.contains("000001")));
+        assert!(remaining.iter().any(|n| n.contains("000011")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_visuals_fewer_than_limit_is_untouched() {
+        let dir = temp_visuals_dir("prune_fewer");
+        for i in 0..3 {
+            std::fs::write(dir.join(format!("2026-01-01-0000{i:02}-topic.html")), "x").unwrap();
+        }
+        prune_visuals(&dir, 10);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_visuals_nonexistent_dir_does_not_panic() {
+        let dir = std::env::temp_dir().join(format!("usta_visual_test_missing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        prune_visuals(&dir, 10); // must not panic
     }
 }

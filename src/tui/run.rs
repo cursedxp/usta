@@ -239,11 +239,17 @@ async fn run_visual_generation(
             match crate::visual::build_visual_html(&json) {
                 Ok(html) => {
                     let path = crate::visual::visual_path(project_root, topic, concept);
-                    if let Some(dir) = path.parent() {
-                        let _ = std::fs::create_dir_all(dir);
+                    let dir = path.parent().map(|d| d.to_path_buf());
+                    if let Some(d) = &dir {
+                        let _ = std::fs::create_dir_all(d);
                     }
                     match std::fs::write(&path, html) {
                         Ok(()) => {
+                            // Görev 5: keep the last 10 visuals per topic — prune AFTER
+                            // the write, so `10` is the exact post-write count on disk.
+                            if let Some(d) = &dir {
+                                crate::visual::prune_visuals(d, 10);
+                            }
                             let opened = crate::visual::open_in_browser(&path);
                             page_notice(
                                 tui,
