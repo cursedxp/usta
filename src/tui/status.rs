@@ -12,8 +12,12 @@ pub enum Status {
 }
 
 /// Tek satır durum: düşünüyorsa spinner (+ iptal ipucu), her durumda token varsa gauge.
-pub fn render_status(s: &Status, tokens: Option<u64>, window: u64) -> Line<'static> {
+pub fn render_status(s: &Status, tokens: Option<u64>, window: u64, watching: Option<bool>) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
+    if let Some(on) = watching {
+        let (txt, col) = if on { ("👁 watching ", Color::DarkGray) } else { ("watch off ", Color::DarkGray) };
+        spans.push(Span::styled(txt.to_string(), Style::default().fg(col)));
+    }
     if let Status::Thinking { frame, cancel_hint } = s {
         let hint = if *cancel_hint {
             " (press ctrl-c again to quit · esc to stop)"
@@ -47,26 +51,33 @@ mod tests {
 
     #[test]
     fn idle_without_tokens_is_empty() {
-        assert_eq!(text(&render_status(&Status::Idle, None, 1_000_000)), "");
+        assert_eq!(text(&render_status(&Status::Idle, None, 1_000_000, None)), "");
     }
 
     #[test]
     fn thinking_shows_spinner_frame() {
-        let l = render_status(&Status::Thinking { frame: 0, cancel_hint: false }, None, 1_000_000);
+        let l = render_status(&Status::Thinking { frame: 0, cancel_hint: false }, None, 1_000_000, None);
         assert!(text(&l).contains("thinking"));
         assert!(text(&l).contains("esc to stop"));
     }
 
     #[test]
     fn thinking_with_cancel_hint_shows_hint() {
-        let l = render_status(&Status::Thinking { frame: 0, cancel_hint: true }, None, 1_000_000);
+        let l = render_status(&Status::Thinking { frame: 0, cancel_hint: true }, None, 1_000_000, None);
         assert!(text(&l).contains("ctrl-c again"));
     }
 
     #[test]
     fn gauge_shows_ratio() {
-        let l = render_status(&Status::Idle, Some(500_000), 1_000_000);
+        let l = render_status(&Status::Idle, Some(500_000), 1_000_000, None);
         assert!(text(&l).contains("context 500k/1000k"));
         assert!(text(&l).contains("▓▓▓▓░░░░"));
+    }
+
+    #[test]
+    fn watch_indicator_shows_when_some() {
+        assert!(text(&render_status(&Status::Idle, None, 1_000_000, Some(true))).contains("watching"));
+        assert!(text(&render_status(&Status::Idle, None, 1_000_000, Some(false))).contains("watch off"));
+        assert!(!text(&render_status(&Status::Idle, None, 1_000_000, None)).contains("watch"));
     }
 }

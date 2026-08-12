@@ -221,11 +221,19 @@ async fn run_plain_loop(
 
     let _ = ready_tx.send(()); // ilk prompt
 
+    let mut watching = true;
     loop {
         tokio::select! {
             maybe_ev = input_rx.recv() => match maybe_ev {
                 Some(input::InputEvent::Line(line)) => {
                     let line = line.trim().to_string();
+                    if let Some(cmd) = parse_watch_command(&line) {
+                        let (next, msg) = apply_watch(cmd, watching);
+                        watching = next;
+                        ui::notice(msg);
+                        let _ = ready_tx.send(());
+                        continue;
+                    }
                     if line == "/quit" {
                         break;
                     }
@@ -261,6 +269,13 @@ async fn run_plain_loop(
                     ));
                     // FileMemory'yi sessizce senkronla: sonraki tekil kayıt
                     // bu yığına karşı dev diff üretmesin.
+                    for path in batch {
+                        if let Ok(c) = std::fs::read_to_string(&path) {
+                            let _ = files.observe(&path, c);
+                        }
+                    }
+                } else if !watching {
+                    // Companion off: keep the diff baseline current, no LLM feedback.
                     for path in batch {
                         if let Ok(c) = std::fs::read_to_string(&path) {
                             let _ = files.observe(&path, c);
@@ -597,6 +612,33 @@ async fn resolve_topic(
             }
         }
     }
+}
+
+/// Companion (file-watch feedback) slash command. Slash lines never reach the LLM.
+#[derive(Debug, PartialEq)]
+pub(crate) enum WatchCmd { On, Off, Toggle }
+
+pub(crate) fn parse_watch_command(line: &str) -> Option<WatchCmd> {
+    match line.trim() {
+        "/watch" => Some(WatchCmd::Toggle),
+        "/watch on" => Some(WatchCmd::On),
+        "/watch off" => Some(WatchCmd::Off),
+        _ => None,
+    }
+}
+
+pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
+    let next = match cmd {
+        WatchCmd::On => true,
+        WatchCmd::Off => false,
+        WatchCmd::Toggle => !cur,
+    };
+    let msg = if next {
+        "companion on — watching your files"
+    } else {
+        "companion paused — file feedback off"
+    };
+    (next, msg)
 }
 
 /// Cümleden konu slug'ı çıkaran system prompt — hem plain (`derive_slug`) hem
@@ -1454,5 +1496,25 @@ mod tests {
         let m = new_topic_confirm_msg("rust-cli");
         assert!(m.contains("rust-cli"));
         assert!(m.contains("[e"));
+    }
+
+    #[test]
+    fn parse_watch_command_variants() {
+        assert_eq!(parse_watch_command("/watch"), Some(WatchCmd::Toggle));
+        assert_eq!(parse_watch_command("/watch on"), Some(WatchCmd::On));
+        assert_eq!(parse_watch_command("/watch off"), Some(WatchCmd::Off));
+        assert_eq!(parse_watch_command("  /watch off  "), Some(WatchCmd::Off));
+        assert_eq!(parse_watch_command("hello"), None);
+        assert_eq!(parse_watch_command("/quit"), None);
+    }
+
+    #[test]
+    fn apply_watch_transitions() {
+        assert_eq!(apply_watch(WatchCmd::Off, true).0, false);
+        assert_eq!(apply_watch(WatchCmd::On, false).0, true);
+        assert_eq!(apply_watch(WatchCmd::Toggle, true).0, false);
+        assert_eq!(apply_watch(WatchCmd::Toggle, false).0, true);
+        assert!(apply_watch(WatchCmd::On, false).1.contains("on"));
+        assert!(apply_watch(WatchCmd::Off, true).1.contains("off"));
     }
 }

@@ -113,13 +113,14 @@ fn draw(
     status: &Status,
     tokens: Option<u64>,
     window: u64,
+    watching: Option<bool>,
 ) -> Result<()> {
     tui.terminal.draw(|f| {
         let [box_area, status_area] =
             Layout::vertical([Constraint::Length(VIEWPORT_H - 1), Constraint::Length(1)])
                 .areas(f.area());
         editor.render(f, box_area);
-        f.render_widget(render_status(status, tokens, window), status_area);
+        f.render_widget(render_status(status, tokens, window, watching), status_area);
     })?;
     Ok(())
 }
@@ -168,7 +169,7 @@ async fn ask_live(
     let mut frame = 0usize;
     let mut cancel_armed = false; // ilk Ctrl-C sonrası true — sayaç sıfırlanmaz (spec B2)
     loop {
-        draw(tui, editor, &Status::Thinking { frame, cancel_hint: cancel_armed }, tokens, window)?;
+        draw(tui, editor, &Status::Thinking { frame, cancel_hint: cancel_armed }, tokens, window, None)?;
         tokio::select! {
             r = &mut fut => return Ok(AskOutcome::Reply(r?)),
             Some(Ok(ev)) = events.next() => {
@@ -230,7 +231,7 @@ async fn ask_topic(
     }
 
     loop {
-        draw(tui, editor, &Status::Idle, None, 0)?;
+        draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => {
                 // Boş Enter = devam sentineli (yalnız devam edilecek konu varsa) —
@@ -263,7 +264,7 @@ async fn tui_confirm(
 ) -> Result<bool> {
     page_notice(tui, msg)?;
     loop {
-        draw(tui, editor, &Status::Idle, None, 0)?;
+        draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => match k.code {
                 KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
@@ -503,13 +504,14 @@ pub async fn run(
         Err(e) => page_notice(&mut tui, &format!("açılış turu atlandı: {e}"))?,
     }
 
+    let mut watching = true;
     loop {
         // Tamponu her iterasyon başında boşalt — transcript yazım hatası gibi
         // maybe_compact dışında biriken bildirimler de asla kaybolmasın.
         for m in ui::drain_tui_notices() {
             page_notice(&mut tui, &m)?;
         }
-        draw(&mut tui, &editor, &Status::Idle, last_tokens, window)?;
+        draw(&mut tui, &editor, &Status::Idle, last_tokens, window, Some(watching))?;
         tokio::select! {
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else {
@@ -526,6 +528,13 @@ pub async fn run(
                     Action::None => {}
                     Action::Exit => break,
                     Action::Submit(line) => {
+                        if let Some(cmd) = crate::parse_watch_command(&line) {
+                            page_user_echo(&mut tui, &line)?;
+                            let (next, msg) = crate::apply_watch(cmd, watching);
+                            watching = next;
+                            page_notice(&mut tui, msg)?;
+                            continue;
+                        }
                         if line == "/quit" { break; }
                         // Gönderilen satırı belirgin kullanıcı bloğu olarak scrollback'e bas.
                         page_user_echo(&mut tui, &line)?;
@@ -565,6 +574,13 @@ pub async fn run(
                         batch.len()
                     ))?;
                     // FileMemory'yi sessizce senkronla: sonraki tekil kayıt dev diff üretmesin.
+                    for path in batch {
+                        if let Ok(c) = std::fs::read_to_string(&path) {
+                            let _ = files.observe(&path, c);
+                        }
+                    }
+                } else if !watching {
+                    // Companion off: keep the diff baseline current, no LLM feedback.
                     for path in batch {
                         if let Ok(c) = std::fs::read_to_string(&path) {
                             let _ = files.observe(&path, c);
