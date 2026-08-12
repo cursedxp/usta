@@ -162,7 +162,7 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
         if d.drill_count > 0 { right.push((format!("Drill: {} question(s) ready", d.drill_count), Style::default())); }
     }
 
-    render_box(d.version, left, right, width)
+    with_help_hint(render_box(d.version, left, right, width))
 }
 
 /// Identity mode: NO topic. Left column is logo + greeting + model + directory;
@@ -225,7 +225,15 @@ pub fn render_welcome_identity(
         }
     }
 
-    render_box(env!("CARGO_PKG_VERSION"), left, right, width)
+    with_help_hint(render_box(env!("CARGO_PKG_VERSION"), left, right, width))
+}
+
+/// Append the `/help` discovery hint as a separate dim line after the bordered
+/// box — NOT inside the box, so the box's equal-width line logic stays intact.
+fn with_help_hint(mut t: Text<'static>) -> Text<'static> {
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    t.lines.push(Line::from(Span::styled(crate::help::HELP_HINT, dim)));
+    t
 }
 
 /// Draw the two-column box — border + " │ " separator + equal-width padding.
@@ -333,9 +341,13 @@ mod tests {
         let t = render_welcome(&d, 80);
         let lines = plain_lines(&t);
         assert!(lines.len() >= 8);
-        let w = lines[0].width();
-        assert!(lines.iter().all(|l| l.width() == w), "hizasız satır: {lines:#?}");
-        assert!(lines[0].starts_with('╭') && lines.last().unwrap().starts_with('╰'));
+        // Last line is the appended help hint — NOT part of the bordered box,
+        // so it's excluded from the equal-width check (spec: separate Line, box intact).
+        let box_lines = &lines[..lines.len() - 1];
+        let w = box_lines[0].width();
+        assert!(box_lines.iter().all(|l| l.width() == w), "hizasız satır: {lines:#?}");
+        assert!(box_lines[0].starts_with('╭') && box_lines.last().unwrap().starts_with('╰'));
+        assert_eq!(lines.last().unwrap(), crate::help::HELP_HINT);
     }
 
     #[test]
@@ -358,13 +370,16 @@ mod tests {
         let local = vec!["rust".to_string(), "gtm".to_string()];
         let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], 80);
         let lines = plain_lines(&t);
-        let w = lines[0].width();
-        assert!(lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
+        // Last line is the appended help hint — NOT part of the bordered box.
+        let box_lines = &lines[..lines.len() - 1];
+        let w = box_lines[0].width();
+        assert!(box_lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
         let joined = lines.join("\n");
         assert!(joined.contains("What do you want to learn?"));
         assert!(joined.contains("rust"));
         assert!(joined.contains("Hello, Ada!"));
-        assert!(lines[0].starts_with('╭') && lines.last().unwrap().starts_with('╰'));
+        assert!(box_lines[0].starts_with('╭') && box_lines.last().unwrap().starts_with('╰'));
+        assert_eq!(lines.last().unwrap(), crate::help::HELP_HINT);
     }
 
     #[test]
@@ -388,11 +403,13 @@ mod tests {
         assert!(joined.contains("1)"));
         assert!(joined.contains("2)"));
         assert!(joined.contains("In other projects"));
-        // Hizalama korunur.
+        // Hizalama korunur — appended help hint (last line) hariç.
         use unicode_width::UnicodeWidthStr;
         let lines = plain_lines(&t);
-        let w = lines[0].width();
-        assert!(lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
+        let box_lines = &lines[..lines.len() - 1];
+        let w = box_lines[0].width();
+        assert!(box_lines.iter().all(|l| l.width() == w), "hizasız: {lines:#?}");
+        assert_eq!(lines.last().unwrap(), crate::help::HELP_HINT);
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod check;
 mod config;
 mod defaults;
 mod feedback;
+mod help;
 mod index;
 mod input;
 mod progress;
@@ -232,6 +233,11 @@ async fn run_plain_loop(
                         let (next, msg) = apply_watch(cmd, watching);
                         watching = next;
                         ui::notice(msg);
+                        let _ = ready_tx.send(());
+                        continue;
+                    }
+                    if help::is_help_command(&line) {
+                        println!("{}", help::help_text());
                         let _ = ready_tx.send(());
                         continue;
                     }

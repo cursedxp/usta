@@ -547,6 +547,11 @@ pub async fn run(
                             page_notice(&mut tui, msg)?;
                             continue;
                         }
+                        if crate::help::is_help_command(&line) {
+                            page_user_echo(&mut tui, &line)?;
+                            page_notice(&mut tui, crate::help::help_text())?;
+                            continue;
+                        }
                         if line == "/quit" { break; }
                         // Push the submitted line to scrollback as a distinct user block.
                         page_user_echo(&mut tui, &line)?;
