@@ -16,6 +16,7 @@ mod session;
 mod transcript;
 mod tui;
 mod ui;
+mod visual;
 mod watcher;
 
 use std::io::IsTerminal;
