@@ -2,17 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `/show [topic]` generates an animated, self-contained HTML explainer (embedded skeleton + model-produced scene JSON) and opens it in the browser; Usta proactively suggests `/show` on confusion signals.
+> **REVİZYON 2026-08-12:** Animasyon katmanı el yapımı rAF/CSS motorundan **vendorlanmış anime.js v3.2.2**'ye taşındı (Anil kararı: "kanıtlanmış kütüphane kullan"). `src/vendor/anime.min.js` REPODA MEVCUT ve commit'li — indirme yok, ağ erişimi gerekmez. Bu plan güncel halidir; önceki sürümün el yapımı motoru geçersizdir.
 
-**Architecture:** A hand-written HTML/JS animation skeleton is embedded via `include_str!`. The model outputs ONLY a declarative scene-JSON array (validated with serde_json), which the shell injects into the skeleton's `/*__SCENES__*/` placeholder and writes to `.usta/visuals/`. The LLM call is an isolated mini-session (same pattern as slug generation: own system prompt, `backend.reset_session()` after). Both loops intercept `/show` like `/watch` — the line never enters session history.
+**Goal:** `/show [topic]` generates an animated, self-contained HTML explainer (embedded skeleton + anime.js + model-produced scene JSON) and opens it in the browser; Usta proactively suggests `/show` on confusion signals.
 
-**Tech Stack:** Rust 2021, serde_json (already a dep), chrono (already a dep), vanilla HTML/CSS/JS (no CDN — fully offline).
+**Architecture:** A hand-written HTML player shell (scene management, prev/play/next, deterministic replay) is embedded via `include_str!`; the tween layer (easing, interruption, SVG line drawing, path-following packets) is the vendored anime.js v3.2.2 (MIT). The model outputs ONLY a declarative scene-JSON array (validated with serde_json), which the shell injects — together with anime.js — into the skeleton's placeholders and writes to `.usta/visuals/`. The LLM call is an isolated mini-session (same pattern as slug generation: own system prompt, `backend.reset_session()` after). Both loops intercept `/show` like `/watch` — the line never enters session history.
+
+**Tech Stack:** Rust 2021, serde_json + chrono (already deps), vendored anime.js v3.2.2 (`src/vendor/anime.min.js`, MIT — license header preserved), vanilla HTML/CSS player shell. Fully offline output.
 
 **Spec:** `docs/superpowers/specs/2026-08-12-visual-explainer-design.md` — binding contract for schema and flow.
 
 ## Global Constraints
 
-- The skeleton HTML is fully self-contained: inline CSS+JS, NO external requests (no CDN, no fonts, no fetch).
+- The generated HTML is fully self-contained: inline CSS+JS, NO runtime network access (no CDN `<script src>`, no `<link>` to remote, no `fetch`). anime.js is injected inline at build time from the vendored file.
+- `src/vendor/anime.min.js` is already committed — do NOT re-download, do NOT upgrade the version, do NOT strip its MIT license header comment.
 - Model output contract: a bare JSON array of scenes (may arrive fenced — strip with existing `progress::clean_markdown_reply`). Invalid JSON / empty array / scene without `caption` → `Err`, no file written, user notified. No auto-retry (v1).
 - `/show` is intercepted in BOTH loops before any `session.push_user` — never sent to the main LLM session (like `/watch`). The mini-session uses its own system prompt and calls `backend.reset_session()` afterwards (success, cancel, and error paths alike).
 - Usta never opens the browser proactively — SOUL.md only gains a one-line suggestion to offer `/show` on confusion signals.
@@ -22,30 +25,34 @@
 
 ---
 
-### Task 1: Skeleton + scene engine + `build_visual_html`
+### Task 1: Skeleton (player shell + anime.js ops) + `build_visual_html`
 
 **Files:**
 - Create: `src/visual_skeleton.html`
-- Create: `src/visual.rs` (module core: `SKELETON`, `build_visual_html`, tests)
+- Create: `src/visual.rs` (module core: `SKELETON`, `ANIME`, `build_visual_html`, tests)
 - Modify: `src/main.rs` (add `mod visual;` next to the other `mod` declarations)
+- Uses (already committed, do not modify): `src/vendor/anime.min.js`
 
 **Interfaces:**
-- Produces: `pub fn build_visual_html(scenes_json: &str) -> anyhow::Result<String>`; `const SKELETON: &str = include_str!("visual_skeleton.html");` (private). Placeholder contract: skeleton contains exactly one `/*__SCENES__*/[]` token; injection replaces it with the JSON array.
+- Produces: `pub fn build_visual_html(scenes_json: &str) -> anyhow::Result<String>`. Placeholder contract: skeleton contains exactly one `/*__ANIME__*/` (inside an empty `<script>` tag) and exactly one `/*__SCENES__*/[]`; injection replaces both.
 - Consumes: nothing from other tasks.
 
 - [ ] **Step 1: Write the failing tests** — create `src/visual.rs`:
 
 ```rust
-//! Visual explainer (/show): embedded HTML skeleton + model-produced scene JSON.
-//! The model writes ONLY the scene array; the shell validates and injects it.
+//! Visual explainer (/show): embedded HTML skeleton (player shell) + vendored
+//! anime.js tween layer + model-produced scene JSON. The model writes ONLY the
+//! scene array; the shell validates and injects it.
 
 use anyhow::{bail, Context, Result};
 
 const SKELETON: &str = include_str!("visual_skeleton.html");
-const PLACEHOLDER: &str = "/*__SCENES__*/[]";
+const ANIME: &str = include_str!("vendor/anime.min.js");
+const PLACEHOLDER_SCENES: &str = "/*__SCENES__*/[]";
+const PLACEHOLDER_ANIME: &str = "/*__ANIME__*/";
 
-/// Validate the scene JSON and inject it into the skeleton. Errors: not JSON,
-/// not an array, empty array, or any scene missing a `caption` string.
+/// Validate the scene JSON and inject anime.js + scenes into the skeleton.
+/// Errors: not JSON, not an array, empty array, any scene missing a `caption`.
 pub fn build_visual_html(scenes_json: &str) -> Result<String> {
     let v: serde_json::Value =
         serde_json::from_str(scenes_json).context("scene data is not valid JSON")?;
@@ -58,7 +65,9 @@ pub fn build_visual_html(scenes_json: &str) -> Result<String> {
             bail!("scene {i} has no caption");
         }
     }
-    Ok(SKELETON.replacen(PLACEHOLDER, &v.to_string(), 1))
+    Ok(SKELETON
+        .replacen(PLACEHOLDER_ANIME, ANIME, 1)
+        .replacen(PLACEHOLDER_SCENES, &v.to_string(), 1))
 }
 
 #[cfg(test)]
@@ -85,11 +94,13 @@ mod tests {
     ]"#;
 
     #[test]
-    fn build_injects_scenes_into_full_document() {
+    fn build_injects_anime_and_scenes_into_full_document() {
         let html = build_visual_html(SAMPLE).unwrap();
         assert!(html.contains("<!doctype html>") || html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("anime.js v3.2.2"), "vendored anime.js (with MIT header) must be inlined");
         assert!(html.contains("\"caption\":\"A request travels\""));
-        assert!(!html.contains("/*__SCENES__*/"), "placeholder must be consumed");
+        assert!(!html.contains(PLACEHOLDER_ANIME), "anime placeholder must be consumed");
+        assert!(!html.contains("/*__SCENES__*/"), "scenes placeholder must be consumed");
     }
 
     #[test]
@@ -102,13 +113,18 @@ mod tests {
 
     #[test]
     fn skeleton_is_selfcontained_player() {
-        assert!(SKELETON.contains(PLACEHOLDER));
+        assert!(SKELETON.contains(PLACEHOLDER_SCENES));
+        assert!(SKELETON.contains(PLACEHOLDER_ANIME));
         assert!(SKELETON.contains("prefers-color-scheme"));
         for marker in ["id=\"prev\"", "id=\"play\"", "id=\"next\"", "id=\"caption\"", "<svg"] {
             assert!(SKELETON.contains(marker), "skeleton missing {marker}");
         }
-        // Offline guarantee: no external URLs.
-        assert!(!SKELETON.contains("http://") && !SKELETON.contains("https://"));
+        // Offline guarantee: no external loads at runtime. (Plain `http://` cannot be
+        // asserted away — the SVG namespace URI legitimately contains it.)
+        assert!(!SKELETON.contains("<script src"));
+        assert!(!SKELETON.contains("<link "));
+        assert!(!SKELETON.contains("fetch("));
+        assert!(!ANIME.contains("<script src"));
     }
 
     /// Writes a demo to temp — run with `--nocapture` and open the printed path
@@ -123,12 +139,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Create a stub skeleton so it compiles, run tests to verify they FAIL on content** — write `src/visual_skeleton.html` containing only `/*__SCENES__*/[]`, add `mod visual;` to `src/main.rs`, then:
+- [ ] **Step 2: Create a stub skeleton so it compiles, run tests to verify they FAIL on content** — write `src/visual_skeleton.html` containing only the two placeholders (`<script>/*__ANIME__*/</script>` and `/*__SCENES__*/[]` on separate lines), add `mod visual;` to `src/main.rs`, then:
 
 Run: `cargo test -p usta --lib visual`
-Expected: `build_injects_scenes_into_full_document` and `skeleton_is_selfcontained_player` FAIL (no doctype/controls yet); `build_rejects_invalid_json` PASSES (validation logic is complete).
+Expected: `build_injects_anime_and_scenes_into_full_document` and `skeleton_is_selfcontained_player` FAIL (no doctype/controls yet); `build_rejects_invalid_json` PASSES (validation logic is complete).
 
-- [ ] **Step 3: Write the real skeleton** — replace `src/visual_skeleton.html` with the complete player below. This is the reference implementation; keep the IDs, the placeholder line, and the op semantics exactly, polish freely.
+- [ ] **Step 3: Write the real skeleton** — replace `src/visual_skeleton.html` with the complete player below. This is the reference implementation; keep the element IDs, both placeholder lines, and the op semantics exactly; polish freely. All tween mechanics go through `anime(...)` — do not hand-roll rAF loops (the whole point of the revision).
 
 ```html
 <!doctype html>
@@ -160,9 +176,6 @@ Expected: `build_injects_scenes_into_full_document` and `skeleton_is_selfcontain
   .alabel { fill:var(--fg); font:12px system-ui,sans-serif; text-anchor:middle; opacity:.75 }
   .notebox rect { fill:var(--note); stroke:var(--accent); stroke-width:1 }
   .packet { fill:var(--accent) }
-  g { transition:opacity .45s, transform .6s }
-  @keyframes pulse { 50% { transform:scale(1.12) } }
-  .pulsing { animation:pulse .7s ease-in-out 2; transform-origin:center; transform-box:fill-box }
 </style>
 <main><svg id="stage" viewBox="0 0 800 450">
   <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
@@ -176,6 +189,7 @@ Expected: `build_injects_scenes_into_full_document` and `skeleton_is_selfcontain
   <button id="next">▶|</button>
   <span id="counter"></span>
 </div>
+<script>/*__ANIME__*/</script>
 <script>
 "use strict";
 const SCENES = /*__SCENES__*/[];
@@ -183,10 +197,12 @@ const NS = "http://www.w3.org/2000/svg";
 const root = document.getElementById("root");
 const cap = document.getElementById("caption");
 const counter = document.getElementById("counter");
-const meta = {};          // id → {cx, cy} centers for arrows/moves
+const meta = {};   // id → current center {cx, cy} (+ arrow path element)
+const orig = {};   // id → original center (anime translate deltas are absolute vs origin)
 let cur = -1, playing = false, playToken = 0;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const tween = opts => anime(Object.assign({ easing: "easeInOutQuad" }, opts)).finished;
 function el(tag, attrs) { const e = document.createElementNS(NS, tag);
   for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
 function centerOf(id) { return meta[id] || { cx: 400, cy: 225 }; }
@@ -195,10 +211,11 @@ function makeElement(spec) {
   const g = el("g", { id: "el-" + spec.id });
   if (spec.type === "node") {
     g.classList.add("node");
-    g.appendChild(el("rect", { x: spec.x, y: spec.y, width: spec.w || 140, height: spec.h || 70, rx: 10 }));
-    const t = el("text", { x: spec.x + (spec.w || 140) / 2, y: spec.y + (spec.h || 70) / 2, class: "lbl" });
+    const w = spec.w || 140, h = spec.h || 70;
+    g.appendChild(el("rect", { x: spec.x, y: spec.y, width: w, height: h, rx: 10 }));
+    const t = el("text", { x: spec.x + w / 2, y: spec.y + h / 2, class: "lbl" });
     t.textContent = spec.label || ""; g.appendChild(t);
-    meta[spec.id] = { cx: spec.x + (spec.w || 140) / 2, cy: spec.y + (spec.h || 70) / 2 };
+    meta[spec.id] = { cx: spec.x + w / 2, cy: spec.y + h / 2 };
   } else if (spec.type === "circle") {
     g.classList.add("circ");
     g.appendChild(el("circle", { cx: spec.cx, cy: spec.cy, r: spec.r || 34 }));
@@ -210,6 +227,7 @@ function makeElement(spec) {
     t.textContent = spec.text || spec.label || ""; g.appendChild(t);
     meta[spec.id] = { cx: spec.x, cy: spec.y };
   }
+  orig[spec.id] = Object.assign({}, meta[spec.id]);
   return g;
 }
 
@@ -218,23 +236,22 @@ async function apply(op, animate) {
   switch (op.op) {
     case "add": {
       const g = makeElement(op.el);
-      if (animate) { g.style.opacity = 0; root.appendChild(g); void g.getBBox(); g.style.opacity = 1; await sleep(480); }
-      else root.appendChild(g);
+      root.appendChild(g);
+      if (animate) { g.style.opacity = 0; await tween({ targets: g, opacity: [0, 1], duration: 450 }); }
       break; }
     case "remove": {
       const g = find(op.id); if (!g) break;
-      if (animate) { g.style.opacity = 0; await sleep(460); }
+      if (animate) await tween({ targets: g, opacity: 0, duration: 420 });
       g.remove(); break; }
     case "move": {
       const g = find(op.id); if (!g) break;
+      const o = orig[op.id] || centerOf(op.id);
       const c = centerOf(op.id);
       const nx = op.x !== undefined ? op.x : c.cx, ny = op.y !== undefined ? op.y : c.cy;
-      if (!animate) g.style.transition = "none";
-      g.style.transform = `translate(${nx - c.cx}px, ${ny - c.cy}px)`;
-      // meta keeps the ORIGINAL center + accumulated transform would compound;
-      // simplest correct model: moves are absolute per element, so update meta and bake:
+      const props = { translateX: nx - o.cx, translateY: ny - o.cy };
+      if (animate) await tween({ targets: g, duration: 650, ...props });
+      else anime.set(g, props);
       meta[op.id] = { cx: nx, cy: ny };
-      if (animate) await sleep(650); else { void g.getBBox(); g.style.transition = ""; }
       break; }
     case "arrow": {
       const a = centerOf(op.from), b = centerOf(op.to);
@@ -243,35 +260,35 @@ async function apply(op, animate) {
       const pad = 46; // don't pierce the boxes
       const x1 = a.cx + dx / len * pad, y1 = a.cy + dy / len * pad;
       const x2 = b.cx - dx / len * pad, y2 = b.cy - dy / len * pad;
-      const line = el("line", { x1, y1, x2, y2, class: "arrow" });
-      g.appendChild(line);
+      const path = el("path", { d: `M ${x1} ${y1} L ${x2} ${y2}`, class: "arrow" });
+      g.appendChild(path);
       if (op.label) { const t = el("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8, class: "alabel" });
         t.textContent = op.label; g.appendChild(t); }
-      meta[op.id] = { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, x1, y1, x2, y2 };
-      if (animate) { const d = Math.hypot(x2 - x1, y2 - y1);
-        line.style.strokeDasharray = d; line.style.strokeDashoffset = d;
-        root.appendChild(g); void line.getBBox();
-        line.style.transition = "stroke-dashoffset .6s"; line.style.strokeDashoffset = 0; await sleep(640);
-        line.style.strokeDasharray = ""; }
-      else root.appendChild(g);
+      root.appendChild(g);
+      meta[op.id] = { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, path };
+      if (animate) {
+        const d = path.getTotalLength();
+        path.style.strokeDasharray = d; path.style.strokeDashoffset = d;
+        await tween({ targets: path, strokeDashoffset: [d, 0], duration: 600 });
+        path.style.strokeDasharray = "";
+      }
       break; }
     case "packet": {
       if (!animate) break; // transient — nothing to replay
-      const m = meta[op.along]; if (!m || m.x1 === undefined) break;
+      const m = meta[op.along]; if (!m || !m.path) break;
       const g = el("g", {});
       g.appendChild(el("circle", { cx: 0, cy: 0, r: 7, class: "packet" }));
       if (op.label) { const t = el("text", { x: 0, y: -14, class: "alabel" }); t.textContent = op.label; g.appendChild(t); }
       root.appendChild(g);
-      const t0 = performance.now(), dur = 1100;
-      await new Promise(res => { (function step(now) {
-        const k = Math.min(1, (now - t0) / dur);
-        g.setAttribute("transform", `translate(${m.x1 + (m.x2 - m.x1) * k}, ${m.y1 + (m.y2 - m.y1) * k})`);
-        k < 1 ? requestAnimationFrame(step) : res(); })(t0); });
+      const p = anime.path(m.path); // anime.js motion path — the reason the library is here
+      await tween({ targets: g, translateX: p("x"), translateY: p("y"), duration: 1100, easing: "easeInOutSine" });
       g.remove(); break; }
     case "pulse": {
       if (!animate) break;
       const g = find(op.id); if (!g) break;
-      g.classList.add("pulsing"); await sleep(1450); g.classList.remove("pulsing"); break; }
+      await tween({ targets: g, scale: [1, 1.12, 1], duration: 700, loop: 2,
+                    transformOrigin: "center" }); // anime handles SVG transforms
+      break; }
     case "highlight": {
       const g = find(op.id); if (!g) break;
       g.classList.toggle("hl", op.on !== false); break; }
@@ -283,8 +300,9 @@ async function apply(op, animate) {
       const t = el("text", { x: op.x, y: op.y, class: "lbl", "font-size": 13 });
       t.textContent = op.text || ""; g.appendChild(t);
       meta[op.id || "note"] = { cx: op.x, cy: op.y };
-      if (animate) { g.style.opacity = 0; root.appendChild(g); void g.getBBox(); g.style.opacity = 1; await sleep(420); }
-      else root.appendChild(g);
+      orig[op.id || "note"] = { cx: op.x, cy: op.y };
+      root.appendChild(g);
+      if (animate) { g.style.opacity = 0; await tween({ targets: g, opacity: [0, 1], duration: 420 }); }
       break; }
   }
 }
@@ -297,7 +315,10 @@ async function showScene(i, animate) {
 }
 
 async function renderUpTo(i) { // deterministic replay, instant
-  root.innerHTML = ""; for (const k in meta) delete meta[k];
+  anime.remove(root.querySelectorAll("*")); // kill in-flight tweens before rebuild
+  root.innerHTML = "";
+  for (const k in meta) delete meta[k];
+  for (const k in orig) delete orig[k];
   for (let s = 0; s < i; s++) { cap.textContent = SCENES[s].caption;
     for (const op of SCENES[s].ops || []) await apply(op, false); }
   await showScene(i, true);
@@ -310,7 +331,7 @@ document.getElementById("prev").onclick = async () => { stopPlay(); if (cur > 0)
 document.getElementById("play").onclick = async function () {
   if (playing) { stopPlay(); return; }
   playing = true; this.textContent = "❚❚ pause"; const my = ++playToken;
-  if (cur + 1 >= SCENES.length) await renderUpTo(0).then(() => sleep(SCENES[0].duration || 3500));
+  if (cur + 1 >= SCENES.length) { await renderUpTo(0); await sleep(SCENES[0].duration || 3500); }
   while (playing && my === playToken && cur + 1 < SCENES.length) {
     await showScene(cur + 1, true);
     await sleep(SCENES[cur].duration || 3500);
@@ -322,7 +343,13 @@ if (SCENES.length) showScene(0, true); else cap.textContent = "no scenes";
 </script>
 ```
 
-**Known simplification to keep (v1):** `move` uses CSS `transform translate` deltas computed from `meta`; because `meta` is updated to the new absolute center, arrows drawn AFTER a move stay correct, and replay is deterministic since ops replay in order. Do not "improve" this into compounding transforms.
+**anime.js notes for the implementer:**
+- `anime(...)` returns an instance; `.finished` is a Promise — the `tween` helper awaits it.
+- `anime.set(el, props)` applies transforms instantly (used for deterministic replay).
+- `anime.path(svgPathElement)` returns `p("x")/p("y")` property functions for motion-path following — this powers `packet`.
+- If `scale` on an SVG `<g>` misbehaves in a browser (transform-origin quirks), fall back to animating `opacity: [1, .35, 1]` for `pulse` — visual intent is "draw attention", not literal scaling. Note the choice in the report.
+
+**Known simplification to keep (v1):** `move` computes translate deltas against the element's ORIGINAL center (`orig`), because anime's `translateX/Y` are absolute transform values — re-moving an element animates from its current transform to the new absolute delta correctly. `meta` tracks the CURRENT center so arrows drawn after a move stay correct. Replay is deterministic since ops replay in order. Do not "improve" this into compounding transforms.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -332,13 +359,13 @@ Expected: all 4 PASS.
 - [ ] **Step 5: Manual eyeball of the player**
 
 Run: `cargo test -p usta --lib visual::tests::demo_html_for_manual_check -- --nocapture`
-Open the printed path in a browser. Check: 3 scenes; ▶ play auto-advances; ◀ replays deterministically; packet dot travels both arrows; dark/light theme follows OS. (If no browser in the execution environment, note it in the report — the human verifies.)
+Open the printed path in a browser. Check: 3 scenes; ▶ play auto-advances; ◀ replays deterministically; packet dot travels both arrows (anime.path working); dark/light theme follows OS. (If no browser in the execution environment, note it in the report — the human verifies.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/visual.rs src/visual_skeleton.html src/main.rs
-git commit -m "usta: görsel iskelet + sahne motoru — build_visual_html, gömülü offline oynatıcı"
+git commit -m "usta: görsel iskelet — anime.js tween katmanı + oynatıcı kabuğu + build_visual_html"
 ```
 
 ---
@@ -387,7 +414,7 @@ fn visual_path_shape() {
     let p = visual_path(std::path::Path::new("/proj"), "rust", "How ownership works!");
     let s = p.to_string_lossy();
     assert!(s.starts_with("/proj/.usta/visuals/rust/"));
-    assert!(s.ends_with("-how-ownership-works.html") || s.contains("how-ownership-works"));
+    assert!(s.ends_with(".html") && s.contains("how-ownership-works"));
 }
 ```
 
@@ -458,7 +485,7 @@ pub fn open_in_browser(path: &std::path::Path) -> bool {
 }
 ```
 
-Adjust the `visual_system` literal so every substring the Step-1 test asserts is present verbatim (e.g. include the phrases `JSON array`, `6-12 scenes`, `ONE idea`, `same language as the user`) — prompt and test must agree.
+Adjust the `visual_system` literal so every substring the Step-1 test asserts is present verbatim (e.g. the phrases `JSON array`, `6-12 scenes`, `ONE idea`, `same language as the user`) — prompt and test must agree.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -477,16 +504,16 @@ git commit -m "usta: /show komut altyapısı — parse, sistem promptu, dosya yo
 ### Task 3: Loop integration + help + SOUL proactive line
 
 **Files:**
-- Modify: `src/main.rs` (shared runner `run_show` + plain-loop intercept)
+- Modify: `src/main.rs` (shared runner helpers + plain-loop intercept)
 - Modify: `src/tui/run.rs` (TUI intercept via `ask_live`)
 - Modify: `src/help.rs` (add `/show` line + test needle)
 - Modify: `SOUL.md` (one-line proactive suggestion)
 
 **Interfaces:**
 - Consumes: Task 2's `parse_show_command`, `visual_system`, `visual_path`, `open_in_browser`; Task 1's `build_visual_html`; existing `progress::clean_markdown_reply`, `backend.reset_session()`, `ask_usta` (main.rs), `ask_live`/`AskOutcome` (run.rs), `Session::history()`.
-- Produces: `pub(crate) fn last_assistant_text(session: &Session) -> Option<String>` in `main.rs` — helper both loops use to find the concept for bare `/show`. (Look at `src/session.rs` for how history messages store role + text; implement accordingly — likely `session.history().iter().rev().find(|m| m.role == "assistant")`.)
+- Produces: `pub(crate) fn last_assistant_text(session: &Session) -> Option<String>` and `pub(crate) fn show_request(explicit: Option<String>, last_reply: Option<&str>) -> Option<String>` in `main.rs` — both loops use them.
 
-- [ ] **Step 1: Add the helper + build the mini-session user message.** In `src/main.rs`:
+- [ ] **Step 1: Add the helpers + tests.** In `src/main.rs`:
 
 ```rust
 /// Last assistant reply in this session — the concept a bare `/show` visualizes.
@@ -518,7 +545,7 @@ pub(crate) fn show_request(explicit: Option<String>, last_reply: Option<&str>) -
 
 Check `src/anthropic.rs`/`src/session.rs` for the actual `Message` shape (role field + content accessor) and adapt `last_assistant_text` — do not invent an accessor; read the struct.
 
-Unit tests for `show_request` (in `main.rs mod tests`):
+Unit tests (in `main.rs mod tests`):
 
 ```rust
 #[test]
@@ -526,7 +553,7 @@ fn show_request_composition() {
     assert!(show_request(None, None).is_none());
     let bare = show_request(None, Some("ownership explained")).unwrap();
     assert!(bare.contains("ownership explained"));
-    let explicit = show_request(Some("dns".into()), Some("prior".into())).unwrap();
+    let explicit = show_request(Some("dns".into()), Some("prior")).unwrap();
     assert!(explicit.contains("dns") && explicit.contains("prior"));
     let cold = show_request(Some("dns".into()), None).unwrap();
     assert!(cold.contains("dns"));
@@ -537,6 +564,7 @@ fn show_request_composition() {
 
 ```rust
 if let Some(arg) = visual::parse_show_command(&line) {
+    let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
     match show_request(arg, last_assistant_text(session).as_deref()) {
         None => ui::notice("nothing to visualize yet — explain something first, or use /show <topic>"),
         Some(req) => {
@@ -545,7 +573,7 @@ if let Some(arg) = visual::parse_show_command(&line) {
                     let json = progress::clean_markdown_reply(&reply.text);
                     match visual::build_visual_html(&json) {
                         Ok(html) => {
-                            let path = visual::visual_path(project_root, topic, &req);
+                            let path = visual::visual_path(project_root, topic, &concept);
                             if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
                             match std::fs::write(&path, html) {
                                 Ok(()) => {
@@ -568,8 +596,6 @@ if let Some(arg) = visual::parse_show_command(&line) {
     continue;
 }
 ```
-
-Note: `visual_path`'s concept argument — for bare `/show` the `req` string is long; pass the explicit topic when present, else a fixed `"visual"` concept: adapt to `let concept = arg_clone.unwrap_or_else(|| "visual".into())` captured BEFORE `show_request` consumes `arg` (clone it). Keep filenames short.
 
 - [ ] **Step 3: TUI intercept.** In `src/tui/run.rs` main loop `Action::Submit(line)` arm, next to `/watch` and `/help`:
 
@@ -621,7 +647,7 @@ Borrow care: `topic` in `run` may be a `String` consumed earlier — check how t
 
 and extend the help test's needle list with `"/show [topic]"`.
 
-- [ ] **Step 5: SOUL.md proactive line.** In SOUL.md's confusion-signal bullet ("Anlaşılmadı sinyali" — now in English after the brain translation; find the bullet about re-explaining with a different analogy), append one sentence:
+- [ ] **Step 5: SOUL.md proactive line.** In SOUL.md's confusion-signal bullet (the one about re-explaining with a different analogy — English after the brain translation), append one sentence:
 
 ```
 If the concept is visual or spatial (flows, architectures, protocols, layouts), offer the animation: "want me to show this visually? type /show".
@@ -647,8 +673,8 @@ git commit -m "usta: /show entegrasyonu — iki loop, help, SOUL proaktif öneri
 
 ## Self-Review
 
-**Spec coverage:** skeleton+engine (T1), JSON contract+validation (T1), parse/system-prompt/path/browser (T2), both-loop intercepts + mini-session isolation + reset_session on all paths (T3), no-context fallback notice (T3), help line (T3), SOUL proactive one-liner (T3), error paths (invalid JSON / open failure / Esc cancel) (T3). Out-of-scope items in spec (listing command, history writeback, retry) deliberately absent. ✓
+**Spec coverage:** skeleton player shell + anime.js tween layer (T1), vendored lib injection + license preservation (T1, Global Constraints), JSON contract+validation (T1), parse/system-prompt/path/browser (T2), both-loop intercepts + mini-session isolation + reset_session on all paths (T3), no-context fallback notice (T3), help line (T3), SOUL proactive one-liner (T3), error paths (invalid JSON / open failure / Esc cancel) (T3). Out-of-scope items in spec (listing command, history writeback, retry) deliberately absent. ✓
 
-**Placeholder scan:** `/*__SCENES__*/` is the designed injection token, not a plan placeholder. Two adapt-to-reality notes are explicit implementer instructions with the file to read named (`Message` accessor in session.rs/anthropic.rs; `topic` borrow in run.rs) — flagged, not vague. The deliberate CSS typo is called out with its exact fix. ✓
+**Placeholder scan:** `/*__ANIME__*/` and `/*__SCENES__*/[]` are designed injection tokens, not plan placeholders. Two adapt-to-reality notes are explicit implementer instructions with the file to read named (`Message` accessor; `topic` borrow). The pulse fallback (opacity instead of scale) is a named contingency with its trigger condition. ✓
 
-**Type consistency:** `parse_show_command -> Option<Option<String>>` used identically in both loops; `build_visual_html(&str) -> Result<String>` from T1 consumed in T3; `visual_path(&Path, &str, &str)` matches both call sites; `show_request`/`last_assistant_text` defined in T3-Step1 and used in T3-Steps 2-3. ✓
+**Type consistency:** `parse_show_command -> Option<Option<String>>` used identically in both loops; `build_visual_html(&str) -> Result<String>` from T1 consumed in T3; `visual_path(&Path, &str, &str)` matches both call sites; `show_request`/`last_assistant_text` defined in T3-Step1 and used in T3-Steps 2-3; `concept` cloned before `show_request` consumes `arg` in both loops. ✓

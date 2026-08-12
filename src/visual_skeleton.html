@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Usta — visual explainer</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1c1e21; --panel:#fff; --line:#9aa1ac; --accent:#e8862e; --note:#fff6e8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181d; --fg:#e8eaed; --panel:#1f2229; --line:#8a919e; --accent:#f09040; --note:#2a2620; }
+  }
+  * { box-sizing:border-box; margin:0 }
+  body { background:var(--bg); color:var(--fg); font:16px/1.45 system-ui,sans-serif;
+         min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:24px; gap:14px }
+  main { width:min(880px,100%); background:var(--panel); border-radius:14px; padding:16px;
+         box-shadow:0 4px 24px rgba(0,0,0,.12) }
+  svg { width:100%; height:auto; display:block }
+  #caption { min-height:3em; text-align:center; font-size:18px; padding:8px 16px; max-width:840px }
+  #bar { display:flex; gap:10px; align-items:center }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+           padding:8px 16px; font-size:15px; cursor:pointer }
+  button:hover { border-color:var(--accent) }
+  #counter { opacity:.6; font-variant-numeric:tabular-nums }
+  .node rect,.circ circle { fill:var(--panel); stroke:var(--line); stroke-width:2 }
+  .hl rect,.hl circle { stroke:var(--accent); stroke-width:3 }
+  .lbl { fill:var(--fg); font:14px system-ui,sans-serif; text-anchor:middle; dominant-baseline:middle }
+  .arrow { stroke:var(--line); stroke-width:2; fill:none; marker-end:url(#ah) }
+  .alabel { fill:var(--fg); font:12px system-ui,sans-serif; text-anchor:middle; opacity:.75 }
+  .notebox rect { fill:var(--note); stroke:var(--accent); stroke-width:1 }
+  .packet { fill:var(--accent) }
+</style>
+<main><svg id="stage" viewBox="0 0 800 450">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker></defs>
+  <g id="root"></g>
+</svg></main>
+<div id="caption"></div>
+<div id="bar">
+  <button id="prev">◀</button>
+  <button id="play">▶ play</button>
+  <button id="next">▶|</button>
+  <span id="counter"></span>
+</div>
+<script>/*__ANIME__*/</script>
+<script>
+"use strict";
+const SCENES = /*__SCENES__*/[];
+const NS = "http://www.w3.org/2000/svg";
+const root = document.getElementById("root");
+const cap = document.getElementById("caption");
+const counter = document.getElementById("counter");
+const meta = {};   // id → current center {cx, cy} (+ arrow path element)
+const orig = {};   // id → original center (anime translate deltas are absolute vs origin)
+let cur = -1, playing = false, playToken = 0;
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const tween = opts => anime(Object.assign({ easing: "easeInOutQuad" }, opts)).finished;
+function el(tag, attrs) { const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function centerOf(id) { return meta[id] || { cx: 400, cy: 225 }; }
+
+function makeElement(spec) {
+  const g = el("g", { id: "el-" + spec.id });
+  if (spec.type === "node") {
+    g.classList.add("node");
+    const w = spec.w || 140, h = spec.h || 70;
+    g.appendChild(el("rect", { x: spec.x, y: spec.y, width: w, height: h, rx: 10 }));
+    const t = el("text", { x: spec.x + w / 2, y: spec.y + h / 2, class: "lbl" });
+    t.textContent = spec.label || ""; g.appendChild(t);
+    meta[spec.id] = { cx: spec.x + w / 2, cy: spec.y + h / 2 };
+  } else if (spec.type === "circle") {
+    g.classList.add("circ");
+    g.appendChild(el("circle", { cx: spec.cx, cy: spec.cy, r: spec.r || 34 }));
+    const t = el("text", { x: spec.cx, y: spec.cy, class: "lbl" });
+    t.textContent = spec.label || ""; g.appendChild(t);
+    meta[spec.id] = { cx: spec.cx, cy: spec.cy };
+  } else { // text
+    const t = el("text", { x: spec.x, y: spec.y, class: "lbl", "font-size": spec.size || 16 });
+    t.textContent = spec.text || spec.label || ""; g.appendChild(t);
+    meta[spec.id] = { cx: spec.x, cy: spec.y };
+  }
+  orig[spec.id] = Object.assign({}, meta[spec.id]);
+  return g;
+}
+
+async function apply(op, animate) {
+  const find = id => document.getElementById("el-" + id);
+  switch (op.op) {
+    case "add": {
+      const g = makeElement(op.el);
+      root.appendChild(g);
+      if (animate) { g.style.opacity = 0; await tween({ targets: g, opacity: [0, 1], duration: 450 }); }
+      break; }
+    case "remove": {
+      const g = find(op.id); if (!g) break;
+      if (animate) await tween({ targets: g, opacity: 0, duration: 420 });
+      g.remove(); break; }
+    case "move": {
+      const g = find(op.id); if (!g) break;
+      const o = orig[op.id] || centerOf(op.id);
+      const c = centerOf(op.id);
+      const nx = op.x !== undefined ? op.x : c.cx, ny = op.y !== undefined ? op.y : c.cy;
+      const props = { translateX: nx - o.cx, translateY: ny - o.cy };
+      if (animate) await tween({ targets: g, duration: 650, ...props });
+      else anime.set(g, props);
+      meta[op.id] = { cx: nx, cy: ny };
+      break; }
+    case "arrow": {
+      const a = centerOf(op.from), b = centerOf(op.to);
+      const g = el("g", { id: "el-" + op.id });
+      const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
+      const pad = 46; // don't pierce the boxes
+      const x1 = a.cx + dx / len * pad, y1 = a.cy + dy / len * pad;
+      const x2 = b.cx - dx / len * pad, y2 = b.cy - dy / len * pad;
+      const path = el("path", { d: `M ${x1} ${y1} L ${x2} ${y2}`, class: "arrow" });
+      g.appendChild(path);
+      if (op.label) { const t = el("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8, class: "alabel" });
+        t.textContent = op.label; g.appendChild(t); }
+      root.appendChild(g);
+      meta[op.id] = { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, path };
+      if (animate) {
+        const d = path.getTotalLength();
+        path.style.strokeDasharray = d; path.style.strokeDashoffset = d;
+        await tween({ targets: path, strokeDashoffset: [d, 0], duration: 600 });
+        path.style.strokeDasharray = "";
+      }
+      break; }
+    case "packet": {
+      if (!animate) break; // transient — nothing to replay
+      const m = meta[op.along]; if (!m || !m.path) break;
+      const g = el("g", {});
+      g.appendChild(el("circle", { cx: 0, cy: 0, r: 7, class: "packet" }));
+      if (op.label) { const t = el("text", { x: 0, y: -14, class: "alabel" }); t.textContent = op.label; g.appendChild(t); }
+      root.appendChild(g);
+      const p = anime.path(m.path); // anime.js motion path — the reason the library is here
+      await tween({ targets: g, translateX: p("x"), translateY: p("y"), duration: 1100, easing: "easeInOutSine" });
+      g.remove(); break; }
+    case "pulse": {
+      if (!animate) break;
+      const g = find(op.id); if (!g) break;
+      await tween({ targets: g, opacity: [1, .35, 1], duration: 700, loop: 2 }); // opacity, not scale — avoids SVG <g> transform-origin quirks
+      break; }
+    case "highlight": {
+      const g = find(op.id); if (!g) break;
+      g.classList.toggle("hl", op.on !== false); break; }
+    case "note": {
+      const g = el("g", { id: "el-" + (op.id || "note") });
+      g.classList.add("notebox");
+      const w = Math.max(120, (op.text || "").length * 7.2 + 24);
+      g.appendChild(el("rect", { x: op.x - w / 2, y: op.y - 18, width: w, height: 36, rx: 8 }));
+      const t = el("text", { x: op.x, y: op.y, class: "lbl", "font-size": 13 });
+      t.textContent = op.text || ""; g.appendChild(t);
+      meta[op.id || "note"] = { cx: op.x, cy: op.y };
+      orig[op.id || "note"] = { cx: op.x, cy: op.y };
+      root.appendChild(g);
+      if (animate) { g.style.opacity = 0; await tween({ targets: g, opacity: [0, 1], duration: 420 }); }
+      break; }
+  }
+}
+
+async function showScene(i, animate) {
+  cur = i;
+  cap.textContent = SCENES[i].caption || "";
+  counter.textContent = (i + 1) + "/" + SCENES.length;
+  for (const op of SCENES[i].ops || []) await apply(op, animate);
+}
+
+async function renderUpTo(i) { // deterministic replay, instant
+  anime.remove(root.querySelectorAll("*")); // kill in-flight tweens before rebuild
+  root.innerHTML = "";
+  for (const k in meta) delete meta[k];
+  for (const k in orig) delete orig[k];
+  for (let s = 0; s < i; s++) { cap.textContent = SCENES[s].caption;
+    for (const op of SCENES[s].ops || []) await apply(op, false); }
+  await showScene(i, true);
+}
+
+function stopPlay() { playing = false; playToken++; document.getElementById("play").textContent = "▶ play"; }
+
+document.getElementById("next").onclick = async () => { stopPlay(); if (cur + 1 < SCENES.length) await showScene(cur + 1, true); };
+document.getElementById("prev").onclick = async () => { stopPlay(); if (cur > 0) await renderUpTo(cur - 1); };
+document.getElementById("play").onclick = async function () {
+  if (playing) { stopPlay(); return; }
+  playing = true; this.textContent = "❚❚ pause"; const my = ++playToken;
+  if (cur + 1 >= SCENES.length) { await renderUpTo(0); await sleep(SCENES[0].duration || 3500); }
+  while (playing && my === playToken && cur + 1 < SCENES.length) {
+    await showScene(cur + 1, true);
+    await sleep(SCENES[cur].duration || 3500);
+  }
+  if (my === playToken) stopPlay();
+};
+
+if (SCENES.length) showScene(0, true); else cap.textContent = "no scenes";
+</script>

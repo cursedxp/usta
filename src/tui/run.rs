@@ -552,6 +552,43 @@ pub async fn run(
                             page_notice(&mut tui, crate::help::help_text())?;
                             continue;
                         }
+                        if let Some(arg) = crate::visual::parse_show_command(&line) {
+                            page_user_echo(&mut tui, &line)?;
+                            let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
+                            // Borrow care: read the last reply BEFORE any &mut session borrow.
+                            let last = crate::last_assistant_text(&session);
+                            match crate::show_request(arg, last.as_deref()) {
+                                None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
+                                Some(req) => {
+                                    match ask_live(&mut tui, &mut editor, &mut events, backend,
+                                                   &crate::visual::visual_system(),
+                                                   &[Message::user(req.as_str())], last_tokens).await {
+                                        Ok(AskOutcome::Reply(reply)) => {
+                                            let json = crate::progress::clean_markdown_reply(&reply.text);
+                                            match crate::visual::build_visual_html(&json) {
+                                                Ok(html) => {
+                                                    let path = crate::visual::visual_path(project_root, &topic, &concept);
+                                                    if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+                                                    match std::fs::write(&path, html) {
+                                                        Ok(()) => {
+                                                            let opened = crate::visual::open_in_browser(&path);
+                                                            page_notice(&mut tui, &format!("visual saved: {}{}", path.display(),
+                                                                if opened { "" } else { " (open it in your browser)" }))?;
+                                                        }
+                                                        Err(e) => page_notice(&mut tui, &format!("error: {e}"))?,
+                                                    }
+                                                }
+                                                Err(e) => page_notice(&mut tui, &format!("visual generation failed ({e}) — try /show again"))?,
+                                            }
+                                        }
+                                        Ok(AskOutcome::Cancelled) => page_notice(&mut tui, "visual generation cancelled")?,
+                                        Err(e) => page_notice(&mut tui, &format!("error: {e}"))?,
+                                    }
+                                    backend.reset_session(); // all paths — slug parity
+                                }
+                            }
+                            continue;
+                        }
                         if line == "/quit" { break; }
                         // Push the submitted line to scrollback as a distinct user block.
                         page_user_echo(&mut tui, &line)?;
