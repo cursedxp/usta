@@ -159,7 +159,7 @@ pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool
          they said, ask one jargon-free question: 'are you preparing for a deadline or \
          exam, or is this just out of curiosity?'. If it's goal-directed, gather the \
          what/date/threshold/format info during the conversation — it will go into the \
-         approach's `## Goal` section; the map is built from the official framework \
+         approach's `## Hedef` section; the map is built from the official framework \
          (exam syllabus / exam guide / CEFR) — research it on the web. If you don't \
          know the domain well enough, research it on the web. At session close you'll \
          be asked for the approach + FULL curriculum map CONTENT; the shell writes the \
@@ -330,7 +330,7 @@ mod tests {
         // Jargonsuz yedek soru + soru limiti.
         assert!(s.contains("a deadline or exam"));
         assert!(s.contains("at most two questions"));
-        assert!(s.contains("Goal"));
+        assert!(s.contains("## Hedef"));
     }
 
     #[test]

@@ -668,7 +668,7 @@ pub(crate) fn slug_system(known: &[String]) -> String {
 /// ile garantile; "genel"e düşerse ham girdiden yerel slug türet. Saf.
 pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     let s = slugify_topic(&model_reply.trim().replace(['-', '_'], " "));
-    if s == "general" {
+    if s == "general" || s == "genel" {
         slugify_topic(raw)
     } else {
         s
