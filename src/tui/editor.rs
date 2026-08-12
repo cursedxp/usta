@@ -1,5 +1,5 @@
-//! Canlı girdi kutusu: tui-input editör state'i + Vec tabanlı up/down
-//! tarihçesi. Rustyline'ın TUI yolundaki karşılığı. Spec §6.
+//! Live input box: tui-input editor state + Vec-based up/down
+//! history. The TUI-path counterpart of Rustyline. Spec §6.
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -10,22 +10,22 @@ use ratatui::Frame;
 use tui_input::backend::crossterm::to_input_request;
 use tui_input::Input;
 
-/// Tuş işlemenin sonucu — döngü buna göre davranır.
+/// Result of key handling — the loop behaves accordingly.
 #[derive(Debug)]
 pub enum Action {
     None,
-    /// Trim'lenmiş, boş olmayan satır gönderildi.
+    /// Trimmed, non-empty line was submitted.
     Submit(String),
-    /// Ctrl-C / Ctrl-D — kapanış akışı.
+    /// Ctrl-C / Ctrl-D — shutdown flow.
     Exit,
 }
 
 pub struct InputBox {
     input: Input,
     history: Vec<String>,
-    /// None = taze satır; Some(i) = history[i] gösteriliyor.
+    /// None = fresh line; Some(i) = history[i] is being shown.
     cursor: Option<usize>,
-    /// Tarihçeye girmeden önceki taze metin — Down ile geri gelir.
+    /// Fresh text from before entering history — comes back with Down.
     stash: String,
 }
 
@@ -34,8 +34,8 @@ impl InputBox {
         Self { input: Input::default(), history: Vec::new(), cursor: None, stash: String::new() }
     }
 
-    // Editör kamu API'si — döngü satırı Action::Submit'ten alır, imleci editör
-    // kendi çizer, bu yüzden şu an çağrılmıyorlar (value() testlerde kullanılır).
+    // Editor's public API — the loop gets the line from Action::Submit, and the
+    // editor draws the cursor itself, so these aren't called right now (value() is used in tests).
     pub fn value(&self) -> &str { self.input.value() }
     #[allow(dead_code)]
     pub fn visual_cursor(&self) -> usize { self.input.visual_cursor() }
@@ -78,9 +78,9 @@ impl InputBox {
         }
     }
 
-    /// Yapıştırılan metni imleç konumuna ekle (bracketed paste). Satır sonları
-    /// KORUNUR — model liste/log yapısını görsün; kutu tek satır olduğundan
-    /// render'da ⏎ olarak gösterilir. CRLF → LF normalize edilir.
+    /// Insert pasted text at the cursor position (bracketed paste). Line breaks
+    /// are PRESERVED — so the model can see list/log structure; since the box is
+    /// single-line, they're shown as ⏎ in the render. CRLF → LF is normalized.
     pub fn insert_str(&mut self, s: &str) {
         self.cursor = None;
         let cleaned = s.replace("\r\n", "\n").replace('\r', "\n");
@@ -114,14 +114,14 @@ impl InputBox {
         }
     }
 
-    /// Kutuyu çiz: yuvarlak kenar + `> ` öneki + imleç. Uzun metin kutunun
-    /// iç genişliğinde ALT SATIRA SARILIR (yatay kaydırma yok); iç satır
-    /// sayısını aşarsa dikey pencere imleci takip eder.
+    /// Draw the box: rounded border + `> ` prefix + cursor. Long text WRAPS TO
+    /// THE NEXT LINE at the box's inner width (no horizontal scrolling); if it
+    /// exceeds the inner line count, the vertical window follows the cursor.
     pub fn render(&self, f: &mut Frame, area: Rect) {
-        let inner_w = area.width.saturating_sub(4) as usize; // kenarlar + "> " öneki
-        let visible = area.height.saturating_sub(2).max(1) as usize; // iç satırlar
+        let inner_w = area.width.saturating_sub(4) as usize; // borders + "> " prefix
+        let visible = area.height.saturating_sub(2).max(1) as usize; // inner lines
         let (rows, cur_row, cur_col) = wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
-        // Dikey pencere: imleç görünür kalacak şekilde son `visible` satır.
+        // Vertical window: last `visible` lines so the cursor stays visible.
         let start = (cur_row + 1).saturating_sub(visible);
         let lines: Vec<Line> = rows
             .iter()
@@ -149,10 +149,10 @@ impl InputBox {
     }
 }
 
-/// Değeri görsel satırlara sar — genişlik HÜCRE bazlı (unicode-width),
-/// `\n` satırı böler ve satır sonunda ⏎ olarak görünür. İmlecin (karakter
-/// indeksi) satır/sütun karşılığını da döndürür. Saf — render bundan çizer,
-/// Submit edilen değer DEĞİŞMEZ.
+/// Wrap the value into visual lines — width is CELL-based (unicode-width),
+/// `\n` splits the line and shows as ⏎ at line end. Also returns the
+/// row/column equivalent of the cursor (character index). Pure — render draws
+/// from this, the Submit value is UNCHANGED.
 fn wrap_visual(value: &str, width: usize, cursor: usize) -> (Vec<String>, usize, usize) {
     use unicode_width::UnicodeWidthChar;
     let width = width.max(1);
@@ -247,7 +247,7 @@ mod tests {
         let mut b = InputBox::new();
         b.insert_str("satır1\r\nsatır2\rsatır3");
         assert_eq!(b.value(), "satır1\nsatır2\nsatır3");
-        // Yapıştırma Submit tetiklemez; Enter sonrası tek mesaj, yapı korunur.
+        // Pasting doesn't trigger Submit; after Enter there's a single message, structure preserved.
         match b.handle_key(code(KeyCode::Enter)) {
             Action::Submit(s) => assert_eq!(s, "satır1\nsatır2\nsatır3"),
             other => panic!("Submit bekleniyordu: {other:?}"),
@@ -264,13 +264,13 @@ mod tests {
 
     #[test]
     fn wrap_visual_wraps_long_text_at_cell_width() {
-        // 10 hücre genişlik, 25 karakter → 3 satır (10+10+5).
+        // 10-cell width, 25 characters → 3 lines (10+10+5).
         let v = "a".repeat(25);
         let (rows, cur_row, cur_col) = wrap_visual(&v, 10, 25);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].chars().count(), 10);
         assert_eq!(rows[2].chars().count(), 5);
-        // İmleç sondaysa son satırın sonunda.
+        // If the cursor is at the end, it's at the end of the last line.
         assert_eq!((cur_row, cur_col), (2, 5));
     }
 
@@ -282,14 +282,14 @@ mod tests {
 
     #[test]
     fn wrap_visual_cursor_mid_text_lands_on_correct_row() {
-        let v = "a".repeat(15); // genişlik 10 → satır0: 0..9, satır1: 10..14
+        let v = "a".repeat(15); // width 10 → row0: 0..9, row1: 10..14
         let (_, cur_row, cur_col) = wrap_visual(&v, 10, 12);
         assert_eq!((cur_row, cur_col), (1, 2));
     }
 
     #[test]
     fn wrap_visual_turkish_chars_count_one_cell() {
-        let (rows, _, _) = wrap_visual("çğşöüiçğşöüi", 6, 0); // 12 karakter, 6 hücre → 2 satır
+        let (rows, _, _) = wrap_visual("çğşöüiçğşöüi", 6, 0); // 12 characters, 6 cells → 2 lines
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0], "çğşöüi");
     }

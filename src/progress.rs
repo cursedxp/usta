@@ -1,43 +1,43 @@
-//! Kalıcı hafıza: oturum kapanışında Usta'ya oturumu özetletip
-//! `.usta/learner/progress/<konu>.md`'yi TAM içerik olarak yeniden yazdırırız.
-//! Sonraki oturum bu dosyayı system prompt'a yükler (brain.rs) → Usta
-//! bildiğini tekrar anlatmaz, eksiği hedefler. SPEC §9'un gerçeklenmesi.
+//! Persistent memory: at session close we have Usta summarize the session and
+//! rewrite `.usta/learner/progress/<topic>.md` with its FULL content.
+//! The next session loads this file into the system prompt (brain.rs) → Usta
+//! doesn't re-explain what it already knows, it targets the gaps. Implements SPEC §9.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// Konu için progress dosya yolu: `<proje>/.usta/learner/progress/<konu>.md`.
+/// Progress file path for a topic: `<project>/.usta/learner/progress/<topic>.md`.
 pub fn progress_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root
         .join(".usta/learner/progress")
         .join(format!("{topic}.md"))
 }
 
-/// Konuya özel yaklaşım dosyası: `.usta/approaches/<konu>.md`.
+/// Topic-specific approach file: `.usta/approaches/<topic>.md`.
 pub fn approach_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root.join(".usta/approaches").join(format!("{topic}.md"))
 }
 
-/// Konunun müfredat haritası: `.usta/learner/curriculum/<konu>.md`.
+/// The topic's curriculum map: `.usta/learner/curriculum/<topic>.md`.
 pub fn curriculum_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root
         .join(".usta/learner/curriculum")
         .join(format!("{topic}.md"))
 }
 
-/// Kapanış yanıtı bölücüsü — model her dosyayı bununla başlatır.
+/// Closing-reply delimiter — the model starts every file with this.
 pub const FILE_DELIM: &str = "===DOSYA:";
 
-/// Profil boşken açılış turn'lerine eklenen tanışma talimatı (spec Ç3a).
+/// Introduction instruction appended to opening turns while the profile is empty (spec Ç3a).
 const MEET_BLOCK: &str = "\n[PROFILE EMPTY] You don't know the user yet. Introduce \
 yourself briefly at the start of the conversation — ask their name, their background \
 with this topic, how they like to learn. At most 1-2 questions, not a form; don't \
 delay getting into the topic. If the user already introduced themselves, don't ask \
 again. What you learn will be written to their profile at session close.\n";
 
-/// Kapanış yanıtını (ad, içerik) çiftlerine ayır. Bölücü yoksa tüm yanıt
-/// tek "progress" dosyası sayılır — eski format geriye uyumlu kalır.
+/// Split the closing reply into (name, content) pairs. If there's no delimiter,
+/// the whole reply counts as a single "progress" file — keeps the old format backward compatible.
 pub fn split_files(reply: &str) -> Vec<(String, String)> {
     if !reply.contains(FILE_DELIM) {
         return vec![("progress".to_string(), clean_markdown_reply(reply))];
@@ -56,9 +56,9 @@ pub fn split_files(reply: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Kapanış çağrısının user-turn içeriği: üç dosyanın mevcut hali + üretim
-/// kuralları. progress her zaman; approach/curriculum canlı belge —
-/// ilk oturumda veya değiştiğinde üretilir (USTA.md "Kapsam Bekçiliği").
+/// User-turn content for the closing call: the current state of the three files +
+/// generation rules. progress is always generated; approach/curriculum are living
+/// documents — generated on the first session or when they change (TEACHING.md "Scope Guarding").
 pub fn closing_prompt(
     topic: &str,
     progress: Option<&str>,
@@ -118,9 +118,9 @@ pub fn closing_prompt(
     )
 }
 
-/// Açılış drilli turn'ü: progress varsa oturum başında Usta ilk sözü alır ve
-/// geri çağırma sorusu sorar (testing effect — USTA.md "Açılış Drilli" kuralı).
-/// main.rs'e bağlandığı yer: Task 3 (açılış drilli tetiği).
+/// Opening-drill turn: if progress exists, Usta speaks first at the start of the
+/// session and asks a recall question (testing effect — TEACHING.md "Opening Drill" rule).
+/// Where it hooks into main.rs: Task 3 (opening-drill trigger).
 pub fn opening_prompt(topic: &str, profile_generic: bool) -> String {
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     format!(
@@ -134,13 +134,13 @@ pub fn opening_prompt(topic: &str, profile_generic: bool) -> String {
     )
 }
 
-/// Yeni konu tanışma turn'ü: yaklaşım + müfredat haritası henüz yok — Usta
-/// açık sohbetle türetir (USTA.md "Yeni Konu Tanışması"). Sabit form değil:
-/// kullanıcının söylediğinden türetilir, yön kullanıcıda kalır.
+/// New-topic introduction turn: no approach + curriculum map yet — Usta
+/// derives them through open conversation (TEACHING.md "New Topic Introduction"). Not a fixed
+/// form: it's derived from what the user says, direction stays with the user.
 pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool) -> String {
-    // Kullanıcının konu girişinde yazdığı ham metin tanışmanın İLK CEVABIDIR —
-    // slug'a indirgenip atılırsa model zaten söylenenleri yeniden sorar
-    // ("müşterime Coolify kuracağım, Fedora..." → "ne peşindesin?" faciası).
+    // The raw text the user typed when opening the topic IS the FIRST ANSWER of the
+    // introduction — if it's reduced to a slug and discarded, the model just re-asks
+    // what was already said ("I'll set up Coolify for my client, Fedora..." → "what are you after?" disaster).
     let intro_block = match intro {
         Some(s) if !s.trim().is_empty() => format!(
             "\nWhen the user opened the topic, they wrote this — treat it as the FIRST \
@@ -174,11 +174,11 @@ pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool
     )
 }
 
-/// Model yanıtındaki olası ```-fence sargısını soy — dosyaya saf markdown yazılır.
+/// Strip any ```-fence wrapper from the model's reply — pure markdown is written to the file.
 pub fn clean_markdown_reply(reply: &str) -> String {
     let t = reply.trim();
     if let Some(rest) = t.strip_prefix("```") {
-        // İlk satır fence etiketi (```markdown vb.) — at.
+        // First line is the fence tag (```markdown etc.) — drop it.
         let body = rest.split_once('\n').map(|(_, b)| b).unwrap_or("");
         let body = body.trim_end();
         let body = body.strip_suffix("```").unwrap_or(body);
@@ -187,13 +187,13 @@ pub fn clean_markdown_reply(reply: &str) -> String {
     t.to_string()
 }
 
-/// Atomik yazım: tmp'ye yaz, üstüne taşı — yarım dosya asla kalmaz.
+/// Atomic write: write to tmp, then move it over the target — never leaves a half-written file.
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
     }
-    // Önceki sürümü yedekle — kötü model çıktısı tek kopyayla geri alınır.
+    // Back up the previous version — a bad model output can be restored from the single copy.
     if path.exists() {
         let bak = path.with_extension("md.bak");
         let _ = std::fs::copy(path, &bak);
@@ -321,7 +321,7 @@ mod tests {
         assert!(s.contains("coolify kuracağım"));
         assert!(s.contains("FIRST ANSWER"));
         assert!(s.contains("don't ask again"));
-        // Intro yoksa blok hiç girmez.
+        // If there's no intro, the block doesn't appear at all.
         let bare = onboarding_prompt("hosting", None, false);
         assert!(!bare.contains("FIRST ANSWER"));
     }
@@ -329,10 +329,10 @@ mod tests {
     #[test]
     fn onboarding_prompt_infers_goal_without_jargon_and_limits_questions() {
         let s = onboarding_prompt("almanca", None, false);
-        // Keşif/hedef terimleri kullanıcıya SORULMAZ — model kendisi çıkarır.
+        // Exploration/goal terms are NOT asked to the user — the model infers them itself.
         assert!(!s.contains("keşif mi"));
         assert!(s.contains("infer it YOURSELF"));
-        // Jargonsuz yedek soru + soru limiti.
+        // Jargon-free fallback question + question limit.
         assert!(s.contains("a deadline or exam"));
         assert!(s.contains("at most two questions"));
         assert!(s.contains("## Hedef"));
@@ -356,8 +356,8 @@ mod tests {
 
     #[test]
     fn onboarding_prompt_does_not_tell_model_it_writes_files() {
-        // Sert Kural 6: modelin dosya yazma aracı yok — kapanış içeriğini üretir,
-        // dosyayı kabuk yazar. Prompt modeli yazma denemesine itmemeli.
+        // Hard Rule 6: the model has no file-writing tool — it produces the closing
+        // content, the shell writes the file. The prompt must not push the model to try writing.
         let s = onboarding_prompt("rust", None, false);
         assert!(!s.contains("you will write files"));
         assert!(s.contains("shell writes"));
@@ -405,7 +405,7 @@ mod tests {
         let target = base.join("derin/dizin/rust.md");
         write_atomic(&target, "içerik").unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "içerik");
-        // tmp dosyası kalmamalı.
+        // No tmp file should remain.
         assert!(!target.with_extension("md.tmp").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -419,7 +419,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let target = base.join("rust.md");
         write_atomic(&target, "ilk sürüm").unwrap();
-        assert!(!target.with_extension("md.bak").exists()); // ilk yazımda yedek yok
+        assert!(!target.with_extension("md.bak").exists()); // no backup on the first write
         write_atomic(&target, "ikinci sürüm").unwrap();
         assert_eq!(
             std::fs::read_to_string(target.with_extension("md.bak")).unwrap(),

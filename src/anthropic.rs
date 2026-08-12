@@ -1,6 +1,6 @@
-//! Anthropic Messages API — istek/yanıt tipleri + non-streaming client.
-//! Server-side `web_search` tool: araştırma Anthropic tarafında koşar, sonuç
-//! aynı yanıtta gelir. `pause_turn` → mesajı re-send et (server-tool döngüsü).
+//! Anthropic Messages API — request/response types + non-streaming client.
+//! Server-side `web_search` tool: the research runs on Anthropic's side, the
+//! result comes back in the same response. `pause_turn` → re-send the message (server-tool loop).
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,8 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 8000;
 const MAX_CONTINUATIONS: usize = 6;
 
-/// Bir konuşma mesajı. `content` string (user girdisi) veya ham content dizisi
-/// (assistant yanıtını `pause_turn` için geri yollarken) olabilir.
+/// A conversation message. `content` can be a string (user input) or a raw
+/// content array (when sending the assistant response back for `pause_turn`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
@@ -47,7 +47,7 @@ struct Tool {
     name: &'static str,
 }
 
-/// Serialize edilen istek gövdesi.
+/// The serialized request body.
 #[derive(Debug, Serialize)]
 pub struct MessageRequest {
     pub model: String,
@@ -80,7 +80,7 @@ struct MessageResponse {
     usage: Option<Value>,
 }
 
-/// Yanıt content dizisinden görünür metni çıkar (type == "text").
+/// Extract the visible text from the response content array (type == "text").
 pub fn extract_text(content: &[Value]) -> String {
     content
         .iter()
@@ -90,7 +90,7 @@ pub fn extract_text(content: &[Value]) -> String {
         .join("")
 }
 
-/// Yanıt web araştırması içerdi mi? (UI ipucu için)
+/// Did the response include a web search? (for the UI hint)
 pub fn used_web_search(content: &[Value]) -> bool {
     content.iter().any(|b| {
         matches!(
@@ -100,8 +100,8 @@ pub fn used_web_search(content: &[Value]) -> bool {
     })
 }
 
-/// usage bloğundan toplam bağlam token'ı: input + cache okuma + cache yazma.
-/// `input_tokens` yoksa None — gösterge sessizce atlanır.
+/// Total context tokens from the usage block: input + cache read + cache write.
+/// None if `input_tokens` is missing — the indicator is silently skipped.
 pub fn sum_context_tokens(usage: &Value) -> Option<u64> {
     let get = |k: &str| usage.get(k).and_then(Value::as_u64);
     Some(
@@ -121,10 +121,10 @@ impl Client {
         Client { http: reqwest::Client::new(), api_key }
     }
 
-    /// İsteği tamamla. İstek gövdesi model/system/history'den kurulur.
-    /// `pause_turn` dönerse assistant içeriğini geri ekleyip devam et.
-    /// `pause_turn`'ün ham content juggling'i burada kalır — session'a sızmaz.
-    /// Nihai yanıtın (metin, web_arandı_mı, bağlam_token'ı) üçlüsünü döndür.
+    /// Complete the request. The request body is built from model/system/history.
+    /// If `pause_turn` comes back, append the assistant content and continue.
+    /// The raw content juggling for `pause_turn` stays here — it doesn't leak into the session.
+    /// Returns the final (text, used_web_search, context_tokens) triple.
     pub async fn complete(
         &self,
         model: &str,
@@ -156,8 +156,8 @@ impl Client {
             web |= used_web_search(&parsed.content);
 
             if parsed.stop_reason.as_deref() == Some("pause_turn") {
-                // Server-tool döngüsü sınırına ulaştı — assistant içeriğini geri
-                // yolla, server kaldığı yerden devam etsin.
+                // Hit the server-tool loop limit — send the assistant content
+                // back so the server can continue where it left off.
                 req.messages
                     .push(Message::assistant_raw(json!(parsed.content)));
                 continue;

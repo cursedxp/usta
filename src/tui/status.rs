@@ -1,5 +1,5 @@
-//! Viewport'un alt satırı: spinner + bağlam göstergesi (ui::context_gauge'un
-//! TUI karşılığı — ayrı satır basmak yerine yerinde yaşar).
+//! Bottom line of the viewport: spinner + context indicator (the TUI
+//! counterpart of ui::context_gauge — lives in place instead of printing a separate line).
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -11,7 +11,7 @@ pub enum Status {
     Thinking { frame: usize, cancel_hint: bool },
 }
 
-/// Tek satır durum: düşünüyorsa spinner (+ iptal ipucu), her durumda token varsa gauge.
+/// Single-line status: spinner if thinking (+ cancel hint), gauge whenever tokens are present.
 pub fn render_status(s: &Status, tokens: Option<u64>, window: u64, watching: Option<bool>) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
     if let Some(on) = watching {

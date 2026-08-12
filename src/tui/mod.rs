@@ -1,5 +1,5 @@
-//! Claude Code tarzı TUI: inline viewport + insert_before akışı.
-//! Plain modda (ui::is_plain) bu modül hiç kullanılmaz.
+//! Claude Code-style TUI: inline viewport + insert_before flow.
+//! In plain mode (ui::is_plain) this module is never used.
 
 pub mod convert;
 pub mod editor;

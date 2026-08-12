@@ -1,7 +1,8 @@
-//! Ham oturum kaydı: her turn anında `.usta/sessions/<konu>-<zaman>.jsonl`'e
-//! append edilir — kapanış flush'ı ölse, terminal çökse bile oturum diskte.
-//! Başarılı flush sonrası dosya `.done.jsonl` olur; açılışta `.done` olmayan
-//! dosya = kurtarılabilir yarım oturum. Kayıt hatası oturumu ASLA engellemez.
+//! Raw session recording: each turn is appended immediately to
+//! `.usta/sessions/<topic>-<timestamp>.jsonl` — even if the closing flush
+//! dies or the terminal crashes, the session is on disk. After a successful
+//! flush the file becomes `.done.jsonl`; on startup a file without `.done` =
+//! a recoverable half-finished session. A recording error NEVER blocks the session.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,28 +10,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 
-/// Tek turn'ün JSON satırı.
+/// JSON line for a single turn.
 pub fn line(role: &str, text: &str) -> String {
     let mut l = serde_json::json!({ "role": role, "text": text }).to_string();
     l.push('\n');
     l
 }
 
-/// Oturum dosyası yolu: `.usta/sessions/<konu>-<zaman>.jsonl`.
+/// Session file path: `.usta/sessions/<topic>-<timestamp>.jsonl`.
 pub fn session_path(project_root: &Path, topic: &str, stamp: &str) -> PathBuf {
     project_root
         .join(".usta/sessions")
         .join(format!("{topic}-{stamp}.jsonl"))
 }
 
-/// Başarılı kapanış: `.jsonl` → `.done.jsonl`.
+/// Successful close: `.jsonl` → `.done.jsonl`.
 pub fn mark_done(path: &Path) -> Result<()> {
     let done = path.with_extension("done.jsonl");
     std::fs::rename(path, done)?;
     Ok(())
 }
 
-/// `.done` işareti olmayan oturum dosyaları — flush edilememiş yarım oturumlar.
+/// Session files without a `.done` marker — half-finished sessions that couldn't be flushed.
 pub fn find_unfinished(project_root: &Path) -> Vec<PathBuf> {
     let dir = project_root.join(".usta/sessions");
     let Ok(rd) = std::fs::read_dir(&dir) else {
@@ -48,7 +49,7 @@ pub fn find_unfinished(project_root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Turn kaydedici — hata sessizdir, ilk hatada BİR KEZ uyarır.
+/// Turn recorder — errors are silent, warns ONCE on the first error.
 pub struct Recorder {
     path: PathBuf,
     warned: AtomicBool,

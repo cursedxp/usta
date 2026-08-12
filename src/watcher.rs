@@ -1,8 +1,9 @@
-//! Arka plan dosya izleyici (`notify` v6). Kaydedilen dosyaları proaktif
-//! Socratic feedback için REPL'e iletir.
+//! Background file watcher (`notify` v6). Forwards saved files to the REPL
+//! for proactive Socratic feedback.
 //!
-//! `notify` senkron çalışır — async'e zorlamayız. Arka plan thread'i + std mpsc
-//! doğru desen: watcher thread'de canlı tutulur, değişen yollar kanaldan akar.
+//! `notify` runs synchronously — we don't force it into async. Background
+//! thread + std mpsc is the right pattern: the watcher is kept alive inside
+//! the thread, changed paths flow through the channel.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -14,14 +15,15 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::time::Instant;
 
-/// `root` altını özyinelemeli izle; modify olaylarındaki dosya yollarını gönder.
-/// Dönen alıcı select-loop'ta `recv().await` (veya `try_recv`) ile tüketilir.
+/// Watch recursively under `root`; send file paths from modify events.
+/// The returned receiver is consumed in the select-loop with `recv().await`
+/// (or `try_recv`).
 pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
     let (out_tx, out_rx) = unbounded_channel::<PathBuf>();
     let (ev_tx, ev_rx) = mpsc::channel::<notify::Result<notify::Event>>();
 
     let mut watcher = notify::recommended_watcher(move |res| {
-        // Alıcı düşmüşse sessizce yut — thread yakında kapanır.
+        // If the receiver has been dropped, swallow silently — the thread will close soon.
         let _ = ev_tx.send(res);
     })
     .context("dosya izleyici oluşturulamadı")?;
@@ -31,7 +33,7 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
         .with_context(|| format!("izlenemedi: {}", root.display()))?;
 
     thread::spawn(move || {
-        // Watcher'ı thread içinde canlı tut — düşerse izleme durur.
+        // Keep the watcher alive inside the thread — watching stops if it's dropped.
         let _watcher = watcher;
         for res in ev_rx {
             let Ok(event) = res else { continue };
@@ -40,7 +42,7 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
                     if is_ignored(&path) {
                         continue;
                     }
-                    // REPL alıcısı kapandıysa thread'i bitir.
+                    // End the thread if the REPL receiver has closed.
                     if out_tx.send(path).is_err() {
                         return;
                     }
@@ -52,9 +54,9 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
     Ok(out_rx)
 }
 
-/// Build/VCS/gizli dizin gürültüsünü ele — yol bileşenlerinden biri `target`,
-/// `node_modules` ise veya `.` ile başlıyorsa (örn. `.git`, `.venv`) yok say.
-/// Dil-agnostik: uzantıya göre filtrelemiyoruz, Usta çok alanlı çalışır.
+/// Filter out build/VCS/hidden-dir noise — ignore if a path component is
+/// `target`, `node_modules`, or starts with `.` (e.g. `.git`, `.venv`).
+/// Language-agnostic: we don't filter by extension, Usta works across domains.
 pub fn is_ignored(path: &Path) -> bool {
     path.components().any(|c| match c {
         std::path::Component::Normal(s) => {
@@ -62,7 +64,7 @@ pub fn is_ignored(path: &Path) -> bool {
             s == "target"
                 || s == "node_modules"
                 || s.starts_with('.')
-                // Sır dosyaları LLM'e asla gitmez.
+                // Secret files never go to the LLM.
                 || s.ends_with(".pem")
                 || s.ends_with(".key")
                 || s.contains("secret")
@@ -72,9 +74,10 @@ pub fn is_ignored(path: &Path) -> bool {
     })
 }
 
-/// Kayıt fırtınasını yatıştıran saf debounce durumu. Editörler tek kayıtta
-/// birden çok modify olayı üretir; her olay `push`lanır, son olaydan `window`
-/// sonra `deadline` dolar ve select-loop `flush` ile hepsini tek seferde işler.
+/// Pure debounce state that smooths out a save storm. Editors produce
+/// multiple modify events for a single save; each event is `push`ed, the
+/// `deadline` expires `window` after the last event, and the select-loop
+/// processes them all at once with `flush`.
 pub struct Debouncer {
     pending: Vec<PathBuf>,
     deadline: Option<Instant>,
@@ -86,8 +89,8 @@ impl Debouncer {
         Debouncer { pending: Vec::new(), deadline: None, window }
     }
 
-    /// Yolu biriktir (tekrarları ilk-görülme sırasını koruyarak ele) ve
-    /// deadline'ı ileri at.
+    /// Accumulate the path (dedupe while preserving first-seen order) and
+    /// push the deadline forward.
     pub fn push(&mut self, path: PathBuf, now: Instant) {
         if !self.pending.contains(&path) {
             self.pending.push(path);
@@ -99,7 +102,7 @@ impl Debouncer {
         self.deadline
     }
 
-    /// Birikeni boşalt, deadline'ı sıfırla.
+    /// Drain the accumulator, reset the deadline.
     pub fn flush(&mut self) -> Vec<PathBuf> {
         self.deadline = None;
         std::mem::take(&mut self.pending)

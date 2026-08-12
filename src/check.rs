@@ -1,26 +1,26 @@
-//! Kayıt sonrası `cargo check` — tahmin protokolünün hammaddesi. Sonuç LLM'e
-//! "sadece senin gözün için" bloğu olarak gider; kullanıcıya ne zaman
-//! açılacağına (önce tahmin ettirerek) USTA.md kuralları karar verir.
-//! Cargo projesi değilse / check koşamazsa sessizce yok sayılır — feedback
-//! akışı asla engellenmez.
+//! Post-record `cargo check` — the raw material for the guess protocol. The result
+//! goes to the LLM as a "for your eyes only" block; USTA.md rules decide when it
+//! gets revealed to the user (by having them guess first).
+//! If it's not a Cargo project / check can't run, it's silently skipped — the
+//! feedback flow is never blocked.
 
 use std::path::Path;
 use std::time::Duration;
 
 use tokio::process::Command;
 
-/// Çıktı tavanı — devasa hata listeleri context'i şişirmesin.
+/// Output cap — so massive error lists don't bloat the context.
 pub const MAX_CHECK_BYTES: usize = 4 * 1024;
 
-/// Check zaman tavanı — soğuk cache'te ilk check uzun sürebilir.
+/// Check time cap — the first check can take a while with a cold cache.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Proje kökünde Cargo.toml var mı?
+/// Is there a Cargo.toml in the project root?
 pub fn is_cargo_project(root: &Path) -> bool {
     root.join("Cargo.toml").is_file()
 }
 
-/// Çıktıyı tavana kırp — UTF-8 char sınırına saygıyla; kırpıldıysa not düş.
+/// Trim the output to the cap — respecting UTF-8 char boundaries; note it if trimmed.
 pub fn truncate_output(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
@@ -32,9 +32,9 @@ pub fn truncate_output(s: &str, max: usize) -> String {
     format!("{}\n… (truncated — {} bytes total)", &s[..cut], s.len())
 }
 
-/// `cargo check --message-format=short` koştur. Cargo projesi değilse,
-/// cargo çalıştırılamazsa veya timeout'a takılırsa `None` — tahmin protokolü
-/// o kayıtta atlanır, feedback normal akar.
+/// Run `cargo check --message-format=short`. If it's not a Cargo project,
+/// cargo can't run, or it hits a timeout, returns `None` — the guess protocol
+/// is skipped for that record, and feedback flows normally.
 pub async fn run_check(root: &Path) -> Option<String> {
     if !is_cargo_project(root) {
         return None;
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn truncate_respects_utf8_char_boundary() {
-        // "ö" 2 bayt — tavan bir char'ın ortasına denk gelirse panik atmamalı.
+        // "ö" is 2 bytes — if the cap lands in the middle of a char, it must not panic.
         let s = "ööööö";
         let out = truncate_output(s, 3);
         assert!(out.contains("truncated"));

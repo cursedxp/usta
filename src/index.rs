@@ -1,8 +1,8 @@
-//! Global öğrenme kataloğu: `~/.config/usta/learner/index.md` sonundaki
-//! `## Kayıtlar` bölümü. Satır formatı `- konu | proje-yolu | YYYY-MM-DD`.
-//! Kapanış flush'ı upsert eder → "nerede ne öğreniyorum" tek bakışta görünür;
-//! `usta topics` listeler, factory reset proje yollarını buradan bulur.
-//! Bölüm dosyanın SONUNDA yaşar — üstündeki serbest metin korunur.
+//! Global learning catalog: the `## Kayıtlar` section at the end of
+//! `~/.config/usta/learner/index.md`. Line format: `- topic | project-path | YYYY-MM-DD`.
+//! The closing flush upserts it → "where I'm learning what" is visible at a glance;
+//! `usta topics` lists them, factory reset finds project paths from here.
+//! The section lives at the END of the file — free text above it is preserved.
 
 use std::path::{Path, PathBuf};
 
@@ -10,7 +10,7 @@ use anyhow::Result;
 
 const SECTION: &str = "## Kayıtlar";
 
-/// Katalogdaki tek kayıt.
+/// A single entry in the catalog.
 #[derive(Debug, PartialEq)]
 pub struct IndexEntry {
     pub topic: String,
@@ -18,8 +18,8 @@ pub struct IndexEntry {
     pub date: String,
 }
 
-/// `## Kayıtlar` altındaki `- konu | yol | tarih` satırlarını ayrıştır.
-/// Bölüm yoksa boş; formata uymayan satır sessizce atlanır.
+/// Parse the `- topic | path | date` lines under `## Kayıtlar`.
+/// Empty if the section is missing; lines that don't match the format are silently skipped.
 pub fn entries(content: &str) -> Vec<IndexEntry> {
     let Some(idx) = content.find(SECTION) else {
         return Vec::new();
@@ -37,7 +37,7 @@ pub fn entries(content: &str) -> Vec<IndexEntry> {
         .collect()
 }
 
-/// (konu, proje) satırını ekle/güncelle — bölüm yoksa dosya sonuna açılır.
+/// Add/update the (topic, project) line — if the section doesn't exist, it's opened at the end of the file.
 pub fn upsert(content: &str, topic: &str, project: &Path, date: &str) -> String {
     let mut list = entries(content);
     match list
@@ -54,7 +54,7 @@ pub fn upsert(content: &str, topic: &str, project: &Path, date: &str) -> String 
     render(content, &list)
 }
 
-/// Bölüm-öncesi serbest metni koru, `## Kayıtlar`ı satırlarla yeniden yaz.
+/// Preserve the free text before the section, rewrite `## Kayıtlar` with the lines.
 fn render(content: &str, list: &[IndexEntry]) -> String {
     let prefix = match content.find(SECTION) {
         Some(idx) => &content[..idx],
@@ -72,7 +72,7 @@ fn render(content: &str, list: &[IndexEntry]) -> String {
     out
 }
 
-/// (konu, proje) satırını düş — eşleşme yoksa kayıtlar değişmeden kalır.
+/// Drop the (topic, project) line — if there's no match, entries remain unchanged.
 pub fn remove(content: &str, topic: &str, project: &Path) -> String {
     let list: Vec<IndexEntry> = entries(content)
         .into_iter()
@@ -81,7 +81,7 @@ pub fn remove(content: &str, topic: &str, project: &Path) -> String {
     render(content, &list)
 }
 
-/// Kapanışta çağrılır: kataloğu oku → upsert → atomik yaz.
+/// Called on close: read the catalog → upsert → write atomically.
 pub fn record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<()> {
     let path = global.join("learner/index.md");
     let current = std::fs::read_to_string(&path).unwrap_or_default();
@@ -89,11 +89,11 @@ pub fn record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<
     crate::progress::write_atomic(&path, &updated)
 }
 
-/// Bu projede devam edilebilir konular: `.usta/learner/progress/*.md`
-/// (boş olmayan) dosya adları. Sıralama: global index tarihi yeniden-eskiye;
-/// index kaydı olmayan konu dosya mtime'ına düşer (factory reset sonrası
-/// katalog boş olabilir — progress hâlâ gerçek kaynak). `[0]` = son konu.
-/// Kimlik welcome kutusu (numaralı liste) + resume seçim mantığı bunu okur.
+/// Topics that can be resumed in this project: (non-empty) file names under
+/// `.usta/learner/progress/*.md`. Sorted by global index date, newest to oldest;
+/// a topic with no index entry falls back to the file's mtime (the catalog can be
+/// empty after a factory reset — progress is still the source of truth). `[0]` = most recent topic.
+/// The identity welcome box (numbered list) + resume selection logic reads this.
 pub fn local_topics(project_root: &Path, index_content: &str) -> Vec<String> {
     let dir = project_root.join(".usta/learner/progress");
     let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
@@ -111,8 +111,8 @@ pub fn local_topics(project_root: &Path, index_content: &str) -> Vec<String> {
             let stem = p.file_stem()?.to_str()?.to_string();
             let content = std::fs::read_to_string(&p).ok()?;
             if content.trim().is_empty() { return None; }
-            // Sıralama anahtarı: index tarihi (YYYY-MM-DD sıralanabilir);
-            // yoksa mtime'dan üretilmiş kaba anahtar (epoch saniye, sabit genişlik).
+            // Sort key: index date (YYYY-MM-DD is sortable);
+            // otherwise a coarse key derived from mtime (epoch seconds, fixed width).
             let key = date_of(&stem).unwrap_or_else(|| {
                 let secs = f.metadata()
                     .and_then(|m| m.modified())
@@ -125,7 +125,7 @@ pub fn local_topics(project_root: &Path, index_content: &str) -> Vec<String> {
             Some((key, stem))
         })
         .collect();
-    out.sort_by(|a, b| b.0.cmp(&a.0)); // yeniden-eskiye
+    out.sort_by(|a, b| b.0.cmp(&a.0)); // newest to oldest
     out.into_iter().map(|(_, t)| t).collect()
 }
 
@@ -207,7 +207,7 @@ mod tests {
         std::fs::create_dir_all(&pdir).unwrap();
         std::fs::write(pdir.join("eski-konu.md"), "içerik").unwrap();
         std::fs::write(pdir.join("yeni-konu.md"), "içerik").unwrap();
-        std::fs::write(pdir.join("bos.md"), "  ").unwrap(); // boş → listelenmez
+        std::fs::write(pdir.join("bos.md"), "  ").unwrap(); // empty → not listed
         let index = format!(
             "## Kayıtlar\n- eski-konu | {p} | 2026-08-01\n- yeni-konu | {p} | 2026-08-07\n- baska-proje-konu | /tmp/baska | 2026-08-06\n",
             p = base.display()
@@ -224,7 +224,7 @@ mod tests {
         let pdir = base.join(".usta/learner/progress");
         std::fs::create_dir_all(&pdir).unwrap();
         std::fs::write(pdir.join("tek-konu.md"), "içerik").unwrap();
-        let t = local_topics(&base, ""); // index boş (factory reset senaryosu)
+        let t = local_topics(&base, ""); // index empty (factory reset scenario)
         assert_eq!(t, vec!["tek-konu".to_string()]);
         let _ = std::fs::remove_dir_all(&base);
     }

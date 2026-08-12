@@ -1,5 +1,5 @@
-//! Usta — terminal Socratic öğrenim mentoru. İnce kabuk: CLI + LLM client +
-//! dosya izleyici + markdown brain yükleyici. Zekâ markdown'da yaşar.
+//! Usta — terminal Socratic learning mentor. Thin shell: CLI + LLM client +
+//! file watcher + markdown brain loader. The intelligence lives in markdown.
 
 mod anthropic;
 mod backend;
@@ -29,17 +29,17 @@ use crate::session::Session;
 use crate::transcript::Recorder;
 
 
-/// Bu orana ulaşınca ara-kayıt + kompaksiyon tetiklenir.
+/// Once this ratio is reached, an interim checkpoint + compaction is triggered.
 const COMPACT_THRESHOLD: f64 = 0.70;
-/// Kompaksiyon sonrası history'de bırakılacak son mesaj sayısı.
+/// Number of most recent messages kept in history after compaction.
 const COMPACT_KEEP_LAST: usize = 4;
-/// Kompaksiyon sonrası history başına eklenen not — modele bağlamın
-/// sıkıştırıldığını, özün dosyalarda olduğunu söyler.
+/// Note prepended to history after compaction — tells the model the context
+/// was compacted and the essence now lives in the files.
 const COMPACT_NOTE: &str = "[ARA KAYIT] Bağlam sıkıştırıldı. Önceki konuşmanın özü \
 system prompt'taki progress/curriculum/approach dosyalarına yazıldı — güncel durum \
 orada. Kaldığımız yerden devam et; kullanıcıya kompaksiyonu anlatma.";
-/// Tek debounce penceresinde feedback verilecek azami dosya sayısı — üstü
-/// "toplu değişiklik" sayılır (git checkout, format-all): LLM çağrısı yok.
+/// Maximum number of files given feedback in a single debounce window — above
+/// this it counts as a "bulk change" (git checkout, format-all): no LLM call.
 const MAX_FEEDBACK_BATCH: usize = 5;
 
 #[tokio::main]
@@ -54,11 +54,11 @@ async fn main() -> Result<()> {
         Command::Start(t) => t,
     };
 
-    // Backend seçimi (CLI default, API opsiyonel) — net hata mesajıyla.
+    // Backend selection (CLI default, API optional) — with a clear error message.
     let mut backend = backend::select()?;
 
-    // `.usta/` yoksa sessizce kur — `usta init` artık zorunlu ön-adım değil,
-    // `start` kendi kendini bootstrap eder (bkz. ensure_scaffold).
+    // Set up `.usta/` silently if missing — `usta init` is no longer a mandatory
+    // pre-step, `start` bootstraps itself (see ensure_scaffold).
     let cwd = std::env::current_dir()?;
     let had_project_root = config::find_project_root(&cwd).is_some();
     let project_root = ensure_scaffold(&cwd)?;
@@ -66,27 +66,27 @@ async fn main() -> Result<()> {
         ui::notice(".usta/ set up");
     }
 
-    // Global brain + proje kökü birleştirilip system prompt üretilir (hibrit
-    // model — bkz. brain.rs). build_session bunu kullanır.
+    // Global brain + project root are merged to produce the system prompt (hybrid
+    // model — see brain.rs). build_session uses this.
     let global = config::global_root()?;
 
-    // Dosya izleyici — TEK kez spawn edilir (thread başlatır), sonra çalışan
-    // yola (&mut) geçirilir. Girdi thread'i + debounce durumu yola özgü:
-    // plain yol rustyline kullanır, TUI yol crossterm EventStream.
+    // File watcher — spawned ONCE (starts a thread), then passed by (&mut) into
+    // the running path. Input thread + debounce state are path-specific:
+    // the plain path uses rustyline, the TUI path uses crossterm EventStream.
     let mut watch_rx = watcher::spawn(&project_root)?;
 
     for p in transcript::find_unfinished(&project_root) {
         ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display()));
     }
 
-    // İki yol da `(Session, Recorder, PathBuf)` üretir; kapanış paylaşımlı.
-    // TUI yolu: konu girişi + slug/onay + build_session hepsi run() içinde —
-    // topic_arg ham geçer, `None` dönüşü kullanıcının konu vermeden çıkışıdır.
-    // Plain yol (TTY yok / NO_COLOR): resolve_topic + lock-çakışma + build_session
-    // + banner + run_plain_loop burada — davranış birebir korunur.
+    // Both paths produce `(Session, Recorder, PathBuf)`; closing is shared.
+    // TUI path: topic entry + slug/confirmation + build_session all happen inside run() —
+    // topic_arg is passed raw, a `None` return means the user exited without giving a topic.
+    // Plain path (no TTY / NO_COLOR): resolve_topic + lock-conflict + build_session
+    // + banner + run_plain_loop happen here — behavior preserved exactly.
     let (session, recorder, lock) = if !ui::is_plain() {
-        // TUI aktifken notice/warn/Spinner ham ANSI basmasın diye bayrağı
-        // aç — run() dönünce (hata dahil) mutlaka kapat, sonra hatayı fırlat.
+        // While TUI is active, don't let notice/warn/Spinner print raw ANSI —
+        // turn the flag on, and always turn it off when run() returns (even on error), then raise the error.
         ui::set_tui_active(true);
         let r = tui::run::run(
             &mut backend,
@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
         match r? {
             Some(artifacts) => artifacts,
             None => {
-                // Konu verilmeden çıkıldı — oturum/kilit yok, kapanacak şey yok.
+                // Exited without giving a topic — no session/lock, nothing to close.
                 ui::notice("See you — keep getting in the water.");
                 return Ok(());
             }
@@ -110,8 +110,8 @@ async fn main() -> Result<()> {
     } else {
         let (topic, intro) = resolve_topic(&mut backend, topic_arg, &project_root, &global).await?;
 
-        // Lock-çakışması onayı (plain/pipe) — build_session'dan ÖNCE, kendi
-        // lock'unu yazmadan. (TUI yolunda bu kontrol run() içinde tui_confirm ile.)
+        // Lock-conflict confirmation (plain/pipe) — BEFORE build_session, without
+        // writing its own lock yet. (In the TUI path this check happens inside run() via tui_confirm.)
         let lock = lock_path(&project_root, &topic);
         if lock.exists() {
             let pid = std::fs::read_to_string(&lock).unwrap_or_default();
@@ -133,8 +133,9 @@ async fn main() -> Result<()> {
         let (mut session, recorder, lock, has_progress) =
             build_session(&global, &project_root, &topic, &today())?;
         ui::banner(&topic, &backend.label());
-        // Profil hâlâ gömülü jenerik şablonsa (veya hiç yoksa) Usta kullanıcıyı
-        // tanımıyor demektir — açılış turn'üne kısa tanışma talimatı eklenir (spec Ç3a).
+        // If the profile is still the embedded generic template (or doesn't exist at all),
+        // Usta doesn't know the user yet — a short introduction instruction is added to
+        // the opening turn (spec Ç3a).
         let profile_generic = std::fs::read_to_string(global.join("USER.md"))
             .ok()
             .as_deref()
@@ -158,7 +159,7 @@ async fn main() -> Result<()> {
     if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
         ui::warn(&format!("progress could not be updated: {e} — raw record left on disk: {}", recorder.path().display()));
     } else if session.history().is_empty() {
-        // Boş oturum: dosya hiç oluşmadı, işaretlenecek şey yok.
+        // Empty session: no file was ever created, nothing to mark.
     } else if let Err(e) = transcript::mark_done(recorder.path()) {
         ui::warn(&format!("session record could not be marked done: {e}"));
     }
@@ -169,9 +170,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Plain (satır tabanlı) REPL döngüsü: rustyline girdi thread'i + watcher +
-/// debounce tek select!'te. TTY yoksa / NO_COLOR'da koşar — davranış eski
-/// main döngüsüyle birebir (banner main'de basılır, drill + loop burada).
+/// Plain (line-based) REPL loop: rustyline input thread + watcher + debounce
+/// all in one select!. Runs when there's no TTY / in NO_COLOR — behavior identical
+/// to the old main loop (banner is printed in main, drill + loop live here).
 async fn run_plain_loop(
     backend: &mut Backend,
     session: &mut Session,
@@ -183,14 +184,14 @@ async fn run_plain_loop(
     profile_generic: bool,
     watch_rx: &mut tokio::sync::mpsc::UnboundedReceiver<PathBuf>,
 ) -> Result<()> {
-    // Girdi thread'i + debounce durumu — plain yola özgü (rustyline).
+    // Input thread + debounce state — specific to the plain path (rustyline).
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     let mut input_rx = input::spawn("❯ ", ready_rx);
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
 
-    // Açılış drilli: önceki oturumlardan progress varsa Usta ilk sözü alır,
-    // 2-3 geri çağırma sorusuyla ısındırır (testing effect — USTA.md kuralı).
+    // Opening drill: if progress exists from previous sessions, Usta speaks first,
+    // warming up with 2-3 recall questions (testing effect — USTA.md rule).
     if has_progress {
         let opening = progress::opening_prompt(topic, profile_generic);
         session.push_user(&opening);
@@ -201,11 +202,11 @@ async fn run_plain_loop(
                 recorder.assistant(&reply.text);
                 session.push_assistant(reply.text);
             }
-            // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
+            // Drill failed → don't block the session, fall silently back into normal flow.
             Err(e) => ui::warn(&format!("opening drill skipped: {e}")),
         }
     } else {
-        // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
+        // New topic: no approach/map yet — introduction turn, Usta speaks first.
         let onboarding = progress::onboarding_prompt(topic, intro, profile_generic);
         session.push_user(&onboarding);
         recorder.user(&onboarding);
@@ -259,16 +260,16 @@ async fn run_plain_loop(
                 debouncer.push(path, tokio::time::Instant::now());
             },
             _ = sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
-                // Kullanıcı prompt'tayken de çalışır — gerçek proaktiflik.
-                println!(); // yarım kalan prompt satırını kirletme
+                // Also runs while the user is at the prompt — genuine proactivity.
+                println!(); // don't dirty a half-finished prompt line
                 let batch = debouncer.flush();
                 if batch.len() > MAX_FEEDBACK_BATCH {
                     ui::notice(&format!(
                         "bulk change ({} files) — feedback skipped, still watching",
                         batch.len()
                     ));
-                    // FileMemory'yi sessizce senkronla: sonraki tekil kayıt
-                    // bu yığına karşı dev diff üretmesin.
+                    // Sync FileMemory silently: so the next single save doesn't
+                    // produce a huge diff against this batch.
                     for path in batch {
                         if let Ok(c) = std::fs::read_to_string(&path) {
                             let _ = files.observe(&path, c);
@@ -284,15 +285,15 @@ async fn run_plain_loop(
                 } else {
                     for path in batch {
                         match handle_file_change(backend, session, &mut files, project_root, &path, recorder).await {
-                            // handle_file_change artık basmaz — plain yol kendi
-                            // sunum dilini uygular (print_reply: web + gauge).
+                            // handle_file_change no longer prints — the plain path applies
+                            // its own presentation language (print_reply: web + gauge).
                             Ok(FileFeedback::Sessiz) => {}
                             Ok(FileFeedback::Bildirim(m)) => println!("{m}"),
                             Ok(FileFeedback::Yanit { tokens, reply }) => {
                                 print_reply(&reply, backend.context_window());
                                 maybe_compact(backend, session, project_root, tokens).await;
                             }
-                            // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
+                            // Binary/deleted file etc. — pass silently, the REPL survives.
                             Err(e) => ui::warn(&format!("file feedback skipped: {}: {e}", path.display())),
                         }
                     }
@@ -304,7 +305,7 @@ async fn run_plain_loop(
     Ok(())
 }
 
-/// LLM çağrısını spinner ile sar — kullanıcı beklerken sessizlik olmasın.
+/// Wrap the LLM call in a spinner — don't leave silence while the user waits.
 async fn ask_usta(
     backend: &mut Backend,
     system: &str,
@@ -316,10 +317,10 @@ async fn ask_usta(
     result
 }
 
-/// Konu belli olduktan sonra oturum kurulumu — system prompt + Session + kendi
-/// kilidini yaz + recorder + has_progress. Lock-ÇAKIŞMASI onayı burada DEĞİL
-/// (çağıran yola göre halleder: plain stdin, TUI tek-tuş). Döner:
-/// `(session, recorder, lock_yolu, has_progress)`.
+/// Session setup once the topic is known — system prompt + Session + write its
+/// own lock + recorder + has_progress. The lock-CONFLICT confirmation is NOT here
+/// (handled by the caller depending on the path: plain stdin, TUI single-key). Returns:
+/// `(session, recorder, lock_path, has_progress)`.
 fn build_session(
     global: &Path,
     project_root: &Path,
@@ -343,14 +344,14 @@ fn build_session(
     Ok((session, recorder, lock, has_progress))
 }
 
-/// Oturum kapanışında progress/approach/curriculum dosyalarını LLM'e üretir.
-/// Boş oturumda dokunmaz; bilinmeyen dosya adı uyarıyla atlanır (keyfi yola
-/// asla yazılmaz).
-/// Kapanış dosya adını yazma hedefine çözer — SAF: I/O yok, sadece yol
-/// hesabı. `profile` GLOBAL köke (`global`) yazılır (kişi-hakkında, tüm
-/// konularda ortak); `progress`/`approach`/`curriculum` PROJE köküne
-/// (`project_root`). Bilinmeyen ad → `None` — `flush_progress`'teki
-/// "bilinmeyen dosya atlanır" güvenliği bu sayede izole test edilebilir.
+/// Generates the progress/approach/curriculum files via the LLM at session close.
+/// Doesn't touch anything for an empty session; an unknown file name is skipped
+/// with a warning (never written to an arbitrary path).
+/// Resolves the closing file name to its write target — PURE: no I/O, just
+/// path computation. `profile` is written to the GLOBAL root (`global`) (about-the-
+/// person, shared across all topics); `progress`/`approach`/`curriculum` go to the
+/// PROJECT root (`project_root`). Unknown name → `None` — this lets the "unknown
+/// file skipped" safety in `flush_progress` be tested in isolation.
 fn flush_target(name: &str, project_root: &Path, global: &Path, topic: &str) -> Option<PathBuf> {
     match name {
         "progress" => Some(progress::progress_path(project_root, topic)),
@@ -370,10 +371,10 @@ async fn flush_progress(
         return Ok(());
     }
     ui::notice("summarizing session — writing files…");
-    // Global kök tek seferde çözülür: hem mevcut profili prompt'a gömmek hem
-    // de kapanışta profile yazmak için kullanılır. Çözülemezse profil bu
-    // oturum için atlanır — progress/approach/curriculum (proje-yerel) buna
-    // bağlı değil, yazımları etkilenmez.
+    // The global root is resolved once: used both to embed the current profile
+    // into the prompt and to write the profile at closing. If it can't be resolved,
+    // the profile is skipped for this session — progress/approach/curriculum
+    // (project-local) don't depend on it, their writes are unaffected.
     let global = match config::global_root() {
         Ok(g) => Some(g),
         Err(e) => {
@@ -411,7 +412,7 @@ async fn flush_progress(
             "curriculum" => c_path.clone(),
             "profile" => match &pr_path {
                 Some(p) => p.clone(),
-                // global kök yoktu — uyarı zaten yukarıda verildi.
+                // no global root — the warning was already given above.
                 None => continue,
             },
             other => {
@@ -427,8 +428,8 @@ async fn flush_progress(
         ui::notice(&format!("updated: {}", path.display()));
     }
 
-    // Global kataloğu güncelle — başarısızlık progress yazımını geri almaz,
-    // sadece not düşülür (katalog konfor katmanı, hafızanın kendisi değil).
+    // Update the global catalog — a failure here doesn't roll back the progress
+    // write, it's just logged as a warning (the catalog is a comfort layer, not the memory itself).
     match &global {
         Some(g) => {
             if let Err(e) = index::record(g, &session.topic, project_root, &today()) {
@@ -441,9 +442,9 @@ async fn flush_progress(
     Ok(())
 }
 
-/// Eşik aşıldıysa: ara-flush → system prompt'u taze dosyalarla yeniden yükle →
-/// history'yi kırp → CLI oturumunu sıfırla. Flush başarısızsa kompaksiyon
-/// İPTAL — veri diske inmeden history atılmaz.
+/// If the threshold is exceeded: interim flush → reload the system prompt with
+/// fresh files → trim history → reset the CLI session. If the flush fails,
+/// compaction is CANCELED — history is never discarded before the data lands on disk.
 pub(crate) async fn maybe_compact(
     backend: &mut Backend,
     session: &mut Session,
@@ -474,24 +475,25 @@ pub(crate) async fn maybe_compact(
     ui::notice("context compacted — pick up where you left off");
 }
 
-/// Bugünün yerel tarihi — katalog satırlarının tarih alanı.
+/// Today's local date — the date field for catalog rows.
 fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-/// Oturum dosya adı damgası — yerel saat.
+/// Session filename stamp — local time.
 fn now_stamp() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
-/// Konu kilidi: `.usta/.lock-<konu>` — eşzamanlı iki oturumun aynı progress'i
-/// sessizce ezmesini önler. İçerik: pid (teşhis için).
+/// Topic lock: `.usta/.lock-<topic>` — prevents two concurrent sessions from
+/// silently overwriting the same progress. Content: pid (for diagnostics).
 pub(crate) fn lock_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root.join(".usta").join(format!(".lock-{topic}"))
 }
 
-/// Deadline varsa ona kadar uyu; yoksa asla dönmeyen future (select guard'ı
-/// zaten bu kolu deadline'sız poll etmez — bu sadece tip güvenliği).
+/// Sleep until the deadline if there is one; otherwise a future that never
+/// returns (the select guard never polls this arm without a deadline anyway —
+/// this is just for type safety).
 pub(crate) async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(d) => tokio::time::sleep_until(d).await,
@@ -499,31 +501,31 @@ pub(crate) async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>)
     }
 }
 
-/// Reset kapsamı.
+/// Reset scope.
 #[derive(Debug, PartialEq)]
 pub enum ResetTarget {
-    /// Bulunduğun projede tek konunun progress'i.
+    /// Just one topic's progress in the current project.
     Topic(String),
-    /// Bilinen tüm proje `.usta/`'ları + global brain — sıfır nokta.
+    /// All known project `.usta/`s + global brain — zero point.
     Factory,
-    /// Global kullanıcı profili — gömülü jenerik şablona döner (yedekli).
+    /// Global user profile — reverts to the embedded generic template (with backup).
     Profile,
 }
 
-/// Komut satırı komutu — argüman ayrıştırma tek yerde, saf ve test edilebilir.
+/// Command-line command — argument parsing in one place, pure and testable.
 #[derive(Debug, PartialEq)]
 pub enum Command {
-    /// `usta init` — iskelet kur, per-dosya durum yazdır.
+    /// `usta init` — set up the scaffold, print per-file status.
     Init,
-    /// `usta topics` — global katalogdan konu listesi.
+    /// `usta topics` — topic list from the global catalog.
     Topics,
-    /// `usta reset <konu>` — progress sil (onaylı) + katalogdan düş.
+    /// `usta reset <topic>` — delete progress (with confirmation) + drop from the catalog.
     Reset(ResetTarget),
-    /// `usta` / `usta start [konu]` — öğrenme oturumu.
+    /// `usta` / `usta start [topic]` — learning session.
     Start(Option<String>),
 }
 
-/// Argümanları komuta çevir. Bilinmeyen komut net hata — sessiz sürpriz yok.
+/// Turn arguments into a command. Unknown command → clear error, no silent surprises.
 pub fn parse_command(args: &[String]) -> Result<Command> {
     let mut rest = args.iter().skip(1);
     match rest.next().map(String::as_str) {
@@ -543,27 +545,29 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
     }
 }
 
-/// Konuyu çöz: açık argüman > TTY promptu > sessiz "genel" default'u.
-/// Stdin pipe'lanmışsa (TTY değilse) cevaplanamayacak bir prompt'a takılmadan
-/// direkt "genel" döner. Kısa girdi yerel slug'lanır; cümle yazılırsa NE
-/// öğrenmek istediğini modele çıkartıp en mantıklı slug'ı ona seçtiririz.
+/// Resolve the topic: explicit argument > TTY prompt > silent "general" default.
+/// If stdin is piped (not a TTY), returns "general" directly instead of getting
+/// stuck on a prompt that can't be answered. Short input is slugified locally;
+/// if a sentence is written, the model infers WHAT the user wants to learn and
+/// we let it pick the most sensible slug.
 async fn resolve_topic(
     backend: &mut Backend,
     topic_arg: Option<String>,
     project_root: &Path,
     global: &Path,
 ) -> Result<(String, Option<String>)> {
-    // Dönüş: (konu, intro) — intro = kullanıcının ham konu girişi; yeni konuda
-    // tanışma turn'üne "ilk cevap" olarak taşınır (devam/pipe yollarında None).
+    // Return: (topic, intro) — intro = the user's raw topic input; for a new topic
+    // it's carried into the introduction turn as the "first reply" (None on resume/pipe paths).
     if let Some(raw) = topic_arg {
         let slug = slugify_topic(&raw);
         return Ok((slug, Some(raw)));
     }
-    // Boş-stdin / pipe yolu DOKUNULMAZ: cevaplanamayacak prompt'a takılmadan "genel".
+    // Empty-stdin / pipe path is UNTOUCHED: falls straight to "general" instead of
+    // getting stuck on a prompt that can't be answered.
     if !std::io::stdin().is_terminal() {
         return Ok(("genel".to_string(), None));
     }
-    // Bu projede devam edilebilir konuları göster — Enter = en sonuncusuna devam.
+    // Show topics resumable in this project — Enter = continue with the most recent one.
     let index_content =
         std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
     let local = index::local_topics(project_root, &index_content);
@@ -571,34 +575,35 @@ async fn resolve_topic(
         println!("saved: {} — Enter = continue with {}", local.join(", "), local[0]);
     }
     let mut rl = DefaultEditor::new()?;
-    // Yeni-konu onayı yalnız burada (plain yol) döngüye alınır: ret cevabı
-    // "Konu nedir?" promptuna geri döner — TUI'deki reddet-tekrar-sor akışının
-    // eşdeğeri. Resume/ilk-oturum yolları asla bu döngüde takılmaz.
+    // The new-topic confirmation loop lives only here (plain path): a rejection
+    // returns to the "What's the topic?" prompt — the equivalent of the TUI's
+    // reject-and-ask-again flow. The resume/first-session paths never get stuck in this loop.
     loop {
         let line = match rl.readline("What's the topic? (write it short or as a sentence): ") {
             Ok(l) => l,
-            // Ctrl-D / Ctrl-C → engellemeden "genel"e düş.
+            // Ctrl-D / Ctrl-C → fall through to "general" without blocking.
             Err(_) => return Ok(("genel".to_string(), None)),
         };
         let raw = line.trim();
-        // Konu girişi yorumu: devam mı, yeni konu mu? (spec K1). Plain yolda devam/yeni
-        // ayrımı yalnız slug'a yansır — TUI'deki görsel notice farkı burada yok.
+        // Interpret the topic input: resume or new topic? (spec K1). In the plain path
+        // the resume/new distinction only shows up in the slug — the TUI's visual notice
+        // difference doesn't apply here.
         match interpret_topic_input(raw, &local) {
             None => return Ok(("genel".to_string(), None)),
             Some(TopicChoice::Resume(t)) => return Ok((t, None)),
             Some(TopicChoice::New(raw)) => {
-                // Kısa girdi (≤2 kelime) → yerel slug, boşuna LLM çağrısı yapma.
+                // Short input (≤2 words) → local slug, don't waste an LLM call.
                 let slug = if raw.split_whitespace().count() <= 2 {
                     slugify_topic(&raw)
                 } else {
-                    // Cümle → model ne istediğini çıkarıp slug seçsin (yerel konular K2 için).
+                    // Sentence → let the model infer what's wanted and pick the slug (for local topics, K2).
                     derive_slug(backend, &raw, &local).await
                 };
                 if local.contains(&slug) {
-                    // Model devam niyetini mevcut slug'a çözdü — onaysız devam.
+                    // The model resolved intent-to-continue to an existing slug — resume without confirmation.
                     return Ok((slug, None));
                 }
-                // İlk oturum (kayıtlı konu yok) → onay muafiyeti. Aksi halde sor.
+                // First session (no topics saved yet) → confirmation exempt. Otherwise ask.
                 if local.is_empty()
                     || confirm(&format!("Open new topic '{slug}'? [y/N] "), &["e", "evet", "y", "yes"])?
                 {
@@ -608,7 +613,7 @@ async fn resolve_topic(
                     "cancelled — Enter = continue with {}, or type another topic",
                     local[0]
                 );
-                // Döngü başa döner: tekrar "Konu nedir?" sorulur.
+                // Loop restarts: "What's the topic?" is asked again.
             }
         }
     }
@@ -641,16 +646,16 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
     (next, msg)
 }
 
-/// Cümleden konu slug'ı çıkaran system prompt — hem plain (`derive_slug`) hem
-/// TUI konu girişi kullanır.
+/// System prompt that extracts a topic slug from a sentence — used by both the plain
+/// path (`derive_slug`) and the TUI topic entry.
 pub(crate) const SLUG_SYSTEM: &str = "Reduce what the user wants to learn/do to A SINGLE short \
     file-name slug. Rules: lowercase only, ascii (no accented characters), words separated \
     by hyphens, AT MOST 3 words, filler words (i/a/with/make/want) are dropped. \
     RETURN ONLY the slug — no explanation, no quotes, no punctuation. \
     Example: 'i want to build a todo app with rust' -> rust-todo";
 
-/// Slug sistem promptu — kayıtlı konular varsa devam-farkındalığı eklenir
-/// (spec K2): model devam niyetini mevcut slug'a çevirir, akış Resume sayar.
+/// Slug system prompt — if there are saved topics, resume-awareness is added
+/// (spec K2): the model converts intent-to-continue into the existing slug, and the flow counts it as Resume.
 pub(crate) fn slug_system(known: &[String]) -> String {
     if known.is_empty() {
         return SLUG_SYSTEM.to_string();
@@ -664,8 +669,9 @@ pub(crate) fn slug_system(known: &[String]) -> String {
     )
 }
 
-/// Model slug cevabını nihai slug'a çevir — tireleri boşluğa çevirip `slugify_topic`
-/// ile garantile; "genel"e düşerse ham girdiden yerel slug türet. Saf.
+/// Convert the model's slug reply into the final slug — turn hyphens into spaces
+/// and guarantee it via `slugify_topic`; if it falls back to "general", derive a
+/// local slug from the raw input instead. Pure.
 pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     let s = slugify_topic(&model_reply.trim().replace(['-', '_'], " "));
     if s == "general" || s == "genel" {
@@ -675,42 +681,42 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     }
 }
 
-/// Yeni konu onay metni (TUI tui_confirm için). Plain yol kendi `[e/H]`
-/// rustyline formatını kullanır — sözcükler kasıtlı farklı, iki yüzey ayrı.
+/// New-topic confirmation text (for TUI tui_confirm). The plain path uses its own
+/// `[e/H]` rustyline format — the wording is deliberately different, the two surfaces are separate.
 pub(crate) fn new_topic_confirm_msg(slug: &str) -> String {
     format!("new topic: {slug} — open it? [e = yes / any other key = go back]")
 }
 
-/// Konu girişi yorumu: devam mı, yeni konu mu? (spec K1)
+/// Interpret the topic input: resume or new topic? (spec K1)
 #[derive(Debug)]
 pub(crate) enum TopicChoice {
-    /// Mevcut proje-yerel konuya devam.
+    /// Resume an existing project-local topic.
     Resume(String),
-    /// Yeni konu akışı — ham girdi (slug'lama çağıranda).
+    /// New-topic flow — raw input (the caller slugifies it).
     New(String),
 }
 
-/// Deterministik seçim kuralları — sıra spec §3/K1 tablosu. `None` = girdiyi
-/// yut (boş + devam edilecek konu yok). LLM'siz; cümleler `New` döner, K2
-/// (slug_system) orada devreye girer.
+/// Deterministic selection rules — order follows spec §3/K1's table. `None` =
+/// swallow the input (empty + no topic to resume). No LLM; sentences return
+/// `New`, K2 (slug_system) kicks in there.
 pub(crate) fn interpret_topic_input(raw: &str, local: &[String]) -> Option<TopicChoice> {
     let raw = raw.trim();
-    // 1-2: boş Enter.
+    // 1-2: empty Enter.
     if raw.is_empty() {
         return local.first().map(|t| TopicChoice::Resume(t.clone()));
     }
-    // 3: rakam seçimi.
+    // 3: numeric selection.
     if let Ok(n) = raw.parse::<usize>() {
         if n >= 1 && n <= local.len() {
             return Some(TopicChoice::Resume(local[n - 1].clone()));
         }
     }
-    // 4: slug eşleşmesi.
+    // 4: slug match.
     let slug = slugify_topic(raw);
     if let Some(t) = local.iter().find(|t| **t == slug) {
         return Some(TopicChoice::Resume(t.clone()));
     }
-    // 5: kısa devam-kalıbı (deasciify sonrası substring).
+    // 5: short resume pattern (substring after deasciify).
     if !local.is_empty() && raw.split_whitespace().count() <= 4 {
         let d: String = raw.chars().map(deasciify).collect::<String>().to_lowercase();
         const RESUME_WORDS: &[&str] = &["devam", "kaldigimiz", "kaldigim", "continue", "resume"];
@@ -718,13 +724,13 @@ pub(crate) fn interpret_topic_input(raw: &str, local: &[String]) -> Option<Topic
             return Some(TopicChoice::Resume(local[0].clone()));
         }
     }
-    // 6: yeni konu.
+    // 6: new topic.
     Some(TopicChoice::New(raw.to_string()))
 }
 
-/// Cümleden konu slug'ını modele çıkart (plain yol). Hata → yerel slug.
-/// Çağrı sonrası CLI oturumu KOŞULSUZ sıfırlanır — slug mini-oturumu
-/// öğrenme oturumuna resume edilip bağlamı kirletmesin (spec B1).
+/// Extract the topic slug from a sentence via the model (plain path). Error → local slug.
+/// After the call the CLI session is UNCONDITIONALLY reset — so the slug mini-session
+/// doesn't get resumed into the learning session and pollute the context (spec B1).
 async fn derive_slug(backend: &mut Backend, raw: &str, known: &[String]) -> String {
     let history = [Message::user(raw)];
     let out = match ask_usta(backend, &slug_system(known), &history).await {
@@ -735,7 +741,7 @@ async fn derive_slug(backend: &mut Backend, raw: &str, known: &[String]) -> Stri
     out
 }
 
-/// Türkçe harfi ascii'ye indir + küçük harfe çevir; diğerlerini küçült.
+/// Reduce a Turkish letter to ascii + lowercase; lowercase everything else.
 fn deasciify(c: char) -> char {
     match c {
         'ç' | 'Ç' => 'c',
@@ -748,14 +754,14 @@ fn deasciify(c: char) -> char {
     }
 }
 
-/// Serbest metni konu slug'ına çevir — saf fonksiyon, test edilebilir.
-/// Kural: Türkçe karakterleri sadeleştir, küçük harfe çevir, en fazla İLK 3
-/// kelimeyi al, her kelimede yalnız ascii alfanümerik karakterleri tut,
-/// kelimeleri tire ile birleştir. Sonuç boşsa `"genel"`.
+/// Turn free text into a topic slug — pure function, testable.
+/// Rule: simplify Turkish characters, lowercase, take at most the FIRST 3
+/// words, keep only ascii alphanumeric characters in each word, join words
+/// with hyphens. Empty result → `"genel"`.
 /// "temel Linux güvenliği" → `temel-linux-guvenligi`.
 pub fn slugify_topic(input: &str) -> String {
-    // Deasciified (ç→c…) haliyle karşılaştırılan dolgu kelimeleri — slug'a
-    // girmez ki "ben rust ile bir todo yapmak istiyorum" → "rust-todo".
+    // Filler words, compared against their deasciified (ç→c…) form — kept out
+    // of the slug, so "ben rust ile bir todo yapmak istiyorum" → "rust-todo".
     const STOPWORDS: &[&str] = &[
         "ben", "bir", "ile", "ve", "icin", "bu", "su", "yapmak", "yapmayi",
         "istiyorum", "ogrenmek", "ogreniyorum", "istiyor", "bana", "de", "da",
@@ -779,12 +785,11 @@ pub fn slugify_topic(input: &str) -> String {
     }
 }
 
-/// `.usta/` iskeletini tembel kurar — `start`'ın kendi kendini bootstrap
-/// etmesini sağlar, `usta init`'i opsiyonel yapar. (1) global brain kökünü
-/// (`~/.config/usta`) tamamlar: kod-sahipli dosyalar gömülüyle senkronlanır,
-/// kullanıcı-sahipliler korunur. (2) proje kökü yukarı doğru aranıp bulunamazsa `cwd`'de
-/// yeni bir proje `.usta/` kurar ve `cwd`'yi döndürür; bulunursa onu olduğu
-/// gibi döndürür.
+/// Lazily sets up the `.usta/` scaffold — lets `start` bootstrap itself, making
+/// `usta init` optional. (1) Completes the global brain root (`~/.config/usta`):
+/// code-owned files are synced with the embedded ones, user-owned files are preserved.
+/// (2) If the project root can't be found by searching upward, sets up a new
+/// project `.usta/` in `cwd` and returns `cwd`; if found, returns it as-is.
 fn ensure_scaffold(cwd: &Path) -> Result<PathBuf> {
     let global = config::global_root()?;
     write_global_defaults(&global)?;
@@ -798,12 +803,13 @@ fn ensure_scaffold(cwd: &Path) -> Result<PathBuf> {
     }
 }
 
-/// `usta init` — global brain'i (`~/.config/usta`) varsayılanlarla doldurur
-/// (kod-sahipliler senkronlanır, kullanıcı-sahiplilerin üstüne YAZMAZ) ve
-/// CWD'de proje `.usta/` iskeletini kurar. Global brain "bir kere kurulur, tüm projelerde paylaşılır";
-/// proje `.usta/` her projede ayrı, override + ilerleme kaydı için.
-/// Yazma mantığı `ensure_scaffold`'la paylaşılır (`write_global_defaults` /
-/// `write_project_scaffold`) — tek fark burada per-dosya durum yazdırılması.
+/// `usta init` — fills the global brain (`~/.config/usta`) with defaults
+/// (code-owned files are synced, user-owned files are NEVER overwritten) and
+/// sets up the project `.usta/` scaffold in CWD. The global brain is "set up once,
+/// shared across all projects"; the project `.usta/` is separate per project, for
+/// overrides + progress tracking.
+/// The write logic is shared with `ensure_scaffold` (`write_global_defaults` /
+/// `write_project_scaffold`) — the only difference here is per-file status printing.
 fn run_init() -> Result<()> {
     let global = config::global_root()?;
     for (path, wrote) in write_global_defaults(&global)? {
@@ -819,7 +825,7 @@ fn run_init() -> Result<()> {
     Ok(())
 }
 
-/// `usta topics` — global katalogdaki kayıtları listele. LLM gerekmez.
+/// `usta topics` — list the entries in the global catalog. No LLM needed.
 fn run_topics() -> Result<()> {
     let global = config::global_root()?;
     let content =
@@ -836,8 +842,8 @@ fn run_topics() -> Result<()> {
     Ok(())
 }
 
-/// `usta reset <konu>` — bulunduğun projenin o konudaki progress'ini sil
-/// (onaylı) ve global katalogdan düş. LLM gerekmez.
+/// `usta reset <topic>` — delete the progress for that topic in the current
+/// project (with confirmation) and drop it from the global catalog. No LLM needed.
 fn run_reset_topic(topic: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let Some(root) = config::find_project_root(&cwd) else {
@@ -856,7 +862,7 @@ fn run_reset_topic(topic: &str) -> Result<()> {
         .with_context(|| format!("could not delete: {}", path.display()))?;
     println!("deleted: {}", path.display());
 
-    // Katalogdan da düş — katalog yoksa/okunamıyorsa sessizce geç.
+    // Drop it from the catalog too — pass silently if the catalog doesn't exist / can't be read.
     let global = config::global_root()?;
     let index_path = global.join("learner/index.md");
     if let Ok(current) = std::fs::read_to_string(&index_path) {
@@ -866,9 +872,9 @@ fn run_reset_topic(topic: &str) -> Result<()> {
     Ok(())
 }
 
-/// `usta reset --factory` — katalogdaki tüm projelerin `.usta/`'sı + global
-/// brain silinir. Sonraki `usta` çalıştırması her şeyi varsayılanlardan
-/// baştan kurar (bootstrap) — Usta kullanıcıyı hiç tanımamış gibi başlar.
+/// `usta reset --factory` — deletes the `.usta/` of every project in the catalog +
+/// the global brain. The next `usta` run sets everything back up from defaults
+/// (bootstrap) — Usta starts as if it never knew the user.
 fn run_reset_factory() -> Result<()> {
     let global = config::global_root()?;
     let index_content =
@@ -907,8 +913,8 @@ fn run_reset_factory() -> Result<()> {
     Ok(())
 }
 
-/// Profil hâlâ gömülü jenerik şablon mu? (= Usta kullanıcıyı henüz tanımıyor.)
-/// Trim'li karşılaştırma — satır sonu/boşluk farkı yanlış-negatif üretmesin.
+/// Is the profile still the embedded generic template? (= Usta doesn't know the user yet.)
+/// Trimmed comparison — line-ending/whitespace differences shouldn't produce a false negative.
 pub(crate) fn profile_is_generic(disk: &str) -> bool {
     defaults::global_defaults()
         .into_iter()
@@ -917,9 +923,9 @@ pub(crate) fn profile_is_generic(disk: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Profil sıfırlama çekirdeği — SAF (onay yok, global_root yok): mevcut
-/// profili `.bak`'a al, gömülü jenerik şablonu yaz. Konu progress'lerine
-/// DOKUNMAZ (spec Ç2).
+/// Profile reset core — PURE (no confirmation, no global_root): backs up the
+/// current profile to `.bak`, writes the embedded generic template. Does NOT
+/// touch topic progress (spec Ç2).
 fn reset_profile_files(global: &Path) -> Result<()> {
     let sablon = defaults::global_defaults()
         .into_iter()
@@ -940,10 +946,11 @@ fn reset_profile_files(global: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `usta reset --profile` — onaylı; Usta kullanıcıyı "tanımadan" başlar.
-/// Yıkıcı işlem: TTY yoksa (onay alınamayacak durumda) sessizce koşmak
-/// yerine hatayla çıkar — `confirm()` boş stdin'de "hayır"a düşse de, bu
-/// davranış pipe'ın içeriğine bağımlı kalmasın diye burada açıkça bekleniyor.
+/// `usta reset --profile` — with confirmation; Usta starts "not knowing" the user.
+/// Destructive operation: if there's no TTY (confirmation can't be obtained), exits
+/// with an error instead of running silently — even though `confirm()` falls back to
+/// "no" on empty stdin, this behavior is made explicit here so it doesn't stay
+/// dependent on the pipe's content.
 fn run_reset_profile() -> Result<()> {
     if !std::io::stdin().is_terminal() {
         anyhow::bail!("no TTY — cannot get confirmation, profile not reset. Run in an interactive terminal.");
@@ -965,8 +972,8 @@ fn run_reset_profile() -> Result<()> {
     Ok(())
 }
 
-/// Onay iste: stdin'den tek satır oku, kabul listesiyle (küçük harf)
-/// karşılaştır. Stdin kapalı/boş = hayır — güvenli varsayılan.
+/// Ask for confirmation: read one line from stdin, compare with the accepted list
+/// (lowercase). stdin closed/empty = no — safe default.
 fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
     use std::io::Write;
     print!("{prompt}");
@@ -976,7 +983,7 @@ fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
     Ok(yes.contains(&line.trim().to_lowercase().as_str()))
 }
 
-/// `usta init`'in per-dosya/dizin durum satırı.
+/// Per-file/directory status line for `usta init`.
 fn print_scaffold_status(path: &Path, wrote: bool) {
     if wrote {
         println!("written: {}", path.display());
@@ -985,9 +992,10 @@ fn print_scaffold_status(path: &Path, wrote: bool) {
     }
 }
 
-/// Eski profil konumundan (önceki `learner/` alt yolu) yeni köke (`USER.md`)
-/// tek-seferlik geçiş. Eski dosya var + yeni yoksa taşır (`true`); aksi halde no-op
-/// (`false`) — mevcut `USER.md` asla ezilmez, veri kaybı riski alınmaz.
+/// One-time migration from the old profile location (previous `learner/` subpath)
+/// to the new root (`USER.md`). Moves it if the old file exists and the new one
+/// doesn't (`true`); otherwise a no-op (`false`) — an existing `USER.md` is never
+/// overwritten, no risk of data loss.
 fn migrate_profile_to_user_md(global: &Path) -> Result<bool> {
     let old = global.join("learner/profile.md");
     let new = global.join("USER.md");
@@ -1000,16 +1008,15 @@ fn migrate_profile_to_user_md(global: &Path) -> Result<bool> {
     }
 }
 
-/// Global brain kökünü oluşturup varsayılan dosyaları yazar. Kod-sahipli
-/// dosyalar (USTA.md, approaches/*) gömülü içerikle senkronlanır — eskiyse
-/// üstüne yazılır; kullanıcı-sahipli dosyalar (learner/*, USER.md) yalnız
-/// ilk-kez yazılır (`defaults::Ownership`). Her dosya için `(yol, yazıldı-mı)`
-/// döner — `run_init` bunu yazdırır, `ensure_scaffold` sessizce yutar.
-/// Yazım döngüsünden ÖNCE eski profil konumundan `USER.md`'ye geçiş
-/// çalıştırılır (spec §5 sıra şartı) — böylece hem `ensure_scaffold` hem
-/// `run_init` (ikisi de bu fonksiyonu çağırır) mevcut kullanıcı verisini
-/// korur, `USER.md`'nin `Ownership::User` ilk-kez-yaz kuralı taşınan dosyanın
-/// üstüne yazmaz.
+/// Creates the global brain root and writes the default files. Code-owned files
+/// (USTA.md, approaches/*) are synced with the embedded content — overwritten if
+/// stale; user-owned files (learner/*, USER.md) are written only the first time
+/// (`defaults::Ownership`). Returns `(path, was-written)` for each file —
+/// `run_init` prints this, `ensure_scaffold` swallows it silently.
+/// The migration from the old profile location to `USER.md` runs BEFORE the
+/// write loop (spec §5 ordering requirement) — this way both `ensure_scaffold`
+/// and `run_init` (both call this function) preserve existing user data, and
+/// `USER.md`'s `Ownership::User` write-once rule doesn't overwrite the moved file.
 fn write_global_defaults(global: &Path) -> Result<Vec<(PathBuf, bool)>> {
     std::fs::create_dir_all(global)
         .with_context(|| format!("could not create global root: {}", global.display()))?;
@@ -1038,10 +1045,10 @@ fn write_global_defaults(global: &Path) -> Result<Vec<(PathBuf, bool)>> {
     Ok(results)
 }
 
-/// `cwd/.usta/` altında proje iskeletini kurar (`learner/progress`,
-/// `approaches` + `.gitkeep`'ler — boş dizin de commit edilebilsin diye).
-/// `.gitkeep` yazımı sessizdir (orijinal `run_init` davranışıyla birebir);
-/// dönen liste sadece dizinlerin `(yol, yazıldı-mı)` durumunu içerir.
+/// Sets up the project scaffold under `cwd/.usta/` (`learner/progress`,
+/// `approaches` + `.gitkeep`s — so an empty directory can still be committed).
+/// `.gitkeep` writes are silent (identical to the original `run_init` behavior);
+/// the returned list only contains the directories' `(path, was-written)` status.
 fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
     let usta_dir = cwd.join(".usta");
     let mut results = Vec::new();
@@ -1053,7 +1060,7 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
             .with_context(|| format!("could not create directory: {}", dir.display()))?;
         results.push((dir.clone(), !dir_existed));
 
-        // .gitkeep — boş dizin de commit edilebilsin.
+        // .gitkeep — so an empty directory can still be committed.
         let gitkeep = dir.join(".gitkeep");
         if config::should_write(&gitkeep) {
             std::fs::write(&gitkeep, "")
@@ -1064,28 +1071,28 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
     Ok(results)
 }
 
-/// Dosya değişikliği feedback sonucu — çağıran (plain/TUI) kendi basar.
-/// `handle_file_change` hiçbir şey println! etmez (raw-mode'da stdout
-/// bozulmasın); tam `Reply` taşınır ki `web` bayrağı ve context gauge
-/// çağıran tarafta orijinal davranışla (print_reply) yeniden üretilebilsin.
+/// File-change feedback result — the caller (plain/TUI) prints it themselves.
+/// `handle_file_change` never println!s anything (so stdout doesn't get corrupted
+/// in raw-mode); the full `Reply` is carried so the `web` flag and context gauge
+/// can be reproduced on the caller's side with the original behavior (print_reply).
 pub(crate) enum FileFeedback {
-    /// Skip — çıktı yok.
+    /// Skip — no output.
     Sessiz,
-    /// Büyük dosya bildirimi — çağıran kendi yolunda gösterir
+    /// Large-file notice — the caller shows it in its own way
     /// (plain: `println!`, TUI: `page_notice`).
     Bildirim(String),
-    /// Gerçek yanıt — bağlam token'ı + tam `Reply` (web bayrağı korunur).
+    /// Actual reply — context token count + full `Reply` (the web flag is preserved).
     Yanit {
         tokens: Option<u64>,
         reply: backend::Reply,
     },
 }
 
-/// Kaydedilen dosyayı FileMemory'den geçir; ilk görüşte tam içerik, sonrasında
-/// diff olarak sentetik user turn'e çevir → Socratic feedback. Cargo projesiyse
-/// check sonucu "sadece Usta'nın gözü için" bloğuyla eklenir (tahmin protokolü).
-/// Çıktı BASMAZ — hem plain hem TUI yolu dönen `FileFeedback`'i kendi sunum
-/// diliyle basar (raw-mode'da stdout bozulmasın).
+/// Runs a saved file through FileMemory; full content on first sight, a diff
+/// afterward, turned into a synthetic user turn → Socratic feedback. For a cargo
+/// project, the check result is appended in an "Usta's eyes only" block (prediction protocol).
+/// Doesn't PRINT anything — both the plain and TUI paths print the returned
+/// `FileFeedback` in their own presentation language (so stdout doesn't get corrupted in raw-mode).
 pub(crate) async fn handle_file_change(
     backend: &mut Backend,
     session: &mut Session,
@@ -1126,7 +1133,7 @@ pub(crate) async fn handle_file_change(
     Ok(FileFeedback::Yanit { tokens, reply })
 }
 
-/// Usta yanıtını sunum katmanına devret.
+/// Hand off Usta's reply to the presentation layer.
 fn print_reply(reply: &backend::Reply, window: u64) {
     ui::print_usta_reply(&reply.text, reply.web);
     ui::context_gauge(reply.context_tokens, window);
@@ -1189,7 +1196,7 @@ mod tests {
 
     #[test]
     fn slugify_strips_stopwords_from_sentence() {
-        // "ben ... ile bir ... yapmak istiyorum" dolgu kelimeleri düşer.
+        // "ben ... ile bir ... yapmak istiyorum" — filler words are dropped.
         assert_eq!(
             slugify_topic("ben rust ile bir todo uygulaması yapmak istiyorum"),
             "rust-todo-uygulamasi"
@@ -1269,7 +1276,7 @@ mod tests {
         let args = |s: &str| vec!["usta".to_string(), "reset".to_string(), s.to_string()];
         assert_eq!(parse_command(&args("--profile")).unwrap(), Command::Reset(ResetTarget::Profile));
         assert_eq!(parse_command(&args("--profil")).unwrap(), Command::Reset(ResetTarget::Profile));
-        // Regresyon: konu ve factory aynen.
+        // Regression: topic and factory unchanged.
         assert_eq!(parse_command(&args("--factory")).unwrap(), Command::Reset(ResetTarget::Factory));
         assert!(matches!(parse_command(&args("rust")).unwrap(), Command::Reset(ResetTarget::Topic(t)) if t == "rust"));
     }
@@ -1282,7 +1289,7 @@ mod tests {
             .map(|(_, c, _)| c)
             .unwrap();
         assert!(profile_is_generic(sablon));
-        assert!(profile_is_generic(&format!("{sablon}\n"))); // satır sonu toleransı
+        assert!(profile_is_generic(&format!("{sablon}\n"))); // line-ending tolerance
         assert!(!profile_is_generic("# Öğrenci Profili — Anil\nkişisel"));
     }
 
@@ -1301,11 +1308,11 @@ mod tests {
             .find(|(rel, _, _)| *rel == "USER.md")
             .map(|(_, c, _)| c)
             .unwrap();
-        assert_eq!(yeni, sablon); // jenerik şablona eşit
+        assert_eq!(yeni, sablon); // equal to the generic template
         assert_eq!(
             std::fs::read_to_string(base.join("USER.md.bak")).unwrap(),
             "# Öğrenci Profili — Anil\nkişisel notlar"
-        ); // eski içerik yedekte
+        ); // old content is in the backup
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1313,7 +1320,7 @@ mod tests {
     fn reset_profile_files_works_without_existing_profile() {
         let base = std::env::temp_dir().join(format!("usta_reset_profile_yok_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        reset_profile_files(&base).unwrap(); // dosya yokken de: dizin kurulur, şablon yazılır, .bak yok
+        reset_profile_files(&base).unwrap(); // also works with no existing file: directory is created, template is written, no .bak
         assert!(base.join("USER.md").exists());
         assert!(!base.join("USER.md.bak").exists());
         let _ = std::fs::remove_dir_all(&base);
@@ -1331,7 +1338,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(base.join("USER.md")).unwrap(), "KIŞISEL");
         assert!(!base.join("learner/profile.md").exists());
 
-        // İkinci çağrı: eski yol artık yok → no-op.
+        // Second call: the old path no longer exists → no-op.
         let moved_again = migrate_profile_to_user_md(&base).unwrap();
         assert!(!moved_again);
         assert_eq!(std::fs::read_to_string(base.join("USER.md")).unwrap(), "KIŞISEL");
@@ -1350,14 +1357,14 @@ mod tests {
         let moved = migrate_profile_to_user_md(&base).unwrap();
         assert!(!moved);
         assert_eq!(std::fs::read_to_string(base.join("USER.md")).unwrap(), "YENİ");
-        // Veri kaybı riski alınmaz — eski dosya da yerinde bırakılır.
+        // No risk of data loss is taken — the old file is also left in place.
         assert_eq!(std::fs::read_to_string(base.join("learner/profile.md")).unwrap(), "ESKİ");
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// `write_project_scaffold` bir temp dizinde `.usta/` iskeletini kurar —
-    /// `global_root()`'a hiç dokunmadan (gerçek `~/.config`'i etkilemez).
+    /// `write_project_scaffold` sets up the `.usta/` scaffold in a temp directory —
+    /// without touching `global_root()` at all (doesn't affect the real `~/.config`).
     #[test]
     fn write_global_defaults_syncs_code_owned_preserves_user_owned() {
         let base = std::env::temp_dir().join(format!(
@@ -1366,29 +1373,29 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&base);
 
-        // İlk yazım: her şey yazılır.
+        // First write: everything is written.
         let first = write_global_defaults(&base).unwrap();
         assert!(first.iter().all(|(_, wrote)| *wrote));
 
-        // Kirlet: kod-sahipli USTA.md eskisin, kullanıcı-sahipli profile düzenlensin.
+        // Dirty it: make code-owned USTA.md stale, edit the user-owned profile.
         std::fs::write(base.join("USTA.md"), "eski sürüm").unwrap();
         std::fs::write(base.join("USER.md"), "kullanıcı düzenlemesi").unwrap();
 
         write_global_defaults(&base).unwrap();
 
-        // Kod-sahipli senkronlandı — gömülü güncel içerik geri geldi.
-        // Not: USTA.md, Task 1'in brain-split'iyle davranışsız bir indekse
-        // dönüştü ("Sert Kurallar" artık RULES.md'de) — assertion güncel
-        // gömülü içeriğe göre düzeltildi.
+        // Code-owned file was synced — the embedded up-to-date content came back.
+        // Note: USTA.md turned into a behavior-free index via Task 1's brain-split
+        // ("Hard Rules" now lives in RULES.md) — the assertion was updated to match
+        // the current embedded content.
         let usta = std::fs::read_to_string(base.join("USTA.md")).unwrap();
         assert!(usta.contains("Intervention Map"));
-        // Kullanıcı-sahipli korundu.
+        // User-owned file was preserved.
         assert_eq!(
             std::fs::read_to_string(base.join("USER.md")).unwrap(),
             "kullanıcı düzenlemesi"
         );
 
-        // Değişiklik yokken hiçbir şey yeniden yazılmaz.
+        // Nothing gets rewritten when there's no change.
         let third = write_global_defaults(&base).unwrap();
         assert!(third.iter().all(|(_, wrote)| !*wrote));
 
@@ -1412,7 +1419,7 @@ mod tests {
         assert!(base.join(".usta/learner/progress/.gitkeep").is_file());
         assert!(base.join(".usta/approaches/.gitkeep").is_file());
 
-        // İkinci çağrı: dizinler zaten var → `wrote` false dönmeli, panic yok.
+        // Second call: directories already exist → `wrote` should be false, no panic.
         let results2 = write_project_scaffold(&base).unwrap();
         assert!(results2.iter().all(|(_, wrote)| !*wrote));
 
@@ -1421,15 +1428,15 @@ mod tests {
 
     #[test]
     fn finalize_slug_uses_model_reply_then_slugifies() {
-        // Model tire'li slug döndürür → tireler korunur, slugify garantiler.
+        // Model returns a hyphenated slug → hyphens are preserved, slugify guarantees it.
         assert_eq!(finalize_slug("ben golang öğrenmek istiyorum", "golang-web"), "golang-web");
-        // Model gürültülü döndürürse yine slug'lanır.
+        // If the model returns noisy output it still gets slugified.
         assert_eq!(finalize_slug("x", "Rust Todo"), "rust-todo");
     }
 
     #[test]
     fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
-        // Model "general" derse ham girdiden yerel slug türet.
+        // If the model says "general", derive a local slug from the raw input instead.
         assert_eq!(finalize_slug("temel linux güvenliği", "general"), "temel-linux-guvenligi");
     }
 
@@ -1451,7 +1458,7 @@ mod tests {
     fn interpret_empty_resumes_latest_or_swallows() {
         let local = vec!["son-konu".to_string(), "eski".to_string()];
         assert!(matches!(interpret_topic_input("", &local), Some(TopicChoice::Resume(t)) if t == "son-konu"));
-        assert!(interpret_topic_input("  ", &[]).is_none()); // konu yok → yut
+        assert!(interpret_topic_input("  ", &[]).is_none()); // no topic → swallow
     }
 
     #[test]
@@ -1464,7 +1471,7 @@ mod tests {
     #[test]
     fn interpret_existing_slug_match_resumes() {
         let local = vec!["linux-guvenlik".to_string()];
-        // Slugify eşleşmesi: Türkçe yazım da yakalanır.
+        // Slugify match: Turkish spelling is caught too.
         assert!(matches!(
             interpret_topic_input("Linux Güvenlik", &local),
             Some(TopicChoice::Resume(t)) if t == "linux-guvenlik"
@@ -1477,12 +1484,12 @@ mod tests {
         for s in ["devam", "devam edelim", "kaldığımız yerden devam", "continue", "resume"] {
             assert!(matches!(interpret_topic_input(s, &local), Some(TopicChoice::Resume(t)) if t == "son-konu"), "{s}");
         }
-        // >4 kelime → LLM'e/yeni akışa (K2 yakalar).
+        // >4 words → goes to the LLM/new-topic flow (K2 catches it).
         assert!(matches!(
             interpret_topic_input("devam edelim ama bu sefer docker öğrenelim", &local),
             Some(TopicChoice::New(_))
         ));
-        // Devam kalıbı ama hiç konu yok → yeni konu.
+        // Resume pattern but no topic exists → new topic.
         assert!(matches!(interpret_topic_input("devam", &[]), Some(TopicChoice::New(_))));
     }
 

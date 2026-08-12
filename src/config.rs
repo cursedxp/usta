@@ -1,10 +1,10 @@
-//! Yapılandırma: API key + model + brain kökü çözümleme (global + proje).
+//! Configuration: API key + model + brain root resolution (global + project).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-/// API key'i çevreden çöz. Saf fonksiyon — test edilebilir.
+/// Resolve the API key from the environment. Pure function — testable.
 pub fn resolve_key(env_value: Option<String>) -> Result<String> {
     match env_value {
         Some(k) if !k.trim().is_empty() => Ok(k),
@@ -14,14 +14,14 @@ pub fn resolve_key(env_value: Option<String>) -> Result<String> {
     }
 }
 
-/// Global brain kökü: `~/.config/usta` (`XDG_CONFIG_HOME` set'liyse onu
-/// kullanır, yoksa `~/.config`'e düşer).
+/// Global brain root: `~/.config/usta` (uses `XDG_CONFIG_HOME` if it's set,
+/// otherwise falls back to `~/.config`).
 ///
-/// NOT: `dirs::config_dir()` doğrudan kullanılmadı — macOS'ta o fonksiyon
-/// `~/Library/Application Support` döndürüyor (Apple platform konvansiyonu),
-/// `~/.config` değil. Usta terminal-native, dotfile-tarzı bir araç; hedef her
-/// zaman `~/.config/usta` olmalı. `dirs::home_dir()` platformlar arası doğru
-/// ev dizinini bulmak için kullanılıyor, `XDG_CONFIG_HOME` üstüne biner.
+/// NOTE: `dirs::config_dir()` isn't used directly — on macOS that function
+/// returns `~/Library/Application Support` (Apple platform convention),
+/// not `~/.config`. Usta is a terminal-native, dotfile-style tool; the target should
+/// always be `~/.config/usta`. `dirs::home_dir()` is used to find the correct
+/// home directory across platforms, and `XDG_CONFIG_HOME` takes precedence over it.
 pub fn global_root() -> Result<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         let p = PathBuf::from(xdg);
@@ -34,9 +34,9 @@ pub fn global_root() -> Result<PathBuf> {
     Ok(home.join(".config").join("usta"))
 }
 
-/// `start`'tan yukarı doğru yürüyerek ilk `.usta/` içeren atayı bul — git'in
-/// `.git` araması gibi. Dönen değer `.usta`'yı İÇEREN dizin (proje kökü),
-/// `.usta`'nın kendisi değil. Bulunamazsa `None`.
+/// Walk upward from `start` to find the first ancestor containing `.usta/` — like git's
+/// `.git` search. The returned value is the directory that CONTAINS `.usta` (the project root),
+/// not `.usta` itself. Returns `None` if not found.
 pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start);
     while let Some(d) = dir {
@@ -48,15 +48,15 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Bir dosyaya yazılmalı mı? — saf karar, `init`'in "oluştur / zaten var,
-/// atla" mantığı burada test edilebilir hale gelir.
+/// Should a file be written? — a pure decision; `init`'s "create / already exists,
+/// skip" logic becomes testable here.
 pub fn should_write(path: &Path) -> bool {
     !path.exists()
 }
 
-/// Kod-sahipli dosya senkron gerektiriyor mu? Dosya yoksa veya diskteki
-/// içerik gömülüden farklıysa `true` — repo'daki USTA.md düzenlemesi rebuild
-/// sonrası ilk açılışta global'e taşınır (bkz. `defaults::Ownership::Code`).
+/// Does the code-owned file need syncing? `true` if the file doesn't exist or the
+/// on-disk content differs from the embedded one — a USTA.md edit in the repo gets
+/// carried over to global on the first launch after a rebuild (see `defaults::Ownership::Code`).
 pub fn needs_sync(path: &Path, embedded: &str) -> bool {
     match std::fs::read_to_string(path) {
         Ok(disk) => disk != embedded,
@@ -90,7 +90,7 @@ mod tests {
         fs::create_dir_all(base.join(".usta")).unwrap();
 
         let found = find_project_root(&nested);
-        // canonicalize: macOS temp dir'i symlink (/tmp -> /private/tmp) olabilir.
+        // canonicalize: on macOS the temp dir can be a symlink (/tmp -> /private/tmp).
         assert_eq!(
             found.unwrap().canonicalize().unwrap(),
             base.canonicalize().unwrap()
@@ -107,9 +107,9 @@ mod tests {
         let nested = base.join("x/y");
         fs::create_dir_all(&nested).unwrap();
 
-        // Sınırlı bir alt-ağaçta .usta hiçbir yerde yok — burada None dönmeli.
-        // (Gerçek filesystem kökü boyunca yürür ama /tmp altında .usta olması
-        // beklenmez.)
+        // There's no .usta anywhere in this bounded subtree — should return None here.
+        // (It walks all the way to the real filesystem root, but a .usta under /tmp
+        // isn't expected.)
         assert!(find_project_root(&nested).is_none());
 
         let _ = fs::remove_dir_all(&base);

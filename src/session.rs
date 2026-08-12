@@ -1,21 +1,21 @@
-//! Oturum durumu: konu + system prompt + konuşma geçmişi.
-//! Geçmiş düz-metin `Message`'lar olarak tutulur (role + Value::String içerik).
-//! Model backend'de yaşar — burada tutulmaz (backend'e göre değişir).
+//! Session state: topic + system prompt + conversation history.
+//! History is kept as plain-text `Message`s (role + Value::String content).
+//! The model lives in the backend — not kept here (varies by backend).
 
 use crate::anthropic::Message;
 
-/// Tek bir öğrenme oturumu.
+/// A single learning session.
 pub struct Session {
-    /// Aktif öğrenme başlığı (ör. "rust") — kapanışta progress dosyasını seçer.
+    /// Active learning topic (e.g. "rust") — selects the progress file on close.
     pub topic: String,
-    /// Birleştirilmiş brain system prompt'u.
+    /// The combined brain system prompt.
     pub system: String,
-    /// Konuşma geçmişi (user/assistant sırayla).
+    /// Conversation history (user/assistant in order).
     history: Vec<Message>,
 }
 
 impl Session {
-    /// Yeni oturum — boş geçmişle başlar.
+    /// New session — starts with empty history.
     pub fn new(topic: impl Into<String>, system: impl Into<String>) -> Self {
         Session {
             topic: topic.into(),
@@ -24,12 +24,12 @@ impl Session {
         }
     }
 
-    /// Kullanıcı turn'ü ekle.
+    /// Add a user turn.
     pub fn push_user(&mut self, text: &str) {
         self.history.push(Message::user(text));
     }
 
-    /// Asistan (Usta) yanıtını düz-metin olarak ekle.
+    /// Add the assistant's (Usta's) reply as plain text.
     pub fn push_assistant(&mut self, text: String) {
         self.history.push(Message {
             role: "assistant".into(),
@@ -37,14 +37,15 @@ impl Session {
         });
     }
 
-    /// Geçmişe salt-okunur erişim (backend'e geçmek için).
+    /// Read-only access to history (to pass to the backend).
     pub fn history(&self) -> &[Message] {
         &self.history
     }
 
-    /// Kompaksiyon: history'yi `note` + son `keep_last` mesaja indir.
-    /// Ara-flush SONRASI çağrılır — atılan turn'lerin özü zaten progress/
-    /// curriculum dosyalarına yazılmıştır, note bunu modele söyler.
+    /// Compaction: reduce history to `note` + the last `keep_last` messages.
+    /// Called AFTER an intermediate flush — the essence of the dropped turns
+    /// has already been written to the progress/curriculum files, the note
+    /// tells the model this.
     pub fn compact(&mut self, keep_last: usize, note: &str) {
         if self.history.len() <= keep_last {
             return;

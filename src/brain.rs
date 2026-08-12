@@ -1,16 +1,16 @@
-//! Brain yükleyici: global (paylaşılan) + proje (özel/ilerleme) markdown
-//! dosyalarını birleştirip system prompt üretir.
-//! "İnce kabuk, kalın beyin" — davranış burada değil, markdown'da yaşar.
+//! Brain loader: merges global (shared) + project (specific/progress) markdown
+//! files to produce the system prompt.
+//! "Thin shell, thick brain" — behavior doesn't live here, it lives in markdown.
 //!
-//! Hibrit model: `global` = `~/.config/usta` (çekirdek kurallar + öğrenci
-//! profili, bir kere kurulur), `project` = `.usta/` içeren proje kökü
-//! (yaklaşım override'ları + konu bazlı ilerleme, `git`in `.git` bulması gibi
-//! yukarı doğru aranır — bkz. `config::find_project_root`).
+//! Hybrid model: `global` = `~/.config/usta` (core rules + learner
+//! profile, set up once), `project` = the project root containing `.usta/`
+//! (approach overrides + topic-based progress, searched upward like
+//! `git` finds `.git` — see `config::find_project_root`).
 
 use std::path::{Path, PathBuf};
 
-/// Bir dosyayı oku; boş değilse etiketli bölüm olarak `parts`'a ekle.
-/// Eksik/boş dosya sessizce atlanır.
+/// Read a file; if non-empty, add it to `parts` as a labeled section.
+/// A missing/empty file is silently skipped.
 fn read_section(path: &Path, label: &str, parts: &mut Vec<String>) {
     if let Ok(text) = std::fs::read_to_string(path) {
         let text = text.trim();
@@ -20,8 +20,8 @@ fn read_section(path: &Path, label: &str, parts: &mut Vec<String>) {
     }
 }
 
-/// `.usta` altındaki proje-özel yaklaşım dosyası varsa onu, yoksa global
-/// karşılığını oku — override kazanır.
+/// Read the project-specific approach file under `.usta` if it exists, otherwise
+/// its global counterpart — the override wins.
 fn read_approach_with_override(
     project_usta: Option<&PathBuf>,
     global: &Path,
@@ -39,10 +39,10 @@ fn read_approach_with_override(
     }
 }
 
-/// `approaches/` altındaki TÜM `.md` dosyalarını yükle — global ∪ proje,
-/// aynı ad proje lehine override edilir (read_approach_with_override).
-/// Alfabetik sıra: system prompt deterministik kalsın. Hangi yaklaşımın
-/// uygulanacağını kod değil USTA.md "Domaine göre yaklaşım" kuralı seçer.
+/// Load ALL `.md` files under `approaches/` — global ∪ project,
+/// same-named files are overridden in favor of the project (read_approach_with_override).
+/// Alphabetical order: keeps the system prompt deterministic. Which approach
+/// gets applied is chosen not by code but by TEACHING.md's "Approach by Domain" rule.
 fn read_all_approaches(project_usta: Option<&PathBuf>, global: &Path, parts: &mut Vec<String>) {
     let mut names: Vec<String> = Vec::new();
     let mut collect = |dir: &std::path::Path| {
@@ -65,14 +65,14 @@ fn read_all_approaches(project_usta: Option<&PathBuf>, global: &Path, parts: &mu
     }
 }
 
-/// Global brain + (varsa) proje override/ilerlemesini birleştirip system
-/// prompt üret. `project`, `.usta/` İÇEREN proje kökü — proje dosyaları
-/// `project.join(".usta")` altında yaşar (`.usta`'nın kendisi değil).
+/// Merge the global brain + (if present) the project override/progress to
+/// produce the system prompt. `project` is the project root CONTAINING `.usta/` —
+/// project files live under `project.join(".usta")` (not `.usta` itself).
 pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, today: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
 
-    // Model bugünü güvenilir bilmez — "sınava kaç hafta kaldı" gibi hesaplar
-    // için sabit referans en başta verilir (GOAL.md "Hedefli Öğrenme").
+    // The model doesn't reliably know today's date — a fixed reference is given
+    // up front for calculations like "how many weeks until the exam" (GOAL.md "Goal-Directed Learning").
     parts.push(format!("===== TODAY =====\n{today}"));
 
     read_section(&global.join("SOUL.md"), "SOUL.md", &mut parts);
@@ -81,12 +81,13 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
 
     let project_usta: Option<PathBuf> = project.map(|p| p.join(".usta"));
 
-    // GOAL yalnız hedefli konuda yüklenir — hedefsiz oturumda ~1.5KB tasarruf,
-    // model alakasız sınav-tempo/format kurallarını taşımaz (spec §3 koşullu
-    // satır). Konunun approach dosyası (proje override varsa o, yoksa global
-    // — read_approach_with_override'daki ÖNCELİK aynı) burada YALNIZ "## Hedef"
-    // var mı diye tek seferlik okunur; tam içerik aşağıdaki read_all_approaches
-    // zaten ayrıca yükleyeceği için burada İKİNCİ kez prompt'a eklenmez.
+    // GOAL is only loaded for a goal-oriented topic — saves ~1.5KB in a goalless
+    // session, the model doesn't carry irrelevant exam-pace/format rules (spec §3
+    // conditional line). The topic's approach file (project override if present,
+    // otherwise global — same PRIORITY as in read_approach_with_override) is read
+    // here ONCE just to check whether "## Hedef" is present; the full content is
+    // already loaded separately by read_all_approaches below, so it's not added
+    // to the prompt a SECOND time here.
     let topic_rel = format!("{topic}.md");
     let topic_approach_path = project_usta
         .as_ref()
@@ -117,8 +118,8 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     }
 
     if parts.len() == 1 {
-        // Yalnız TODAY bölümü varsa brain dosyaları hiç bulunamamış demektir
-        // — çekirdek kural gömülü fallback.
+        // If only the TODAY section is present, no brain files were found at all
+        // — fall back to the embedded core rule.
         return FALLBACK_SYSTEM.to_string();
     }
     parts.join("\n\n")
@@ -136,7 +137,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Her testin kendi izole global/proje dizin çiftini kurmasını sağlar.
+    /// Lets each test set up its own isolated global/project directory pair.
     fn temp_pair(name: &str) -> (PathBuf, PathBuf) {
         let base = std::env::temp_dir().join(format!("usta_brain_{name}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);

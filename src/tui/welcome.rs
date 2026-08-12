@@ -1,5 +1,5 @@
-//! Açılış kutusu: veri toplama (saf) + render. Spec §5.
-//! Tüm parse'lar best-effort — bozuk/eksik girdi alanı atlar, asla panik yok.
+//! Welcome box: data gathering (pure) + render. Spec §5.
+//! All parsing is best-effort — malformed/missing input skips the field, never panics.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -14,7 +14,7 @@ const LOGO: [&str; 4] = [
     "██████     ██   ██   ██  ██",
 ];
 
-/// Açılış kutusunun tüm verisi — render bu struct'tan çizer, IO yapmaz.
+/// All data for the welcome box — render draws from this struct, does no IO.
 pub struct WelcomeData {
     pub version: &'static str,
     pub name: Option<String>,
@@ -28,7 +28,7 @@ pub struct WelcomeData {
     pub first_session: bool,
 }
 
-/// `## {header}` başlığından bir sonraki `## `e kadarki gövde.
+/// Body from a `## {header}` heading up to the next `## `.
 fn section<'a>(md: &'a str, header: &str) -> Option<&'a str> {
     let needle = format!("## {header}");
     let start = md.find(&needle)? + needle.len();
@@ -37,7 +37,7 @@ fn section<'a>(md: &'a str, header: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
-/// `# Öğrenci Profili — Ada` → `Ada` (em-dash veya tire sonrası).
+/// `# Öğrenci Profili — Ada` → `Ada` (after an em-dash or hyphen).
 pub fn extract_name(profile: &str) -> Option<String> {
     let h1 = profile.lines().find(|l| l.starts_with("# "))?;
     let name = h1.rsplit(['—', '-']).next()?.trim();
@@ -45,7 +45,7 @@ pub fn extract_name(profile: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-/// `## Seviye` bölümünün ilk dolu satırı, liste işareti soyulmuş.
+/// First non-empty line of the `## Seviye` section, with the list marker stripped.
 pub fn extract_level(progress: &str) -> Option<String> {
     section(progress, "Seviye")?
         .lines()
@@ -56,7 +56,7 @@ pub fn extract_level(progress: &str) -> Option<String> {
 
 const STATUSES: [&str; 4] = ["görülmedi", "görüldü", "oturdu", "derinleşildi"];
 
-/// Durum içeren satır sayımından harita yüzdesi: görülmedi-olmayan / toplam.
+/// Map percentage from the count of status-bearing lines: non-`görülmedi` / total.
 pub fn curriculum_percent(curriculum: &str) -> Option<u8> {
     let (mut total, mut seen) = (0u32, 0u32);
     for line in curriculum.lines() {
@@ -67,7 +67,7 @@ pub fn curriculum_percent(curriculum: &str) -> Option<u8> {
     Some(((seen * 100) / total) as u8)
 }
 
-/// İlk `görülmedi` maddesinin metni — liste işareti ve durum eki soyulur.
+/// Text of the first `görülmedi` item — list marker and status suffix stripped.
 pub fn next_unseen(curriculum: &str) -> Option<String> {
     let line = curriculum.lines().find(|l| l.contains("görülmedi"))?;
     let text = line.split("görülmedi").next()?
@@ -77,14 +77,14 @@ pub fn next_unseen(curriculum: &str) -> Option<String> {
     if text.is_empty() { None } else { Some(text.to_string()) }
 }
 
-/// `## Geri çağırma soruları` bölümündeki madde sayısı.
+/// Number of items in the `## Geri çağırma soruları` section.
 pub fn drill_count(progress: &str) -> usize {
     section(progress, "Geri çağırma soruları")
         .map(|s| s.lines().filter(|l| l.trim().starts_with('-')).count())
         .unwrap_or(0)
 }
 
-/// Dosya içeriklerinden WelcomeData kur — hepsi Option, eksik = alan atlanır.
+/// Build WelcomeData from file contents — everything is Option, missing = field skipped.
 pub fn gather(
     profile: Option<&str>, progress: Option<&str>, curriculum: Option<&str>,
     topic: &str, model: &str, dir: &str,
@@ -103,8 +103,8 @@ pub fn gather(
     }
 }
 
-/// Görünür genişliğe göre kırp, taşarsa `…` ekle. Padding hesapları da
-/// unicode-width ile — Türkçe karakterlerde byte sayımı yanlış hizalar.
+/// Truncate to visible width, add `…` if it overflows. Padding calculations
+/// also use unicode-width — byte counting misaligns Turkish characters.
 pub fn fit(s: &str, max: usize) -> String {
     if s.width() <= max { return s.to_string(); }
     let mut out = String::new();
@@ -119,18 +119,18 @@ pub fn fit(s: &str, max: usize) -> String {
     out
 }
 
-/// Görünür genişliğe tamamla — sağa boşluk ekler (unicode-width'e göre).
+/// Pad to visible width — adds spaces on the right (per unicode-width).
 fn pad(s: &str, w: usize) -> String {
     format!("{s}{}", " ".repeat(w.saturating_sub(s.width())))
 }
 
-/// Çift kolonlu açılış kutusu. Genişlik `min(width, 100)`; sol kolon logo +
-/// selamlama + model + dizin, sağ kolon Öğrenme Durumu (spec §5).
+/// Two-column welcome box. Width is `min(width, 100)`; left column is logo +
+/// greeting + model + directory, right column is Learning Status (spec §5).
 pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
-    let inner = total - 2;                      // kenarlar
+    let inner = total - 2;                      // borders
     let left_w = 34usize;
-    let right_w = inner - left_w - 3;           // " │ " ayracı
+    let right_w = inner - left_w - 3;           // " │ " separator
 
     let greet = match &d.name {
         Some(n) => format!("Welcome back, {n}!"),
@@ -165,14 +165,16 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
     render_box(d.version, left, right, width)
 }
 
-/// Kimlik modu: konu YOK. Sol kolon logo + selam + model + dizin; sağ kolon
-/// "Ne öğrenmek istiyorsun?" + devam edilebilecek yerel konular (veya
-/// ilk-oturum mesajı). Konu seçilmeden gösterilir (Claude tarzı: welcome
-/// üstte, soru altta). run.rs konu girişinde (`ask_topic`) bağlı.
+/// Identity mode: NO topic. Left column is logo + greeting + model + directory;
+/// right column is "What do you want to learn?" + local topics that can be
+/// resumed (or the first-session message). Shown before a topic is chosen
+/// (Claude-style: welcome on top, question below). Wired up in run.rs's
+/// topic entry (`ask_topic`).
 ///
-/// `local`: bu projede kayıtlı konular — boş değilse `Enter → <ilk>'e devam`
-/// satırı ve numaralı liste (≤6) gösterilir. `other`: başka projelerde
-/// kayıtlı konular — sadece bilgi amaçlı, seçilemez, soluk bir satırda özetlenir.
+/// `local`: topics recorded in this project — if not empty, shows an
+/// `Enter → resume <first>` line and a numbered list (≤6). `other`: topics
+/// recorded in other projects — informational only, not selectable, summarized
+/// in a dim line.
 pub fn render_welcome_identity(
     name: Option<&str>,
     model: &str,
@@ -197,7 +199,7 @@ pub fn render_welcome_identity(
     left.push((format!("  {}", fit(model, left_w - 2)), false));
     left.push((format!("  {}", fit(dir, left_w - 2)), false));
 
-    // Diğer projelerdeki konular sadece bilgi amaçlı — soluk (DIM) gösterilir.
+    // Topics in other projects are informational only — shown dim (DIM).
     let dim = Style::default().add_modifier(Modifier::DIM);
     let mut right: Vec<(String, Style)> = vec![
         ("What do you want to learn?".to_string(), Style::default()),
@@ -214,9 +216,9 @@ pub fn render_welcome_identity(
             right.push((fit(&format!("In other projects: {}", other.join(", ")), right_w), dim));
         }
     } else {
-        // Spec §3: yerel konu yokken ilk-oturum mesajı AYNEN korunur.
+        // Spec §3: the first-session message is kept EXACTLY as-is when there are no local topics.
         right.push((fit("First session — type a topic.", right_w), Style::default()));
-        // mevcut "Kayıtlı:" satırı KALKAR — yerine other bilgi satırı (varsa).
+        // the previous "Registered:" line is REMOVED — replaced by the other-projects info line (if any).
         if !other.is_empty() {
             right.push((String::new(), Style::default()));
             right.push((fit(&format!("In other projects: {}", other.join(", ")), right_w), dim));
@@ -226,21 +228,22 @@ pub fn render_welcome_identity(
     render_box(env!("CARGO_PKG_VERSION"), left, right, width)
 }
 
-/// Çift kolonlu kutuyu çiz — kenar + " │ " ayracı + eşit-genişlik padding.
-/// `left`: (metin, logo-mu). `right`: (metin, stil) — 0. satır ayrıca
-/// otomatik kalın+turuncu başlık stiline büründürülür (satırın kendi stili
-/// boşsa bile), diğer satırlar taşıdıkları stille (ör. DIM) basılır.
+/// Draw the two-column box — border + " │ " separator + equal-width padding.
+/// `left`: (text, is-logo). `right`: (text, style) — row 0 is also automatically
+/// wrapped in a bold+orange title style (even if the row's own style is empty),
+/// other rows are printed with whatever style they carry (e.g. DIM).
 fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<(String, Style)>, width: u16) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
-    let inner = total - 2;                      // kenarlar
+    let inner = total - 2;                      // borders
     let left_w = 34usize;
-    let right_w = inner - left_w - 3;           // " │ " ayracı
+    let right_w = inner - left_w - 3;           // " │ " separator
 
     let rows = left.len().max(right.len());
     let title = format!(" Usta v{version} ");
-    // NOT: dashes = inner - (4 + title_genişliği) olmalı — "╭─── " öneki 5 char,
-    // kapanış "╮" 1 char, toplam sabit 6; inner = total-2 olduğundan 6-2=4 kalır.
-    // Brifingdeki "5 +" formülü satırı 1 char kısa bırakıyordu (equal-width testini kırıyordu).
+    // NOTE: dashes = inner - (4 + title_width) should hold — the "╭─── " prefix is
+    // 5 chars, the closing "╮" is 1 char, 6 total fixed; since inner = total-2,
+    // 6-2=4 remains. The "5 +" formula from the briefing left the line 1 char
+    // short (breaking the equal-width test).
     let top = format!("╭─── {}{}╮", title.trim(), "─".repeat(inner.saturating_sub(4 + title.trim().width())));
     let bottom = format!("╰{}╯", "─".repeat(inner));
 
@@ -295,7 +298,7 @@ mod tests {
 
     #[test]
     fn curriculum_percent_counts_non_unseen() {
-        // 4 durumlu madde, 2'si görülmedi → %50
+        // 4 items have a status, 2 are `görülmedi` → 50%
         assert_eq!(curriculum_percent(CURRICULUM), Some(50));
         assert_eq!(curriculum_percent("# durum yok"), None);
     }
@@ -369,9 +372,9 @@ mod tests {
         let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], 80);
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("What do you want to learn?"));
-        assert!(joined.contains("Hello!"));       // isim yok → jenerik
-        assert!(!joined.contains("Hello,"));      // "Hello, X!" biçimi yok
-        assert!(!joined.contains("Enter →"));       // konu yok → devam satırı yok
+        assert!(joined.contains("Hello!"));       // no name → generic
+        assert!(!joined.contains("Hello,"));      // no "Hello, X!" form
+        assert!(!joined.contains("Enter →"));       // no topic → no continuation line
     }
 
     #[test]
