@@ -58,7 +58,7 @@ pub fn print_usta_reply(reply: &str, web: bool) {
     if is_plain() {
         println!("Usta> {reply}");
         if web {
-            println!("(🔎 web araştırıldı)");
+            println!("(🔎 web researched)");
         }
         return;
     }
@@ -81,7 +81,7 @@ pub fn print_usta_reply(reply: &str, web: bool) {
         println!("  {line}");
     }
     if web {
-        println!("{DIM}  🔎 web araştırıldı{RESET}");
+        println!("{DIM}  🔎 web researched{RESET}");
     }
     println!();
 }
@@ -116,10 +116,10 @@ pub fn warn(msg: &str) {
 /// Oturum açılış satırı — konu + model + çıkış ipucu.
 pub fn banner(topic: &str, model: &str) {
     if is_plain() {
-        println!("Usta hazır — konu: {topic} · model: {model}. (/quit ile çık)");
+        println!("Usta ready — topic: {topic} · model: {model}. (/quit to exit)");
         return;
     }
-    println!("{ORANGE}● Usta{RESET} {DIM}— konu: {topic} · model: {model} · /quit ile çık{RESET}");
+    println!("{ORANGE}● Usta{RESET} {DIM}— topic: {topic} · model: {model} · /quit to exit{RESET}");
 }
 
 /// Bağlam doluluk göstergesi — 8 hücreli bar, ≥%70 sarı uyarı.
@@ -133,7 +133,7 @@ pub fn context_gauge(tokens: Option<u64>, window: u64) {
     let filled = ((ratio * 8.0).round() as usize).min(8);
     let bar = format!("{}{}", "▓".repeat(filled), "░".repeat(8 - filled));
     let color = if ratio >= 0.7 { YELLOW } else { DIM };
-    println!("{color}  {bar} bağlam {}k/{}k{RESET}", t / 1000, window / 1000);
+    println!("{color}  {bar} context {}k/{}k{RESET}", t / 1000, window / 1000);
 }
 
 /// LLM beklerken tek satır animasyon. Düz modda hiç çizmez.

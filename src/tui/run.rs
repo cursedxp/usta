@@ -227,7 +227,7 @@ async fn ask_topic(
         let name = profile.and_then(welcome::extract_name);
         let width = current_width(tui);
         page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, width))?;
-        page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
+        page_notice(tui, "What do you want to learn? (a word, or describe it in a sentence)")?;
     }
 
     loop {
@@ -267,7 +267,7 @@ async fn tui_confirm(
         draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => match k.code {
-                KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
                 _ => return Ok(false),
             },
             Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
@@ -357,7 +357,7 @@ pub async fn run(
                     // içinde doğal karşılığı "yut, tekrar sor" — güvenli düşüş budur.
                     None => {}
                     Some(crate::TopicChoice::Resume(t)) => {
-                        page_notice(&mut tui, &format!("devam: {t}"))?;
+                        page_notice(&mut tui, &format!("resuming: {t}"))?;
                         resumed = true; // aşağıda tam-mod welcome için
                         break t;
                     }
@@ -387,7 +387,7 @@ pub async fn run(
                         // LLM/kısa slug yerel bir konuya denk düştüyse bu da DEVAM sayılır
                         // (spec K2): notice devam olur, tam-mod welcome basılır, onay YOK.
                         if local.contains(&slug) {
-                            page_notice(&mut tui, &format!("devam: {slug}"))?;
+                            page_notice(&mut tui, &format!("resuming: {slug}"))?;
                             resumed = true;
                             break slug;
                         }
@@ -402,12 +402,12 @@ pub async fn run(
                             )
                             .await?
                         {
-                            page_notice(&mut tui, &format!("konu: {slug} — detayı sohbette anlatırsın"))?;
+                            page_notice(&mut tui, &format!("topic: {slug} — tell me the details in chat"))?;
                             intro = Some(raw);
                             break slug;
                         }
                         // Ret → giriş sorusuna geri dön (welcome tekrar basılmaz).
-                        page_notice(&mut tui, "vazgeçildi — Enter = devam, ya da başka konu yaz")?;
+                        page_notice(&mut tui, "cancelled — Enter = resume, or type another topic")?;
                     }
                 }
             }
@@ -422,11 +422,11 @@ pub async fn run(
             &mut tui,
             &editor,
             &mut events,
-            "Bu konuda başka oturum açık olabilir — progress çakışabilir. Devam? [e/H]",
+            "Another session may be open for this topic — progress could clash. Continue? [y/N]",
         )
         .await?
     {
-        page_notice(&mut tui, "vazgeçildi")?;
+        page_notice(&mut tui, "cancelled")?;
         return Ok(None);
     }
 
@@ -499,9 +499,9 @@ pub async fn run(
         }
         Ok(AskOutcome::Cancelled) => {
             backend.reset_session();
-            page_notice(&mut tui, "açılış turu iptal edildi")?;
+            page_notice(&mut tui, "opening turn cancelled")?;
         }
-        Err(e) => page_notice(&mut tui, &format!("açılış turu atlandı: {e}"))?,
+        Err(e) => page_notice(&mut tui, &format!("opening turn skipped: {e}"))?,
     }
 
     let mut watching = true;
@@ -556,9 +556,9 @@ pub async fn run(
                                 // User turn history'de kalır (bilinçli — spec B2); CLI oturumu
                                 // yarım — resume edilmesin, sonraki çağrı tam transcript'le gitsin.
                                 backend.reset_session();
-                                page_notice(&mut tui, "yanıt iptal edildi — mesajın kaldı, istersen devam et")?;
+                                page_notice(&mut tui, "response cancelled — your message is kept, continue if you like")?;
                             }
-                            Err(e) => page_notice(&mut tui, &format!("hata: {e}"))?,
+                            Err(e) => page_notice(&mut tui, &format!("error: {e}"))?,
                         }
                     }
                 }
@@ -570,7 +570,7 @@ pub async fn run(
                 let batch = debouncer.flush();
                 if batch.len() > max_feedback_batch {
                     page_notice(&mut tui, &format!(
-                        "toplu değişiklik ({} dosya) — feedback atlandı, izleme sürüyor",
+                        "bulk change ({} files) — feedback skipped, still watching",
                         batch.len()
                     ))?;
                     // FileMemory'yi sessizce senkronla: sonraki tekil kayıt dev diff üretmesin.
@@ -597,7 +597,7 @@ pub async fn run(
                                 page_reply(&mut tui, &reply.text, w)?;
                                 crate::maybe_compact(backend, &mut session, project_root, tokens).await;
                             }
-                            Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,
+                            Err(e) => page_notice(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
                 }

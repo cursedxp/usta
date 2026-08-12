@@ -202,7 +202,7 @@ async fn run_plain_loop(
                 session.push_assistant(reply.text);
             }
             // Drill başarısız → oturumu engelleme, sessizce normal akışa düş.
-            Err(e) => ui::warn(&format!("açılış drilli atlandı: {e}")),
+            Err(e) => ui::warn(&format!("opening drill skipped: {e}")),
         }
     } else {
         // Yeni konu: yaklaşım/harita yok — tanışma turn'ü, Usta ilk sözü alır.
@@ -215,7 +215,7 @@ async fn run_plain_loop(
                 recorder.assistant(&reply.text);
                 session.push_assistant(reply.text);
             }
-            Err(e) => ui::warn(&format!("tanışma turu atlandı: {e}")),
+            Err(e) => ui::warn(&format!("introduction turn skipped: {e}")),
         }
     }
 
@@ -248,7 +248,7 @@ async fn run_plain_loop(
                                 session.push_assistant(reply.text);
                                 maybe_compact(backend, session, project_root, tokens).await;
                             }
-                            Err(e) => ui::warn(&format!("hata: {e}")),
+                            Err(e) => ui::warn(&format!("error: {e}")),
                         }
                     }
                     let _ = ready_tx.send(());
@@ -264,7 +264,7 @@ async fn run_plain_loop(
                 let batch = debouncer.flush();
                 if batch.len() > MAX_FEEDBACK_BATCH {
                     ui::notice(&format!(
-                        "toplu değişiklik ({} dosya) — feedback atlandı, izleme sürüyor",
+                        "bulk change ({} files) — feedback skipped, still watching",
                         batch.len()
                     ));
                     // FileMemory'yi sessizce senkronla: sonraki tekil kayıt
@@ -293,7 +293,7 @@ async fn run_plain_loop(
                                 maybe_compact(backend, session, project_root, tokens).await;
                             }
                             // Binary/silinmiş dosya vb. — sessizce geç, REPL yaşar.
-                            Err(e) => ui::warn(&format!("dosya feedback atlandı: {}: {e}", path.display())),
+                            Err(e) => ui::warn(&format!("file feedback skipped: {}: {e}", path.display())),
                         }
                     }
                 }
@@ -1098,7 +1098,7 @@ pub(crate) async fn handle_file_change(
         feedback::ChangePayload::Skip => return Ok(FileFeedback::Sessiz),
         feedback::ChangePayload::TooLarge(len) => {
             return Ok(FileFeedback::Bildirim(format!(
-                "(büyük dosya izleme dışı: {} — {len} bayt)",
+                "(large file — not watched: {} — {len} bytes)",
                 path.display()
             )));
         }
