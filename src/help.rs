@@ -17,6 +17,7 @@ pub fn help_text() -> &'static str {
      \n\
      In-session commands\n\
      \x20\x20/watch on|off    file-feedback companion (on by default)\n\
+     \x20\x20/show [topic]    animated visual explainer (opens in browser)\n\
      \x20\x20/help            this help\n\
      \x20\x20/quit            end the session\n\
      \n\
@@ -51,7 +52,7 @@ mod tests {
     #[test]
     fn help_text_lists_shortcuts_commands_and_cli() {
         let h = help_text();
-        for needle in ["Ctrl+J", "Esc", "↑ / ↓", "/watch on|off", "/help", "/quit", "usta reset --factory", "usta topics"] {
+        for needle in ["Ctrl+J", "Esc", "↑ / ↓", "/watch on|off", "/show [topic]", "/help", "/quit", "usta reset --factory", "usta topics"] {
             assert!(h.contains(needle), "help_text missing: {needle}");
         }
     }

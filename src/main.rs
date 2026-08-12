@@ -242,6 +242,38 @@ async fn run_plain_loop(
                         let _ = ready_tx.send(());
                         continue;
                     }
+                    if let Some(arg) = visual::parse_show_command(&line) {
+                        let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
+                        match show_request(arg, last_assistant_text(session).as_deref()) {
+                            None => ui::notice("nothing to visualize yet — explain something first, or use /show <topic>"),
+                            Some(req) => {
+                                match ask_usta(backend, &visual::visual_system(), &[Message::user(req.as_str())]).await {
+                                    Ok(reply) => {
+                                        let json = progress::clean_markdown_reply(&reply.text);
+                                        match visual::build_visual_html(&json) {
+                                            Ok(html) => {
+                                                let path = visual::visual_path(project_root, topic, &concept);
+                                                if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+                                                match std::fs::write(&path, html) {
+                                                    Ok(()) => {
+                                                        let opened = visual::open_in_browser(&path);
+                                                        ui::notice(&format!("visual saved: {}{}", path.display(),
+                                                            if opened { "" } else { " (open it in your browser)" }));
+                                                    }
+                                                    Err(e) => ui::warn(&format!("error: {e}")),
+                                                }
+                                            }
+                                            Err(e) => ui::warn(&format!("visual generation failed ({e}) — try /show again")),
+                                        }
+                                    }
+                                    Err(e) => ui::warn(&format!("error: {e}")),
+                                }
+                                backend.reset_session(); // mini-session must not leak into the CLI session (slug parity)
+                            }
+                        }
+                        let _ = ready_tx.send(());
+                        continue;
+                    }
                     if line == "/quit" {
                         break;
                     }
@@ -623,6 +655,33 @@ async fn resolve_topic(
                 // Loop restarts: "What's the topic?" is asked again.
             }
         }
+    }
+}
+
+/// Last assistant reply in this session — the concept a bare `/show` visualizes.
+pub(crate) fn last_assistant_text(session: &Session) -> Option<String> {
+    session
+        .history()
+        .iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .and_then(|m| m.content.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Compose the visual mini-session user turn. `explicit` = `/show <topic>` argument.
+pub(crate) fn show_request(explicit: Option<String>, last_reply: Option<&str>) -> Option<String> {
+    match (explicit, last_reply) {
+        (Some(t), last) => Some(match last {
+            Some(l) => format!(
+                "Create scenes that visually explain: {t}\n\nRecent explanation for context:\n{l}"
+            ),
+            None => format!("Create scenes that visually explain: {t}"),
+        }),
+        (None, Some(l)) => Some(format!(
+            "Create scenes that visually explain the following explanation:\n{l}"
+        )),
+        (None, None) => None, // nothing to visualize yet
     }
 }
 
@@ -1511,6 +1570,17 @@ mod tests {
         let m = new_topic_confirm_msg("rust-cli");
         assert!(m.contains("rust-cli"));
         assert!(m.contains("[e"));
+    }
+
+    #[test]
+    fn show_request_composition() {
+        assert!(show_request(None, None).is_none());
+        let bare = show_request(None, Some("ownership explained")).unwrap();
+        assert!(bare.contains("ownership explained"));
+        let explicit = show_request(Some("dns".into()), Some("prior")).unwrap();
+        assert!(explicit.contains("dns") && explicit.contains("prior"));
+        let cold = show_request(Some("dns".into()), None).unwrap();
+        assert!(cold.contains("dns"));
     }
 
     #[test]
