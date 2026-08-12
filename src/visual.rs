@@ -134,6 +134,13 @@ fn match_marker_line(line: &str) -> Option<String> {
 /// line only) is left completely untouched: returns the text unchanged and
 /// `None`. Callers must run this BEFORE displaying/recording a reply — the
 /// marker never reaches the screen or session history.
+///
+/// Marker-only reply: if stripping leaves nothing, a short synthetic
+/// stand-in (`(visual explainer: <topic>)`) is returned instead of an empty
+/// string — every call site pushes the clean text into session history, and
+/// an empty assistant message would make the NEXT API turn fail (the
+/// Messages API rejects empty content). The stand-in doubles as useful
+/// context: future turns can see a visual was shown here.
 pub fn extract_show_marker(reply: &str) -> (String, Option<String>) {
     let lines: Vec<&str> = reply.lines().collect();
     let Some(last) = lines.last() else {
@@ -143,7 +150,11 @@ pub fn extract_show_marker(reply: &str) -> (String, Option<String>) {
         return (reply.to_string(), None);
     };
     let kept: Vec<&str> = lines.iter().filter(|l| match_marker_line(l).is_none()).copied().collect();
-    (kept.join("\n").trim_end().to_string(), Some(topic))
+    let clean = kept.join("\n").trim_end().to_string();
+    if clean.trim().is_empty() {
+        return (format!("(visual explainer: {topic})"), Some(topic));
+    }
+    (clean, Some(topic))
 }
 
 #[cfg(test)]
@@ -328,6 +339,35 @@ mod tests {
         let (clean, topic) = extract_show_marker("done explaining\n[[show: dns]]   ");
         assert_eq!(clean, "done explaining");
         assert_eq!(topic, Some("dns".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_marker_only_reply_yields_synthetic_standin() {
+        // A reply that is NOTHING but the marker must not produce an empty
+        // clean text — an empty assistant message would 400 the next API turn.
+        let (clean, topic) = extract_show_marker("[[show: tcp handshake]]");
+        assert_eq!(clean, "(visual explainer: tcp handshake)");
+        assert_eq!(topic, Some("tcp handshake".to_string()));
+
+        // Same when only whitespace / blank lines surround the marker.
+        let (clean2, topic2) = extract_show_marker("\n  \n[[show: dns]]   ");
+        assert_eq!(clean2, "(visual explainer: dns)");
+        assert_eq!(topic2, Some("dns".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_empty_topic_is_rejected() {
+        // `[[show:]]` (no topic) is not a marker — text untouched, no trigger.
+        let text = "explanation\n[[show:]]";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+
+        // Colon followed by only whitespace is equally empty.
+        let text2 = "explanation\n[[show:   ]]";
+        let (clean2, topic2) = extract_show_marker(text2);
+        assert_eq!(clean2, text2);
+        assert_eq!(topic2, None);
     }
 
     #[test]
