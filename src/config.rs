@@ -9,7 +9,7 @@ pub fn resolve_key(env_value: Option<String>) -> Result<String> {
     match env_value {
         Some(k) if !k.trim().is_empty() => Ok(k),
         _ => anyhow::bail!(
-            "ANTHROPIC_API_KEY tanımlı değil. Şunu çalıştır:\n  export ANTHROPIC_API_KEY=sk-ant-..."
+            "ANTHROPIC_API_KEY is not set. Run this:\n  export ANTHROPIC_API_KEY=sk-ant-..."
         ),
     }
 }
@@ -30,7 +30,7 @@ pub fn global_root() -> Result<PathBuf> {
         }
     }
     let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("ev dizini bulunamadı (dirs::home_dir() None döndü)"))?;
+        .ok_or_else(|| anyhow::anyhow!("home directory not found (dirs::home_dir() returned None)"))?;
     Ok(home.join(".config").join("usta"))
 }
 

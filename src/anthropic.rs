@@ -143,16 +143,16 @@ impl Client {
                 .json(&req)
                 .send()
                 .await
-                .context("Anthropic API'ye bağlanılamadı")?;
+                .context("failed to connect to Anthropic API")?;
 
             let status = resp.status();
-            let body = resp.text().await.context("yanıt gövdesi okunamadı")?;
+            let body = resp.text().await.context("failed to read response body")?;
             if !status.is_success() {
-                bail!("Anthropic API hatası ({}): {}", status, body);
+                bail!("Anthropic API error ({}): {}", status, body);
             }
 
             let parsed: MessageResponse =
-                serde_json::from_str(&body).context("yanıt JSON ayrıştırılamadı")?;
+                serde_json::from_str(&body).context("failed to parse response JSON")?;
             web |= used_web_search(&parsed.content);
 
             if parsed.stop_reason.as_deref() == Some("pause_turn") {
@@ -166,7 +166,7 @@ impl Client {
             let tokens = parsed.usage.as_ref().and_then(sum_context_tokens);
             return Ok((extract_text(&parsed.content), web, tokens));
         }
-        bail!("çok fazla pause_turn devamı — döngü kesildi");
+        bail!("too many pause_turn continuations — loop aborted");
     }
 }
 

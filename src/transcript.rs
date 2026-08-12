@@ -84,7 +84,7 @@ impl Recorder {
             f.write_all(line(role, text).as_bytes())
         })();
         if res.is_err() && !self.warned.swap(true, Ordering::Relaxed) {
-            crate::ui::warn("oturum kaydı yazılamıyor — kayıt olmadan devam");
+            crate::ui::warn("session recording failed — continuing without recording");
         }
     }
 }

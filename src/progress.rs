@@ -191,7 +191,7 @@ pub fn clean_markdown_reply(reply: &str) -> String {
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
+            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
     }
     // Back up the previous version — a bad model output can be restored from the single copy.
     if path.exists() {
@@ -200,9 +200,9 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     }
     let tmp = path.with_extension("md.tmp");
     std::fs::write(&tmp, content)
-        .with_context(|| format!("yazılamadı: {}", tmp.display()))?;
+        .with_context(|| format!("failed to write: {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
-        .with_context(|| format!("taşınamadı: {}", path.display()))?;
+        .with_context(|| format!("failed to move: {}", path.display()))?;
     Ok(())
 }
 

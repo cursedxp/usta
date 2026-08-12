@@ -26,11 +26,11 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
         // If the receiver has been dropped, swallow silently — the thread will close soon.
         let _ = ev_tx.send(res);
     })
-    .context("dosya izleyici oluşturulamadı")?;
+    .context("failed to create file watcher")?;
 
     watcher
         .watch(root, RecursiveMode::Recursive)
-        .with_context(|| format!("izlenemedi: {}", root.display()))?;
+        .with_context(|| format!("failed to watch: {}", root.display()))?;
 
     thread::spawn(move || {
         // Keep the watcher alive inside the thread — watching stops if it's dropped.

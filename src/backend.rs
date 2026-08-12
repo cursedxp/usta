@@ -48,7 +48,7 @@ pub fn select() -> Result<Backend> {
         Some("cli") => Ok(cli_backend()),
         Some("api") => api_backend(),
         Some(other) => bail!(
-            "USTA_BACKEND geçersiz: '{other}'. Geçerli değerler: 'cli' veya 'api'."
+            "USTA_BACKEND invalid: '{other}'. Valid values: 'cli' or 'api'."
         ),
         None => {
             if claude_on_path() {
@@ -60,10 +60,10 @@ pub fn select() -> Result<Backend> {
                 api_backend()
             } else {
                 bail!(
-                    "LLM backend bulunamadı. İki seçenekten biri gerekli:\n  \
-                     1) `claude` CLI'ı PATH'e ekle (Claude Code auth'u kullanılır, key gerekmez), veya\n  \
-                     2) export ANTHROPIC_API_KEY=sk-ant-... (Anthropic API yolu).\n  \
-                     Backend'i zorlamak için: export USTA_BACKEND=cli|api"
+                    "No LLM backend found. One of two options is required:\n  \
+                     1) Add the `claude` CLI to PATH (uses Claude Code auth, no key needed), or\n  \
+                     2) export ANTHROPIC_API_KEY=sk-ant-... (Anthropic API path).\n  \
+                     To force a backend: export USTA_BACKEND=cli|api"
                 )
             }
         }
@@ -244,29 +244,29 @@ async fn run_claude_cli(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("`claude` CLI başlatılamadı — PATH'te mi?")?;
+        .context("`claude` CLI failed to start — is it on PATH?")?;
 
     // Write the input to stdin, then close it (EOF).
     {
         let mut stdin = child
             .stdin
             .take()
-            .context("claude CLI stdin'i alınamadı")?;
+            .context("failed to get claude CLI stdin")?;
         stdin
             .write_all(input.as_bytes())
             .await
-            .context("claude CLI stdin'ine yazılamadı")?;
+            .context("failed to write to claude CLI stdin")?;
         stdin.shutdown().await.ok();
     }
 
     let output = child
         .wait_with_output()
         .await
-        .context("claude CLI çıktısı beklenirken hata")?;
+        .context("error waiting for claude CLI output")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("claude CLI hata döndü ({}): {}", output.status, stderr.trim());
+        bail!("claude CLI returned an error ({}): {}", output.status, stderr.trim());
     }
 
     Ok(parse_cli_output(&String::from_utf8_lossy(&output.stdout)))
