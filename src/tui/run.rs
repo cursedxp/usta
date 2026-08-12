@@ -357,6 +357,22 @@ pub async fn run(
                 if !raw.trim().is_empty() {
                     page_user_echo(&mut tui, raw.trim())?;
                 }
+                // Slash commands at topic entry: the hint above the prompt promises
+                // /help, so honor it here too; session-only commands get a pointer
+                // instead of silently being slugged into a topic name.
+                if crate::help::is_help_command(&raw) {
+                    page_notice(&mut tui, crate::help::help_text())?;
+                    continue;
+                }
+                if raw.trim().eq_ignore_ascii_case("/quit") {
+                    return Ok(None); // quit without giving a topic
+                }
+                if crate::visual::parse_show_command(&raw).is_some()
+                    || crate::parse_watch_command(&raw).is_some()
+                {
+                    page_notice(&mut tui, "that command works inside a session — pick a topic first")?;
+                    continue;
+                }
                 match crate::interpret_topic_input(&raw, &local) {
                     // SAFE FALLBACK: interpret only returns None when (input is empty +
                     // local is empty); ask_topic only produces the empty-Enter sentinel
@@ -589,7 +605,7 @@ pub async fn run(
                             }
                             continue;
                         }
-                        if line == "/quit" { break; }
+                        if line.eq_ignore_ascii_case("/quit") { break; }
                         // Push the submitted line to scrollback as a distinct user block.
                         page_user_echo(&mut tui, &line)?;
                         session.push_user(&line);

@@ -30,13 +30,19 @@ pub fn build_visual_html(scenes_json: &str) -> Result<String> {
 
 /// `/show` → Some(None) (visualize the last explanation); `/show <topic>` →
 /// Some(Some(topic)). Anything else → None. Slash lines never reach the LLM session.
+/// Case-insensitive on the command token (`/SHOW dns` works); the topic argument
+/// keeps its original casing.
 pub fn parse_show_command(line: &str) -> Option<Option<String>> {
     let t = line.trim();
-    if t == "/show" {
+    if t.eq_ignore_ascii_case("/show") {
         return Some(None);
     }
-    let rest = t.strip_prefix("/show ")?;
-    Some(Some(rest.trim().to_string()))
+    // "/show " prefix is pure ASCII, so ASCII-lowercasing preserves byte offsets —
+    // slicing the ORIGINAL string at 6 keeps the argument's casing intact.
+    if !t.to_ascii_lowercase().starts_with("/show ") {
+        return None;
+    }
+    Some(Some(t[6..].trim().to_string()))
 }
 
 /// System prompt for the visual mini-session: scene-JSON contract + pedagogy.
@@ -175,6 +181,9 @@ mod tests {
         assert_eq!(parse_show_command("/showx"), None);
         assert_eq!(parse_show_command("show"), None);
         assert_eq!(parse_show_command("/watch"), None);
+        // Case-insensitive command token; argument casing preserved.
+        assert_eq!(parse_show_command("/Show"), Some(None));
+        assert_eq!(parse_show_command("/SHOW DNS Kaydı"), Some(Some("DNS Kaydı".to_string())));
     }
 
     #[test]

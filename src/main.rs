@@ -274,7 +274,7 @@ async fn run_plain_loop(
                         let _ = ready_tx.send(());
                         continue;
                     }
-                    if line == "/quit" {
+                    if line.eq_ignore_ascii_case("/quit") {
                         break;
                     }
                     if !line.is_empty() {
@@ -624,6 +624,16 @@ async fn resolve_topic(
             Err(_) => return Ok(("genel".to_string(), None)),
         };
         let raw = line.trim();
+        // Slash commands at topic entry (TUI parity): /help prints help; session-only
+        // commands get a pointer instead of silently being slugged into a topic name.
+        if help::is_help_command(raw) {
+            println!("{}", help::help_text());
+            continue;
+        }
+        if visual::parse_show_command(raw).is_some() || parse_watch_command(raw).is_some() {
+            println!("that command works inside a session — pick a topic first");
+            continue;
+        }
         // Interpret the topic input: resume or new topic? (spec K1). In the plain path
         // the resume/new distinction only shows up in the slug — the TUI's visual notice
         // difference doesn't apply here.
@@ -690,7 +700,8 @@ pub(crate) fn show_request(explicit: Option<String>, last_reply: Option<&str>) -
 pub(crate) enum WatchCmd { On, Off, Toggle }
 
 pub(crate) fn parse_watch_command(line: &str) -> Option<WatchCmd> {
-    match line.trim() {
+    // Case-insensitive: /WATCH OFF, /Watch also work (forgiving slash commands).
+    match line.trim().to_ascii_lowercase().as_str() {
         "/watch" => Some(WatchCmd::Toggle),
         "/watch on" => Some(WatchCmd::On),
         "/watch off" => Some(WatchCmd::Off),
@@ -1589,6 +1600,8 @@ mod tests {
         assert_eq!(parse_watch_command("/watch on"), Some(WatchCmd::On));
         assert_eq!(parse_watch_command("/watch off"), Some(WatchCmd::Off));
         assert_eq!(parse_watch_command("  /watch off  "), Some(WatchCmd::Off));
+        assert_eq!(parse_watch_command("/WATCH OFF"), Some(WatchCmd::Off));
+        assert_eq!(parse_watch_command("/Watch"), Some(WatchCmd::Toggle));
         assert_eq!(parse_watch_command("hello"), None);
         assert_eq!(parse_watch_command("/quit"), None);
     }

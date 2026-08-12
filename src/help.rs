@@ -30,9 +30,10 @@ pub fn help_text() -> &'static str {
      \x20\x20usta reset --factory    reset everything"
 }
 
-/// True when the input line is exactly the `/help` command (trimmed).
+/// True when the input line is exactly the `/help` command (trimmed,
+/// case-insensitive — forgiving slash commands: `/HELP`, `/Help` also work).
 pub fn is_help_command(line: &str) -> bool {
-    line.trim() == "/help"
+    line.trim().eq_ignore_ascii_case("/help")
 }
 
 #[cfg(test)]
@@ -43,6 +44,8 @@ mod tests {
     fn is_help_command_matches_only_bare_help() {
         assert!(is_help_command("/help"));
         assert!(is_help_command("  /help  "));
+        assert!(is_help_command("/HELP"));
+        assert!(is_help_command("/Help"));
         assert!(!is_help_command("/help me"));
         assert!(!is_help_command("help"));
         assert!(!is_help_command("/quit"));
