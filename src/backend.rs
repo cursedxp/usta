@@ -1,12 +1,12 @@
-//! Takılabilir LLM backend'i: yerel `claude` CLI (default) veya Anthropic API.
+//! Pluggable LLM backend: local `claude` CLI (default) or the Anthropic API.
 //!
-//! - **CLI (default):** `claude -p ...` — Claude Code'un mevcut auth'unu kullanır,
-//!   API key / token faturası yok. `--allowedTools WebSearch` hem araştırmayı açar
-//!   hem de "Usta dosya düzenlemez"i araç seviyesinde zorlar.
-//! - **API (opsiyonel):** mevcut `anthropic::Client` reqwest yolu.
+//! - **CLI (default):** `claude -p ...` — uses Claude Code's existing auth,
+//!   no API key / token billing. `--allowedTools WebSearch` both enables research
+//!   and enforces "Usta doesn't edit files" at the tool level.
+//! - **API (optional):** the existing `anthropic::Client` reqwest path.
 //!
-//! Seçim: `USTA_BACKEND` env (`cli`/`api`) öncelikli; yoksa PATH'te `claude` varsa
-//! CLI, yoksa `ANTHROPIC_API_KEY` varsa API, ikisi de yoksa net hata.
+//! Selection: `USTA_BACKEND` env (`cli`/`api`) takes priority; otherwise CLI if
+//! `claude` is on PATH, otherwise API if `ANTHROPIC_API_KEY` is set, else a clear error.
 
 use anyhow::{bail, Context, Result};
 use std::process::Stdio;
@@ -15,40 +15,40 @@ use tokio::process::Command;
 
 use crate::anthropic::{self, Message};
 
-/// Tek tamamlama sonucu — metin + web ipucu + bağlam doluluğu.
+/// A single completion result — text + web hint + context fullness.
 pub struct Reply {
     pub text: String,
     pub web: bool,
-    /// Son çağrının toplam bağlam token'ı (input + cache) — gösterge için.
+    /// Total context tokens of the last call (input + cache) — for the indicator.
     pub context_tokens: Option<u64>,
 }
 
-/// CLI backend'i için default model. `claude -p --model opus`.
+/// Default model for the CLI backend. `claude -p --model opus`.
 pub const DEFAULT_CLI_MODEL: &str = "opus";
 
-/// Kullanılabilir LLM backend'leri.
+/// Available LLM backends.
 pub enum Backend {
-    /// Yerel `claude` CLI'a shell'ler — Claude Code auth'u, key yok.
-    /// `session_id`: ilk yanıttan yakalanır, sonraki turn'ler `--resume` ile
-    /// sürdürülür → tam transcript her seferinde yeniden gönderilmez.
+    /// Shells out to the local `claude` CLI — Claude Code auth, no key.
+    /// `session_id`: captured from the first response; subsequent turns are
+    /// continued with `--resume` → the full transcript isn't resent each time.
     Cli {
         model: String,
         session_id: Option<String>,
     },
-    /// Anthropic Messages API — reqwest, key gerektirir.
+    /// Anthropic Messages API — reqwest, requires a key.
     Api {
         client: anthropic::Client,
         model: String,
     },
 }
 
-/// Ortam sinyallerine göre backend seç.
+/// Select a backend based on environment signals.
 pub fn select() -> Result<Backend> {
     match std::env::var("USTA_BACKEND").ok().as_deref() {
         Some("cli") => Ok(cli_backend()),
         Some("api") => api_backend(),
         Some(other) => bail!(
-            "USTA_BACKEND geçersiz: '{other}'. Geçerli değerler: 'cli' veya 'api'."
+            "USTA_BACKEND invalid: '{other}'. Valid values: 'cli' or 'api'."
         ),
         None => {
             if claude_on_path() {
@@ -60,10 +60,10 @@ pub fn select() -> Result<Backend> {
                 api_backend()
             } else {
                 bail!(
-                    "LLM backend bulunamadı. İki seçenekten biri gerekli:\n  \
-                     1) `claude` CLI'ı PATH'e ekle (Claude Code auth'u kullanılır, key gerekmez), veya\n  \
-                     2) export ANTHROPIC_API_KEY=sk-ant-... (Anthropic API yolu).\n  \
-                     Backend'i zorlamak için: export USTA_BACKEND=cli|api"
+                    "No LLM backend found. One of two options is required:\n  \
+                     1) Add the `claude` CLI to PATH (uses Claude Code auth, no key needed), or\n  \
+                     2) export ANTHROPIC_API_KEY=sk-ant-... (Anthropic API path).\n  \
+                     To force a backend: export USTA_BACKEND=cli|api"
                 )
             }
         }
@@ -85,7 +85,7 @@ fn api_backend() -> Result<Backend> {
     })
 }
 
-/// `claude` çalıştırılabiliri PATH'te mi?
+/// Is the `claude` executable on PATH?
 fn claude_on_path() -> bool {
     let Ok(path) = std::env::var("PATH") else {
         return false;
@@ -97,7 +97,7 @@ fn claude_on_path() -> bool {
 }
 
 impl Backend {
-    /// Banner'da gösterilecek model etiketi.
+    /// Model label to show in the banner.
     pub fn label(&self) -> String {
         match self {
             Backend::Cli { model, .. } => format!("{model} · cli"),
@@ -105,17 +105,17 @@ impl Backend {
         }
     }
 
-    /// CLI server oturumunu sıfırla — kompaksiyon sonrası sıradaki çağrı
-    /// kompakt history ile YENİ oturum açar. API'de no-op.
+    /// Reset the CLI server session — after compaction, the next call opens
+    /// a NEW session with the compacted history. No-op on the API backend.
     pub fn reset_session(&mut self) {
         if let Backend::Cli { session_id, .. } = self {
             *session_id = None;
         }
     }
 
-    /// Modelin bağlam penceresi (token). Pencere modele göre değişir: Haiku
-    /// 200k, diğerleri (opus / sonnet / fable) 1M. Gösterge ve kompaksiyon
-    /// eşiği bu tabana oranlanır — sabit değil.
+    /// The model's context window (tokens). The window varies by model: Haiku
+    /// 200k, the others (opus / sonnet / fable) 1M. The indicator and compaction
+    /// threshold are scaled to this base — not fixed.
     pub fn context_window(&self) -> u64 {
         let model = match self {
             Backend::Cli { model, .. } => model.as_str(),
@@ -128,8 +128,8 @@ impl Backend {
         }
     }
 
-    /// Seçilen backend'e göre tamamlama iste, `Reply` döner.
-    /// CLI modunda web kullanımı metinden tespit edilemez → `false`.
+    /// Request a completion from the selected backend, returns `Reply`.
+    /// In CLI mode web usage can't be detected from the text → `false`.
     pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<Reply> {
         match self {
             Backend::Api { client, model } => {
@@ -145,7 +145,7 @@ impl Backend {
                 let attempt = run_claude_cli(model, system, &input, resume.as_deref()).await;
                 let (text, new_sid, tokens) = match attempt {
                     Ok(v) => v,
-                    // Stale/silinmiş oturum — bir kez tam transcript'le baştan dene.
+                    // Stale/deleted session — retry once from scratch with the full transcript.
                     Err(_) if resume.is_some() => {
                         *session_id = None;
                         run_claude_cli(model, system, &render_transcript(history), None).await?
@@ -161,8 +161,8 @@ impl Backend {
     }
 }
 
-/// History'deki SON user mesajının düz metnini döndür — resume çağrısında
-/// sunucu taraflı oturum bağlamı zaten var, sadece yeni turn gönderilir.
+/// Return the plain text of the LAST user message in history — on a resume
+/// call the server-side session context already exists, only the new turn is sent.
 fn last_user_text(history: &[Message]) -> String {
     history
         .iter()
@@ -175,8 +175,8 @@ fn last_user_text(history: &[Message]) -> String {
         .unwrap_or_default()
 }
 
-/// `claude -p --output-format json` çıktısını ayrıştır. JSON değilse (eski
-/// sürüm / beklenmedik çıktı) ham metne düş — session id'siz devam edilir.
+/// Parse `claude -p --output-format json` output. If it's not JSON (old
+/// version / unexpected output) fall back to raw text — continues without a session id.
 pub fn parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>) {
     #[derive(serde::Deserialize)]
     struct CliJson {
@@ -193,8 +193,8 @@ pub fn parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>) {
     }
 }
 
-/// Konuşma geçmişini `claude` CLI'ın stdin'ine yazılacak düz-metin transcript'e
-/// dönüştür. Kullanıcı = `[SEN]`, asistan = `[USTA]`.
+/// Convert the conversation history into a plain-text transcript to be
+/// written to the `claude` CLI's stdin. User = `[SEN]`, assistant = `[USTA]`.
 fn render_transcript(history: &[Message]) -> String {
     let mut out = String::new();
     for msg in history {
@@ -203,7 +203,7 @@ fn render_transcript(history: &[Message]) -> String {
         } else {
             "[SEN]"
         };
-        // Saklanan turn'ler Value::String; değilse ham JSON'a düş.
+        // Stored turns are Value::String; otherwise fall back to raw JSON.
         let body = match &msg.content {
             serde_json::Value::String(s) => s.clone(),
             other => other.to_string(),
@@ -216,8 +216,8 @@ fn render_transcript(history: &[Message]) -> String {
     out.trim_end().to_string()
 }
 
-/// `claude -p` alt sürecini çalıştır: girdi stdin'e yazılır, JSON çıktı okunur.
-/// `resume` verilirse `--resume <id>` ile sunucu taraflı oturum sürdürülür.
+/// Run the `claude -p` subprocess: input is written to stdin, JSON output is read back.
+/// If `resume` is given, the server-side session is continued via `--resume <id>`.
 async fn run_claude_cli(
     model: &str,
     system: &str,
@@ -237,36 +237,36 @@ async fn run_claude_cli(
     if let Some(id) = resume {
         cmd.arg("--resume").arg(id);
     }
-    // Future iptal edilirse (çift Ctrl-C) çocuk süreç öksüz kalmasın.
+    // If the future is cancelled (double Ctrl-C), don't leave the child process orphaned.
     cmd.kill_on_drop(true);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("`claude` CLI başlatılamadı — PATH'te mi?")?;
+        .context("`claude` CLI failed to start — is it on PATH?")?;
 
-    // Girdiyi stdin'e yaz, sonra kapat (EOF).
+    // Write the input to stdin, then close it (EOF).
     {
         let mut stdin = child
             .stdin
             .take()
-            .context("claude CLI stdin'i alınamadı")?;
+            .context("failed to get claude CLI stdin")?;
         stdin
             .write_all(input.as_bytes())
             .await
-            .context("claude CLI stdin'ine yazılamadı")?;
+            .context("failed to write to claude CLI stdin")?;
         stdin.shutdown().await.ok();
     }
 
     let output = child
         .wait_with_output()
         .await
-        .context("claude CLI çıktısı beklenirken hata")?;
+        .context("error waiting for claude CLI output")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("claude CLI hata döndü ({}): {}", output.status, stderr.trim());
+        bail!("claude CLI returned an error ({}): {}", output.status, stderr.trim());
     }
 
     Ok(parse_cli_output(&String::from_utf8_lossy(&output.stdout)))
@@ -286,8 +286,8 @@ mod tests {
 
     #[test]
     fn reset_session_clears_cli_session_id() {
-        // reset_session() session_id'yi None'a çekmeli — slug mini-oturumu
-        // sonrası öğrenme oturumu bunu resume ETMESİN (spec B1).
+        // reset_session() should set session_id to None — the learning session
+        // after the slug mini-session must NOT resume it (spec B1).
         let mut b = Backend::Cli { model: "opus".into(), session_id: Some("sid-123".into()) };
         b.reset_session();
         let Backend::Cli { session_id, .. } = &b else { panic!("Cli bekleniyordu") };

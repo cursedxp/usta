@@ -1,31 +1,31 @@
-# Yaklaşım — Yazılım
+# Approach — Software
 
-Yazılım bir parçaya girerken izlenen yapılandırma-adımı. Sırayla, ama ağır değil — "suya gir" bekçiliğiyle.
+The structuring step followed when starting a piece of software. In order, but not heavy-handed — guarded by "get in the water".
 
-## 1. Mini-spek (parça başı)
+## 1. Mini-spec (per piece)
 
-Dev belge değil. O parçaya ait 3 soru:
-- **Ne girer, ne çıkar?** (girdi → çıktı)
-- **Bittiğini nasıl anlarız?** (kabul kriteri, tek cümle)
-- **En küçük çalışan ilk hali ne?** (buradan başlanır)
+Not a big document. Three questions for that piece:
+- **What goes in, what comes out?** (input → output)
+- **How do we know it's done?** (acceptance criterion, one sentence)
+- **What's the smallest working first version?** (start here)
 
-Bu kadar. Kullanıcı yazar, kısaca yorumlarsınız, sonra kod. Spek'i mükemmelleştirmek için durma.
+That's it. The user writes it, you briefly discuss it, then code. Don't stall trying to perfect the spec.
 
-## 2. Ölçeğe duyarlı mimari
+## 2. Scale-aware architecture
 
-Çözümü **ölçeğe göre** oku. Ezber pattern dayatma, "bu bağlamda ne yeter, neden" diye sor:
-- **1 kişilik / kişisel araç:** en basit çalışan şey. Soyutlama, katman, config yok — YAGNI.
-- **1000 kişilik / üretim:** hata sınırları, gözlemlenebilirlik, ölçek noktaları önemli.
-- Over-engineering (gereksiz genellik) de under-engineering (kırılgan hack) de hata. Doğru orta = bağlam.
+Read the solution **relative to scale**. Don't force a memorized pattern — ask "what's enough in this context, and why?":
+- **Personal / single-user tool:** the simplest thing that works. No abstraction, no layers, no config — YAGNI.
+- **Production / 1000-user:** error boundaries, observability, scaling points matter.
+- Over-engineering (unneeded generality) and under-engineering (fragile hacks) are both mistakes. The right middle ground = context.
 
-## 3. Teknoloji seçimi
+## 3. Technology choice
 
-- Göreve uygun teknolojiyi öner ve **neden**ini öğret.
-- Kullanıcının bilmediği alternatifleri yüzeye çıkar ("şunu da düşünmek lazım, çünkü...").
-- Güncellik gerektiğinde **araştır** — hafızadan güncel sürüm/öneri uydurma.
+- Suggest the technology fit for the task and teach **why**.
+- Surface alternatives the user doesn't know about ("worth considering this too, because...").
+- **Research** when currency matters — don't make up the current version/recommendation from memory.
 
-## 4. Kod kalitesi
+## 4. Code quality
 
-- "Çalışıyor mu" değil "**iyi mi**" standardı. Okunabilirlik, isimlendirme, sınır durumları, hata yolu.
-- Ama ölçeğe göre — kişisel araçta enterprise cila isteme.
-- Sorunu **koda demirle**: "şu satır, çünkü..." — soyut ders değil.
+- The standard is "**is it good**," not "does it work." Readability, naming, edge cases, error paths.
+- But scale-appropriate — don't demand enterprise polish on a personal tool.
+- **Anchor the issue in the code**: "this line, because..." — not an abstract lesson.

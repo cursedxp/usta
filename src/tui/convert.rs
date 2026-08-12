@@ -1,9 +1,9 @@
-//! termimad ANSI çıktısını ratatui Text'ine çevir — insert_before köprüsü.
+//! Convert termimad ANSI output to ratatui Text — insert_before bridge.
 
 use ratatui::text::Text;
 
-/// ANSI'li string → ratatui Text. Dönüşüm hatasında stil at, düz metin bas —
-/// içerik asla kaybolmaz.
+/// ANSI string → ratatui Text. On conversion error, drop styling and print
+/// plain text — content is never lost.
 pub fn ansi_to_text(s: &str) -> Text<'static> {
     use ansi_to_tui::IntoText;
     s.into_text().unwrap_or_else(|_| Text::raw(s.to_string()))

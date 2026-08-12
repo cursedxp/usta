@@ -1,9 +1,9 @@
-//! TUI oturum döngüsü: tuş + watcher + LLM tek select!'te. Kalıcı içerik
-//! insert_before ile scrollback'e akar; alt bölge canlı çizilir. Spec §3.
+//! TUI session loop: keys + watcher + LLM all in one select!. Persistent content
+//! flows into scrollback via insert_before; the bottom region is redrawn live. Spec §3.
 //!
-//! Plain modda (ui::is_plain) bu modül hiç kullanılmaz — main dallanması
-//! plain yolu run_plain_loop'a yönlendirir. Burada alt-ekran YOK: yalnız
-//! inline viewport + insert_before, scrollback korunur.
+//! In plain mode (ui::is_plain) this module is never used — main's branching
+//! routes the plain path to run_plain_loop. There is NO alt-screen here: only
+//! an inline viewport + insert_before, scrollback is preserved.
 
 use std::path::{Path, PathBuf};
 
@@ -26,7 +26,7 @@ use crate::tui::term::{Tui, VIEWPORT_H};
 use crate::tui::welcome;
 use crate::{feedback, progress, ui, watcher};
 
-/// Kalıcı içeriği viewport üstüne (scrollback'e) bas.
+/// Push persistent content above the viewport (into scrollback).
 fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
     let h = text.height() as u16;
     tui.terminal.insert_before(h, |buf| {
@@ -35,7 +35,7 @@ fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
     Ok(())
 }
 
-/// Usta yanıtını görsel dille bas: turuncu ● satırı + markdown + boş satır.
+/// Print Usta's reply in the visual language: orange ● line + markdown + blank line.
 fn page_reply(tui: &mut Tui, reply: &str, width: u16) -> Result<()> {
     let ansi = ui::render_markdown(reply, width as usize);
     let mut t = ansi_to_text(&format!("\x1b[38;5;208m●\x1b[0m\n{ansi}\n"));
@@ -43,19 +43,21 @@ fn page_reply(tui: &mut Tui, reply: &str, width: u16) -> Result<()> {
     page(tui, t)
 }
 
-/// Soluk sistem bildirimi (ui::notice'un TUI karşılığı).
+/// Dim system notice (the TUI counterpart of ui::notice).
 fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
     page(tui, ansi_to_text(&format!("\x1b[2m· {msg}\x1b[0m")))
 }
 
-/// Kullanıcı bloğu: boş ayraç satırı + turuncu `❯ ` önek + NORMAL renkli metin.
-/// DIM KULLANMA — koyu temalarda zemine karışıp görünmez oluyordu (spec S1).
-/// Çok satırlı gönderimde devam satırları 2 boşluk girintili — yapıştırma yapısı korunur.
+/// User block: blank separator line + orange `❯ ` prefix + NORMAL-colored text.
+/// DO NOT USE DIM — it blended into the background and became invisible on dark
+/// themes (spec S1). In multi-line submissions, continuation lines are indented
+/// 2 spaces — the pasted structure is preserved.
 fn user_echo_text(line: &str, width: u16) -> Text<'static> {
-    // Önek 2 sütun ("❯ " / "  "); metin bu payı düşen genişliğe sarılır ki
-    // uzun mesaj tek satırda kesilmesin (page_reply markdown'ı zaten sarar,
-    // echo sarmayınca kırpılıyordu). İlk GÖRSEL satır ❯, gerisi 2 boşluk —
-    // hem çok-satırlı yapıştırma hem tek-satır sarma aynı hizada okunur.
+    // Prefix is 2 columns ("❯ " / "  "); the text wraps to the width minus this
+    // allowance so a long message isn't cut off on one line (page_reply already
+    // wraps markdown — echo was getting truncated when it didn't wrap). The first
+    // VISUAL line gets ❯, the rest get 2 spaces — both multi-line paste and
+    // single-line wrap read aligned this way.
     let inner = (width as usize).saturating_sub(2).max(1);
     let mut lines: Vec<Line> = vec![Line::raw("")];
     let mut first_visual = true;
@@ -73,8 +75,8 @@ fn user_echo_text(line: &str, width: u16) -> Text<'static> {
     Text::from(lines)
 }
 
-/// Metni HÜCRE genişliğine (unicode-width) böl — kelime değil karakter bazlı,
-/// input kutusunun `wrap_visual`'ıyla tutarlı. Boş girdi → tek boş satır.
+/// Split text to CELL width (unicode-width) — character-based, not word-based,
+/// consistent with the input box's `wrap_visual`. Empty input → single blank line.
 fn wrap_cells(s: &str, width: usize) -> Vec<String> {
     use unicode_width::UnicodeWidthChar;
     let width = width.max(1);
@@ -94,47 +96,48 @@ fn wrap_cells(s: &str, width: usize) -> Vec<String> {
     rows
 }
 
-/// Kullanıcının gönderdiği satırı scrollback'e bas — anlık genişliğe sararak.
+/// Push the user's submitted line to scrollback — wrapped to the current width.
 fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
     let w = current_width(tui);
     page(tui, user_echo_text(line, w))
 }
 
-/// Anlık terminal genişliği — resize sonrası sarma doğru kalsın (spec B3).
-/// Ölçüm başarısızsa 80'e düş (sarma bozulmaz, sadece dar olur).
+/// Current terminal width — keeps wrapping correct after a resize (spec B3).
+/// Falls back to 80 if measurement fails (wrapping doesn't break, just gets narrow).
 fn current_width(tui: &Tui) -> u16 {
     tui.terminal.size().map(|s| s.width).unwrap_or(80)
 }
 
-/// Alt bölgeyi çiz: girdi kutusu (üstte) + durum satırı (altta).
+/// Draw the bottom region: input box (top) + status line (bottom).
 fn draw(
     tui: &mut Tui,
     editor: &InputBox,
     status: &Status,
     tokens: Option<u64>,
     window: u64,
+    watching: Option<bool>,
 ) -> Result<()> {
     tui.terminal.draw(|f| {
         let [box_area, status_area] =
             Layout::vertical([Constraint::Length(VIEWPORT_H - 1), Constraint::Length(1)])
                 .areas(f.area());
         editor.render(f, box_area);
-        f.render_widget(render_status(status, tokens, window), status_area);
+        f.render_widget(render_status(status, tokens, window, watching), status_area);
     })?;
     Ok(())
 }
 
-/// ask_live sonucu: yanıt geldi ya da kullanıcı çift Ctrl-C ile iptal etti.
+/// Result of ask_live: either a reply arrived or the user cancelled with double Ctrl-C.
 pub enum AskOutcome {
     Reply(crate::backend::Reply),
     Cancelled,
 }
 
-/// Kilitli moddaki tuşun anlamı — saf, testlenebilir (spec B2).
+/// Meaning of a keypress in locked mode — pure, testable (spec B2).
 enum LockedKey {
-    /// Editöre işlenecek tuş (Enter dahil — Enter yutulur ama edit sayılır).
+    /// Key to be processed by the editor (including Enter — Enter is swallowed but counts as an edit).
     Edit,
-    /// Ctrl-C / Ctrl-D — iptal isteği basamağı.
+    /// Ctrl-C / Ctrl-D — cancel-request step.
     CancelRequest,
 }
 
@@ -149,10 +152,11 @@ fn classify_locked_key(k: KeyEvent) -> LockedKey {
     }
 }
 
-/// LLM çağrısını canlı arayüzle bekle: spinner döner, tuşlar editöre işler
-/// ama Submit/Exit KİLİTLİ (tek turn ilkesi) — Enter yutulur. Çift Ctrl-C
-/// (veya Ctrl-D) ile iptal edilebilir: ilk basış durum satırında ipucu
-/// yakar, ikincisi future'ı düşürür (kill_on_drop çocuğu öldürür).
+/// Wait for the LLM call with a live interface: spinner spins, keys are processed
+/// by the editor but Submit/Exit are LOCKED (single-turn principle) — Enter is
+/// swallowed. Can be cancelled with double Ctrl-C (or Ctrl-D): the first press
+/// lights up a hint on the status line, the second drops the future
+/// (kill_on_drop kills the child).
 async fn ask_live(
     tui: &mut Tui,
     editor: &mut InputBox,
@@ -166,26 +170,30 @@ async fn ask_live(
     let fut = backend.complete(system, history);
     tokio::pin!(fut);
     let mut frame = 0usize;
-    let mut cancel_armed = false; // ilk Ctrl-C sonrası true — sayaç sıfırlanmaz (spec B2)
+    let mut cancel_armed = false; // true after the first Ctrl-C — the counter doesn't reset (spec B2)
     loop {
-        draw(tui, editor, &Status::Thinking { frame, cancel_hint: cancel_armed }, tokens, window)?;
+        draw(tui, editor, &Status::Thinking { frame, cancel_hint: cancel_armed }, tokens, window, None)?;
         tokio::select! {
             r = &mut fut => return Ok(AskOutcome::Reply(r?)),
             Some(Ok(ev)) = events.next() => {
-                // Yapıştırma kilitliyken de editöre işler (göndermez).
+                // Paste is still processed by the editor even while locked (doesn't submit).
                 if let Event::Paste(s) = &ev {
                     editor.insert_str(s);
                 } else if let Event::Key(k) = ev {
+                    // Single Esc = instant cancel (drops fut → kill_on_drop kills the child).
+                    if matches!(k.code, KeyCode::Esc) {
+                        return Ok(AskOutcome::Cancelled);
+                    }
                     match classify_locked_key(k) {
                         LockedKey::CancelRequest if cancel_armed => {
-                            // fut düşer → kill_on_drop çocuğu öldürür (backend.rs).
+                            // fut drops → kill_on_drop kills the child (backend.rs).
                             return Ok(AskOutcome::Cancelled);
                         }
                         LockedKey::CancelRequest => { cancel_armed = true; }
                         LockedKey::Edit => {
                             if !matches!(k.code, KeyCode::Enter) {
                                 let _ = match editor.handle_key(k) {
-                                    Action::Exit => Action::None, // buraya düşmez (CancelRequest yakalar) — emniyet
+                                    Action::Exit => Action::None, // never reached here (CancelRequest catches it) — safety net
                                     other => other,
                                 };
                             }
@@ -198,10 +206,11 @@ async fn ask_live(
     }
 }
 
-/// Kimlik welcome'ı basıp konuyu girdi kutusundan okur. `None` = kullanıcı
-/// konu vermeden çıktı (Ctrl-C/D). Slug çözümü çağırana bırakılır. Konu
-/// girişinde watcher olayları burada TÜKETİLMEZ — sadece tuş dinlenir; kanalda
-/// biriken olaylar oturum kurulduktan sonra sessizce sindirilir (bkz. `run`).
+/// Prints the identity welcome and reads the topic from the input box. `None` =
+/// the user quit without giving a topic (Ctrl-C/D). Slug resolution is left to
+/// the caller. Watcher events are NOT consumed here during topic entry — only
+/// keys are listened for; events accumulated in the channel are quietly
+/// absorbed after the session is set up (see `run`).
 #[allow(clippy::too_many_arguments)]
 async fn ask_topic(
     tui: &mut Tui,
@@ -214,23 +223,24 @@ async fn ask_topic(
     other: &[String],
     show_welcome: bool,
 ) -> Result<Option<String>> {
-    // Konu listeleri (proje-yerel + diğer projeler) çağıran tarafından hesaplanır
-    // ve buraya geçirilir — burada global katalog okunmaz (bkz. `run`).
-    // `show_welcome=false`: yeni-konu onayı reddedilip giriş sorusuna geri
-    // dönüldüğünde kimlik welcome + ilk notice TEKRAR basılmaz.
+    // Topic lists (project-local + other projects) are computed by the caller
+    // and passed in here — the global catalog is not read here (see `run`).
+    // `show_welcome=false`: when the new-topic confirmation is rejected and we
+    // go back to the entry question, the identity welcome + initial notice are
+    // NOT printed again.
     if show_welcome {
         let name = profile.and_then(welcome::extract_name);
         let width = current_width(tui);
         page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, width))?;
-        page_notice(tui, "Ne öğrenmek istiyorsun? (kısa yaz ya da cümleyle anlat)")?;
+        page_notice(tui, "What do you want to learn? (a word, or describe it in a sentence)")?;
     }
 
     loop {
-        draw(tui, editor, &Status::Idle, None, 0)?;
+        draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => {
-                // Boş Enter = devam sentineli (yalnız devam edilecek konu varsa) —
-                // editör boş satırı yutmadan biz yakalarız (spec K1 kural 1).
+                // Empty Enter = resume sentinel (only when there's a topic to resume) —
+                // we catch it before the editor swallows the empty line (spec K1 rule 1).
                 if matches!(k.code, KeyCode::Enter)
                     && editor.value().trim().is_empty()
                     && !local.is_empty()
@@ -244,13 +254,13 @@ async fn ask_topic(
                 }
             }
             Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
-            Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
-            None => return Ok(None), // stream bitti — sıcak döngüye girme (spec B4)
+            Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
+            None => return Ok(None), // stream ended — don't spin in a hot loop (spec B4)
         }
     }
 }
 
-/// TUI'de tek-tuş onay: mesajı bas, bir tuş bekle. `e`/`E` → true, diğer → false.
+/// Single-key confirmation in the TUI: print the message, wait for one key. `y`/`Y`/`e`/`E` → true, other → false.
 async fn tui_confirm(
     tui: &mut Tui,
     editor: &InputBox,
@@ -259,23 +269,23 @@ async fn tui_confirm(
 ) -> Result<bool> {
     page_notice(tui, msg)?;
     loop {
-        draw(tui, editor, &Status::Idle, None, 0)?;
+        draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => match k.code {
-                KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
                 _ => return Ok(false),
             },
-            Some(Ok(_)) | Some(Err(_)) => {} // resize vb. — yoksay
-            None => return Ok(false), // stream bitti — sıcak döngüye girme (spec B4)
+            Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
+            None => return Ok(false), // stream ended — don't spin in a hot loop (spec B4)
         }
     }
 }
 
-/// TUI oturumu: konu girişi (arg yoksa) + açılış kutusu + drill/tanışma + ana
-/// döngü. Session/recorder içeride `build_session` ile kurulur. Dönüş:
-/// `Some((session, recorder, lock))` — kapanış main'de plain yolla paylaşımlı;
-/// `None` — kullanıcı konu vermeden çıktı (oturum yok, kilit yok). Dönüşte Tui
-/// drop olur → terminal restore.
+/// TUI session: topic entry (if no arg) + welcome box + drill/intro + main
+/// loop. Session/recorder are set up inside via `build_session`. Return:
+/// `Some((session, recorder, lock))` — closing is shared with the plain path in
+/// main; `None` — the user quit without giving a topic (no session, no lock). On
+/// return, Tui drops → terminal restore.
 pub async fn run(
     backend: &mut Backend,
     global: &Path,
@@ -285,19 +295,20 @@ pub async fn run(
     max_feedback_batch: usize,
     watch_rx: &mut UnboundedReceiver<PathBuf>,
 ) -> Result<Option<(Session, Recorder, PathBuf)>> {
-    // setup() panic hook'u kurar → SÜREÇ BAŞINA TAM BİR KEZ çağrılır (döngüde değil).
+    // setup() installs the panic hook → called EXACTLY ONCE PER PROCESS (not in a loop).
     let mut tui = crate::tui::term::setup()?;
     let mut editor = InputBox::new();
     let mut events = EventStream::new();
     let read = |p: PathBuf| std::fs::read_to_string(p).ok();
 
-    // Konu belirle: argüman verildiyse yerel slug'la (`usta start "JavaScript
-    // Basics"` çalışsın). Argüman yoksa kimlik welcome + girdi kutusundan sor.
+    // Determine the topic: if an argument was given, slugify it locally (so
+    // `usta start "JavaScript Basics"` works). If no argument, show the identity
+    // welcome + ask via the input box.
     let had_topic_arg = topic_arg.is_some();
-    let mut resumed = false; // devam (resume) akışı seçildi mi — tam-mod welcome'ı tetikler
-    // Kullanıcının konu girişindeki HAM metin — yeni konuda tanışma turn'üne
-    // "ilk cevap" olarak taşınır; slug'a indirgeyip atmak modeli zaten
-    // söylenenleri yeniden sormaya mahkum eder. Devam akışında kullanılmaz.
+    let mut resumed = false; // whether the resume flow was chosen — triggers the full-mode welcome
+    // The RAW text from the user's topic entry — carried into the new-topic intro
+    // turn as the "first answer"; reducing it to a slug and discarding it would
+    // force the model to re-ask what was already said. Not used in the resume flow.
     let mut intro: Option<String> = None;
     let topic = match topic_arg {
         Some(t) => {
@@ -305,9 +316,9 @@ pub async fn run(
             crate::slugify_topic(&t)
         }
         None => {
-            // Konu listeleri burada hesaplanır ve ask_topic'e geçirilir:
-            //  - `local`: bu projede devam edilebilir konular (yeni → eski, [0]=son)
-            //  - `other`: diğer projelerdeki konular (yalnız bilgi amaçlı, en çok 4)
+            // Topic lists are computed here and passed to ask_topic:
+            //  - `local`: topics resumable in this project (newest → oldest, [0]=latest)
+            //  - `other`: topics in other projects (informational only, at most 4)
             let index_content =
                 std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
             let local = crate::index::local_topics(project_root, &index_content);
@@ -321,8 +332,9 @@ pub async fn run(
                 o.truncate(4);
                 o
             };
-            // Kimlik welcome yalnız ilk turda basılır — yeni-konu onayı reddedilip
-            // giriş sorusuna geri dönüldüğünde tekrar basılmaz.
+            // The identity welcome is only printed on the first turn — it's not
+            // printed again if the new-topic confirmation is rejected and we go back
+            // to the entry question.
             let mut welcome_shown = false;
             loop {
                 let raw = match ask_topic(
@@ -339,25 +351,25 @@ pub async fn run(
                 .await?
                 {
                     Some(line) => line,
-                    None => return Ok(None), // konu vermeden çıktı
+                    None => return Ok(None), // quit without giving a topic
                 };
                 welcome_shown = true;
                 if !raw.trim().is_empty() {
                     page_user_echo(&mut tui, raw.trim())?;
                 }
                 match crate::interpret_topic_input(&raw, &local) {
-                    // GÜVENLİ FALLBACK: interpret yalnız (boş girdi + local boş)
-                    // durumunda None döner; ask_topic boş-Enter sentinelini yalnız
-                    // local doluyken üretir, yani buraya normalde düşülmez. Döngü
-                    // içinde doğal karşılığı "yut, tekrar sor" — güvenli düşüş budur.
+                    // SAFE FALLBACK: interpret only returns None when (input is empty +
+                    // local is empty); ask_topic only produces the empty-Enter sentinel
+                    // when local is non-empty, so this normally isn't reached. Its natural
+                    // counterpart in the loop is "swallow, ask again" — this is the safe fallback.
                     None => {}
                     Some(crate::TopicChoice::Resume(t)) => {
-                        page_notice(&mut tui, &format!("devam: {t}"))?;
-                        resumed = true; // aşağıda tam-mod welcome için
+                        page_notice(&mut tui, &format!("resuming: {t}"))?;
+                        resumed = true; // for the full-mode welcome below
                         break t;
                     }
                     Some(crate::TopicChoice::New(raw)) => {
-                        // Yeni-konu akışı: ≤2 kelime yerel slug; cümle → LLM slug (spinner).
+                        // New-topic flow: ≤2 words → local slug; a sentence → LLM slug (spinner).
                         let slug = if raw.split_whitespace().count() <= 2 {
                             crate::slugify_topic(&raw)
                         } else {
@@ -375,19 +387,20 @@ pub async fn run(
                                 Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
                                 Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
                             };
-                            // Slug mini-oturumu öğrenme oturumuna taşınmasın (spec B1).
+                            // The slug mini-session must not carry over into the learning session (spec B1).
                             backend.reset_session();
                             slug
                         };
-                        // LLM/kısa slug yerel bir konuya denk düştüyse bu da DEVAM sayılır
-                        // (spec K2): notice devam olur, tam-mod welcome basılır, onay YOK.
+                        // If the LLM/short slug happens to match a local topic, this also
+                        // counts as RESUME (spec K2): the notice becomes "resuming", the
+                        // full-mode welcome is printed, NO confirmation.
                         if local.contains(&slug) {
-                            page_notice(&mut tui, &format!("devam: {slug}"))?;
+                            page_notice(&mut tui, &format!("resuming: {slug}"))?;
                             resumed = true;
                             break slug;
                         }
-                        // Yeni konu onayı: yalnız devam edilebilir konu varken sorulur
-                        // (spec §2) — ilk-çalıştırma/boş-yerel'de onaysız açılır.
+                        // New-topic confirmation: only asked when there's a topic that could
+                        // be resumed (spec §2) — on first-run/empty-local it opens without confirmation.
                         if local.is_empty()
                             || tui_confirm(
                                 &mut tui,
@@ -397,35 +410,35 @@ pub async fn run(
                             )
                             .await?
                         {
-                            page_notice(&mut tui, &format!("konu: {slug} — detayı sohbette anlatırsın"))?;
+                            page_notice(&mut tui, &format!("topic: {slug} — tell me the details in chat"))?;
                             intro = Some(raw);
                             break slug;
                         }
-                        // Ret → giriş sorusuna geri dön (welcome tekrar basılmaz).
-                        page_notice(&mut tui, "vazgeçildi — Enter = devam, ya da başka konu yaz")?;
+                        // Rejected → go back to the entry question (welcome is not printed again).
+                        page_notice(&mut tui, "cancelled — Enter = resume, or type another topic")?;
                     }
                 }
             }
         }
     };
 
-    // Lock-çakışma onayı (TUI tek-tuş) — build_session'dan ÖNCE, kendi kilidini
-    // yazmadan. Reddedilirse session/kilit yok → Tui drop restore.
+    // Lock-conflict confirmation (TUI single-key) — BEFORE build_session, without
+    // writing its own lock. If rejected, no session/lock → Tui drop restores.
     let lock = crate::lock_path(project_root, &topic);
     if lock.exists()
         && !tui_confirm(
             &mut tui,
             &editor,
             &mut events,
-            "Bu konuda başka oturum açık olabilir — progress çakışabilir. Devam? [e/H]",
+            "Another session may be open for this topic — progress could clash. Continue? [y/N]",
         )
         .await?
     {
-        page_notice(&mut tui, "vazgeçildi")?;
+        page_notice(&mut tui, "cancelled")?;
         return Ok(None);
     }
 
-    // build_session kendi kilidini yazar; dönen lock = aynı yol.
+    // build_session writes its own lock; the returned lock = same path.
     let (mut session, recorder, lock, has_progress) =
         crate::build_session(global, project_root, &topic, today)?;
 
@@ -434,19 +447,21 @@ pub async fn run(
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
 
-    // Konu girişi sırasında biriken watcher olaylarını sessizce sindir — kullanıcı
-    // konuyu yazarken kaydedilen dosyalar oturum başlar başlamaz sürpriz feedback
-    // üretmesin (FileMemory senkronlanır, sonraki gerçek değişiklik ona göre diff'lenir).
+    // Quietly absorb watcher events accumulated during topic entry — files saved
+    // while the user was typing the topic shouldn't produce surprise feedback the
+    // moment the session starts (FileMemory is synced, the next real change is
+    // diffed against it).
     while let Ok(path) = watch_rx.try_recv() {
         if let Ok(c) = std::fs::read_to_string(&path) {
             let _ = files.observe(&path, c);
         }
     }
 
-    // Welcome: konu baştan belliyse (arg verilmişti) VEYA devam seçildiyse tam-mod
-    // öğrenme durumu basılır. Devamda kimlik welcome zaten ask_topic içinde basıldı;
-    // üstüne öğrenme-durumu kutusu gelir (iki kutu üst üste — Claude Code akışına benzer).
-    // Salt yeni konuda ise yalnız kimlik welcome kalır.
+    // Welcome: if the topic was known upfront (an arg was given) OR resume was
+    // chosen, the full-mode learning-status box is printed. On resume, the
+    // identity welcome was already printed inside ask_topic; the learning-status
+    // box is added on top of it (two boxes stacked — similar to Claude Code's
+    // flow). On a purely new topic, only the identity welcome remains.
     if had_topic_arg || resumed {
         let data = welcome::gather(
             read(global.join("USER.md")).as_deref(),
@@ -460,9 +475,10 @@ pub async fn run(
         page(&mut tui, welcome::render_welcome(&data, w))?;
     }
 
-    // Açılış drilli / tanışma (main.rs plain yolunun TUI karşılığı). Profil
-    // hâlâ gömülü jenerik şablonsa (veya hiç yoksa) Usta kullanıcıyı tanımıyor
-    // demektir — açılış turn'üne kısa tanışma talimatı eklenir (spec Ç3a).
+    // Opening drill / intro (the TUI counterpart of main.rs's plain path). If the
+    // profile is still the embedded generic template (or doesn't exist at all),
+    // Usta doesn't know the user yet — a short introduction instruction is added
+    // to the opening turn (spec Ç3a).
     let profile_generic = read(global.join("USER.md"))
         .as_deref()
         .map(crate::profile_is_generic)
@@ -494,27 +510,29 @@ pub async fn run(
         }
         Ok(AskOutcome::Cancelled) => {
             backend.reset_session();
-            page_notice(&mut tui, "açılış turu iptal edildi")?;
+            page_notice(&mut tui, "opening turn cancelled")?;
         }
-        Err(e) => page_notice(&mut tui, &format!("açılış turu atlandı: {e}"))?,
+        Err(e) => page_notice(&mut tui, &format!("opening turn skipped: {e}"))?,
     }
 
+    let mut watching = true;
     loop {
-        // Tamponu her iterasyon başında boşalt — transcript yazım hatası gibi
-        // maybe_compact dışında biriken bildirimler de asla kaybolmasın.
+        // Drain the buffer at the start of every iteration — notices that
+        // accumulate outside maybe_compact, like a transcript write error,
+        // should never be lost either.
         for m in ui::drain_tui_notices() {
             page_notice(&mut tui, &m)?;
         }
-        draw(&mut tui, &editor, &Status::Idle, last_tokens, window)?;
+        draw(&mut tui, &editor, &Status::Idle, last_tokens, window, Some(watching))?;
         tokio::select! {
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else {
-                    if maybe_ev.is_none() { break; } // stream bitti = Eof (spec B4)
-                    continue; // tek olay hatası — yoksay
+                    if maybe_ev.is_none() { break; } // stream ended = Eof (spec B4)
+                    continue; // single event error — ignore
                 };
                 let k = match ev {
                     Event::Key(k) => k,
-                    // Bracketed paste: tek olay, Enter tetiklenmez, yapı korunur.
+                    // Bracketed paste: single event, Enter isn't triggered, structure is preserved.
                     Event::Paste(s) => { editor.insert_str(&s); continue }
                     _ => continue,
                 };
@@ -522,8 +540,15 @@ pub async fn run(
                     Action::None => {}
                     Action::Exit => break,
                     Action::Submit(line) => {
+                        if let Some(cmd) = crate::parse_watch_command(&line) {
+                            page_user_echo(&mut tui, &line)?;
+                            let (next, msg) = crate::apply_watch(cmd, watching);
+                            watching = next;
+                            page_notice(&mut tui, msg)?;
+                            continue;
+                        }
                         if line == "/quit" { break; }
-                        // Gönderilen satırı belirgin kullanıcı bloğu olarak scrollback'e bas.
+                        // Push the submitted line to scrollback as a distinct user block.
                         page_user_echo(&mut tui, &line)?;
                         session.push_user(&line);
                         recorder.user(&line);
@@ -540,12 +565,13 @@ pub async fn run(
                                 crate::maybe_compact(backend, &mut session, project_root, last_tokens).await;
                             }
                             Ok(AskOutcome::Cancelled) => {
-                                // User turn history'de kalır (bilinçli — spec B2); CLI oturumu
-                                // yarım — resume edilmesin, sonraki çağrı tam transcript'le gitsin.
+                                // The user turn stays in history (intentional — spec B2); the CLI
+                                // session is half-done — don't resume it, the next call should go
+                                // with the full transcript.
                                 backend.reset_session();
-                                page_notice(&mut tui, "yanıt iptal edildi — mesajın kaldı, istersen devam et")?;
+                                page_notice(&mut tui, "response cancelled — your message is kept, continue if you like")?;
                             }
-                            Err(e) => page_notice(&mut tui, &format!("hata: {e}"))?,
+                            Err(e) => page_notice(&mut tui, &format!("error: {e}"))?,
                         }
                     }
                 }
@@ -557,10 +583,17 @@ pub async fn run(
                 let batch = debouncer.flush();
                 if batch.len() > max_feedback_batch {
                     page_notice(&mut tui, &format!(
-                        "toplu değişiklik ({} dosya) — feedback atlandı, izleme sürüyor",
+                        "bulk change ({} files) — feedback skipped, still watching",
                         batch.len()
                     ))?;
-                    // FileMemory'yi sessizce senkronla: sonraki tekil kayıt dev diff üretmesin.
+                    // Silently sync FileMemory: the next single save shouldn't produce a giant diff.
+                    for path in batch {
+                        if let Ok(c) = std::fs::read_to_string(&path) {
+                            let _ = files.observe(&path, c);
+                        }
+                    }
+                } else if !watching {
+                    // Companion off: keep the diff baseline current, no LLM feedback.
                     for path in batch {
                         if let Ok(c) = std::fs::read_to_string(&path) {
                             let _ = files.observe(&path, c);
@@ -577,22 +610,23 @@ pub async fn run(
                                 page_reply(&mut tui, &reply.text, w)?;
                                 crate::maybe_compact(backend, &mut session, project_root, tokens).await;
                             }
-                            Err(e) => page_notice(&mut tui, &format!("dosya feedback atlandı: {}: {e}", path.display()))?,
+                            Err(e) => page_notice(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
                 }
             }
         }
     }
-    // Çıkıştan hemen önce son iterasyonun bildirimlerini boşalt — /quit veya
-    // Exit yolunda buffer'a düşen bir transcript uyarısı TUI hâlâ ayaktayken görünsün.
+    // Drain the last iteration's notices right before exit — so a transcript
+    // warning that lands in the buffer on the /quit or Exit path is still seen
+    // while the TUI is up.
     for m in ui::drain_tui_notices() {
         page_notice(&mut tui, &m)?;
     }
     Ok(Some((session, recorder, lock))) // Tui drop → restore
 }
 
-/// `$HOME` → `~` kısaltmalı proje dizini.
+/// Project directory with `$HOME` → `~` abbreviation.
 fn short_dir(p: &Path) -> String {
     let s = p.display().to_string();
     match dirs::home_dir() {
@@ -613,10 +647,10 @@ mod tests {
 
     #[test]
     fn user_echo_prefixes_first_line_and_indents_rest() {
-        // Geniş genişlik → sarma yok, yalnız \n bölünmesi.
+        // Wide width → no wrapping, only \n splitting.
         let t = user_echo_text("satır1\nsatır2", 80);
         let lines: Vec<String> = t.lines.iter().map(line_text).collect();
-        // [0] boş ayraç satırı, [1] ❯ + metin, [2] girintili devam.
+        // [0] blank separator line, [1] ❯ + text, [2] indented continuation.
         assert_eq!(lines[0], "");
         assert_eq!(lines[1], "❯ satır1");
         assert_eq!(lines[2], "  satır2");
@@ -624,8 +658,8 @@ mod tests {
 
     #[test]
     fn user_echo_wraps_long_line_to_width() {
-        // 50 'a', genişlik 20 → iç genişlik 18 → 18+18+14 = 3 içerik satırı.
-        // Uzun tek satır KESİLMEZ, sarılır (bug: page_reply sarar, echo sarmıyordu).
+        // 50 'a's, width 20 → inner width 18 → 18+18+14 = 3 content lines.
+        // A long single line is NOT cut off, it wraps (bug: page_reply wraps, echo didn't).
         let t = user_echo_text(&"a".repeat(50), 20);
         let lines: Vec<String> = t.lines.iter().map(line_text).collect();
         assert_eq!(lines[0], "");
@@ -640,7 +674,7 @@ mod tests {
     #[test]
     fn user_echo_text_is_not_dim() {
         let t = user_echo_text("merhaba", 80);
-        // Hiçbir span DIM taşımaz — görünürlük sorununun kökü buydu (spec S1).
+        // No span carries DIM — that was the root of the visibility issue (spec S1).
         for l in &t.lines {
             for s in &l.spans {
                 assert!(!s.style.add_modifier.contains(Modifier::DIM), "DIM span: {:?}", s.content);

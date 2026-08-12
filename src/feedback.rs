@@ -1,29 +1,29 @@
-//! Dosya değişiklik yükü: LLM'e ne gideceğine buradaki saf mantık karar verir.
-//! İlk görüşte tam içerik (bağlam kurulsun), sonraki kayıtlarda unified diff
-//! (token tasarrufu + "ne değişti" sinyali), boyut tavanı üstünde tek seferlik
-//! yerel uyarı. IO yok — main okur, biz karar veririz.
+//! File change payload: the pure logic here decides what goes to the LLM.
+//! Full content on first sight (so context gets established), unified diff on
+//! subsequent saves (token savings + "what changed" signal), a one-time local
+//! warning above the size ceiling. No IO — main reads, we decide.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use similar::TextDiff;
 
-/// Bu boyutun üstündeki dosyalar LLM'e gönderilmez (context + maliyet koruması).
+/// Files above this size are not sent to the LLM (context + cost protection).
 pub const MAX_FILE_BYTES: usize = 64 * 1024;
 
-/// Bir kayıt olayının LLM'e yansıma biçimi.
+/// How a save event is reflected to the LLM.
 pub enum ChangePayload {
-    /// Dosya ilk kez görüldü — tam içerik gönderilir.
+    /// File seen for the first time — full content is sent.
     FirstSight(String),
-    /// Önceki görüşe göre unified diff.
+    /// Unified diff relative to the previous sighting.
     Diff(String),
-    /// Boyut tavanı aşıldı — sadece yerel uyarı, LLM çağrısı yok (dosya başına bir kez).
+    /// Size ceiling exceeded — local warning only, no LLM call (once per file).
     TooLarge(usize),
-    /// İçerik değişmemiş veya daha önce uyarılmış büyük dosya — sessiz geç.
+    /// Content unchanged, or a large file already warned about — skip silently.
     Skip,
 }
 
-/// Oturum boyunca görülen dosya içeriklerinin hafızası.
+/// Memory of file contents seen during the session.
 pub struct FileMemory {
     seen: HashMap<PathBuf, String>,
     warned_large: HashSet<PathBuf>,
@@ -37,7 +37,7 @@ impl FileMemory {
         }
     }
 
-    /// Yeni kaydedilen içeriği gözlemle, LLM yükünü üret, hafızayı güncelle.
+    /// Observe newly saved content, produce the LLM payload, update memory.
     pub fn observe(&mut self, path: &Path, current: String) -> ChangePayload {
         if current.len() > MAX_FILE_BYTES {
             if self.warned_large.insert(path.to_path_buf()) {
@@ -52,7 +52,7 @@ impl FileMemory {
                 let diff = TextDiff::from_lines(&prev, &current)
                     .unified_diff()
                     .context_radius(3)
-                    .header("önce", "sonra")
+                    .header("before", "after")
                     .to_string();
                 ChangePayload::Diff(diff)
             }
@@ -115,7 +115,7 @@ mod tests {
     fn diff_is_per_file_not_global() {
         let mut m = FileMemory::new();
         let _ = m.observe(Path::new("a.rs"), "a icerik\n".into());
-        // b.rs ilk kez görülüyor — a.rs'nin geçmişiyle diff'lenmemeli.
+        // b.rs is seen for the first time — must not be diffed against a.rs's history.
         assert!(matches!(
             m.observe(Path::new("b.rs"), "b icerik\n".into()),
             ChangePayload::FirstSight(_)

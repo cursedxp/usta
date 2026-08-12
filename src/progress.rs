@@ -1,42 +1,43 @@
-//! Kalıcı hafıza: oturum kapanışında Usta'ya oturumu özetletip
-//! `.usta/learner/progress/<konu>.md`'yi TAM içerik olarak yeniden yazdırırız.
-//! Sonraki oturum bu dosyayı system prompt'a yükler (brain.rs) → Usta
-//! bildiğini tekrar anlatmaz, eksiği hedefler. SPEC §9'un gerçeklenmesi.
+//! Persistent memory: at session close we have Usta summarize the session and
+//! rewrite `.usta/learner/progress/<topic>.md` with its FULL content.
+//! The next session loads this file into the system prompt (brain.rs) → Usta
+//! doesn't re-explain what it already knows, it targets the gaps. Implements SPEC §9.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// Konu için progress dosya yolu: `<proje>/.usta/learner/progress/<konu>.md`.
+/// Progress file path for a topic: `<project>/.usta/learner/progress/<topic>.md`.
 pub fn progress_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root
         .join(".usta/learner/progress")
         .join(format!("{topic}.md"))
 }
 
-/// Konuya özel yaklaşım dosyası: `.usta/approaches/<konu>.md`.
+/// Topic-specific approach file: `.usta/approaches/<topic>.md`.
 pub fn approach_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root.join(".usta/approaches").join(format!("{topic}.md"))
 }
 
-/// Konunun müfredat haritası: `.usta/learner/curriculum/<konu>.md`.
+/// The topic's curriculum map: `.usta/learner/curriculum/<topic>.md`.
 pub fn curriculum_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root
         .join(".usta/learner/curriculum")
         .join(format!("{topic}.md"))
 }
 
-/// Kapanış yanıtı bölücüsü — model her dosyayı bununla başlatır.
+/// Closing-reply delimiter — the model starts every file with this.
 pub const FILE_DELIM: &str = "===DOSYA:";
 
-/// Profil boşken açılış turn'lerine eklenen tanışma talimatı (spec Ç3a).
-const MEET_BLOCK: &str = "\n[PROFİL BOŞ] Kullanıcıyı henüz tanımıyorsun. Sohbetin \
-başında kısaca tanış — adı, bu alanla geçmişi, nasıl öğrenmeyi sevdiği. En fazla \
-1-2 soru, form değil; konuya girmeyi geciktirme. Kullanıcı kendini zaten anlattıysa \
-tekrar sorma. Öğrendiklerin oturum kapanışında profiline yazılacak.\n";
+/// Introduction instruction appended to opening turns while the profile is empty (spec Ç3a).
+const MEET_BLOCK: &str = "\n[PROFILE EMPTY] You don't know the user yet. Introduce \
+yourself briefly at the start of the conversation — ask their name, their background \
+with this topic, how they like to learn. At most 1-2 questions, not a form; don't \
+delay getting into the topic. If the user already introduced themselves, don't ask \
+again. What you learn will be written to their profile at session close.\n";
 
-/// Kapanış yanıtını (ad, içerik) çiftlerine ayır. Bölücü yoksa tüm yanıt
-/// tek "progress" dosyası sayılır — eski format geriye uyumlu kalır.
+/// Split the closing reply into (name, content) pairs. If there's no delimiter,
+/// the whole reply counts as a single "progress" file — keeps the old format backward compatible.
 pub fn split_files(reply: &str) -> Vec<(String, String)> {
     if !reply.contains(FILE_DELIM) {
         return vec![("progress".to_string(), clean_markdown_reply(reply))];
@@ -55,9 +56,9 @@ pub fn split_files(reply: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Kapanış çağrısının user-turn içeriği: üç dosyanın mevcut hali + üretim
-/// kuralları. progress her zaman; approach/curriculum canlı belge —
-/// ilk oturumda veya değiştiğinde üretilir (USTA.md "Kapsam Bekçiliği").
+/// User-turn content for the closing call: the current state of the three files +
+/// generation rules. progress is always generated; approach/curriculum are living
+/// documents — generated on the first session or when they change (TEACHING.md "Scope Guarding").
 pub fn closing_prompt(
     topic: &str,
     progress: Option<&str>,
@@ -70,102 +71,114 @@ pub fn closing_prompt(
     let c = curriculum.unwrap_or("(dosya henüz yok)");
     let pr = profile.unwrap_or("(dosya henüz yok)");
     format!(
-        "[OTURUM KAPANIYOR — DOSYA GÜNCELLEME]\n\
-         Görev: aşağıdaki dosyalardan güncellenmesi gerekenleri üret. Her dosyayı şu \
-         satırla başlat: `===DOSYA: <ad>===` (ad: progress | approach | curriculum | \
-         profile — örn. profil üretilecekse `===DOSYA: profile===`).\n\n\
-         Mevcut progress ({topic}):\n---\n{p}\n---\n\n\
-         Mevcut approach:\n---\n{a}\n---\n\n\
-         Mevcut curriculum:\n---\n{c}\n---\n\n\
-         Mevcut profil:\n---\n{pr}\n---\n\n\
-         Kurallar:\n\
-         - `progress` HER ZAMAN üretilir. Yapı: `# {topic} — İlerleme` başlığı + \
-         `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (KANITLA) / \
-         `## Geri çağırma soruları` (3-5 soru + tek satır cevap; oturmuş eskileri çıkar, \
-         bu oturumdan yenileri ekle) / `## Hata günlüğü` (`tip | kaç kez | son örnek`, \
-         3+ tekrar = GAP ADAYI) / `## İpucu merdiveni` / `## Hedef Durumu` — SADECE \
-         approach'ta `## Hedef` tanımlıysa yaz: kalan süre (BUGÜN bölümünden hesapla), \
-         harita ilerlemesi (%), tempo değerlendirmesi (yetişir / riskli / yetişmez + tek \
-         cümle gerekçe), ölçüm logu (`tarih | ölçüm | skor` — deneme sınavı, yazma \
-         değerlendirmesi vb.). Hedef yoksa bu bölümü hiç yazma.\n\
-         - `approach` yalnız ilk oturumda veya yaklaşım bu oturumda değiştiyse üretilir — \
-         canlı belge, _default.md'deki üç soruya cevap verir (pratik / çıktı / feedback). \
-         Hedefli öğrenmede approach `## Hedef` bölümü içerir: ne (sertifika/seviye/çıktı), \
-         sınav-değerlendirme tarihi (YYYY-MM-DD), geçme eşiği, sınav/değerlendirme formatı.\n\
-         - `curriculum` ilk oturumda TAM harita olarak çıkarılır (konu/alt-konu ağacı; her \
-         madde `görülmedi/görüldü/oturdu/derinleşildi` durumuyla; gerekiyorsa web \
-         araştırmasına dayan); sonraki oturumlarda yalnız durum değiştiyse üretilir. \
-         Kapsanmamış kritik madde haritada görünür kalmalı.\n\
-         - Dosyaları ŞİŞİRME: `Kapatılanlar` 20 maddeyi aşarsa en eskileri tek satırlık \
-         dönem özetine indir; `Hata günlüğü`nde çözülüp uzun süredir görülmeyen satırları \
-         kaldır; curriculum'da değişmeyen bölümleri olduğu gibi koru (yeniden üretme).\n\
-         - Oturumda kanıtı olmayanı ekleme; mevcut dosyalardaki geçerli bilgiyi koru \
-         (kullanıcı elle düzenlemiş olabilir — düzenlemesini ez-me).\n\
-         - `profile` YALNIZ kullanıcı hakkında bu oturumda yeni/değişen kalıcı bilgi \
-         öğrenildiyse üretilir: ad, geçmiş/deneyim, öğrenme tarzı, tercihler, \
-         tekrarlayan güçlü/zayıf yönler. KONU BİLGİSİ YAZILMAZ — 'X kavramını öğrendi' \
-         progress'in işidir; 'örnek üzerinden öğrenmeyi sever' profile girer. Mevcut \
-         profildeki geçerli bilgiyi KORU (kullanıcı elle düzenlemiş olabilir), ~1 sayfa \
-         tavan, yinelenenleri birleştir. Değişiklik yoksa bu dosyayı HİÇ üretme.\n\
-         - Bölücü satırları dışında açıklama/selamlama yazma; her dosya saf markdown."
+        "[SESSION CLOSING — FILE UPDATE]\n\
+         Task: produce whichever of the files below need updating. Start each file with \
+         this line: `===DOSYA: <name>===` (name: progress | approach | curriculum | \
+         profile — e.g. if generating the profile, `===DOSYA: profile===`).\n\n\
+         Current progress ({topic}):\n---\n{p}\n---\n\n\
+         Current approach:\n---\n{a}\n---\n\n\
+         Current curriculum:\n---\n{c}\n---\n\n\
+         Current profile:\n---\n{pr}\n---\n\n\
+         Rules:\n\
+         - `progress` is ALWAYS generated. Structure: `# {topic} — İlerleme` heading + \
+         `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (PROVE IT) / \
+         `## Geri çağırma soruları` (3-5 questions + one-line answer each; drop settled \
+         old ones, add new ones from this session) / `## Hata günlüğü` (`type | count | \
+         last example`, 3+ repeats = GAP CANDIDATE) / `## İpucu merdiveni` / `## Hedef \
+         Durumu` — write ONLY if approach defines a `## Hedef`: time remaining (compute \
+         from the TODAY section), map progress (%), pace assessment (on track / at risk \
+         / behind + one-line rationale), measurement log (`date | measurement | score` — \
+         mock exam, writing assessment, etc.). If there's no goal, don't write this \
+         section at all.\n\
+         - `approach` is generated only on the first session or if the approach changed \
+         this session — a living document that answers the three questions from \
+         _default.md (practice / output / feedback). For goal-directed learning, approach \
+         includes a `## Hedef` section: what (certificate/level/output), exam/assessment \
+         date (YYYY-MM-DD), passing threshold, exam/assessment format.\n\
+         - `curriculum` is extracted as the FULL map on the first session (topic/subtopic \
+         tree; each item with a `görülmedi/görüldü/oturdu/derinleşildi` status; draw on \
+         web research if needed); on later sessions it's generated only if a status \
+         changed. An uncovered critical item must stay visible on the map.\n\
+         - Don't let the files bloat: if `Kapatılanlar` exceeds 20 items, collapse the \
+         oldest into a one-line period summary; in `Hata günlüğü`, remove resolved \
+         entries not seen in a long time; keep curriculum sections that haven't changed \
+         as-is (don't regenerate them).\n\
+         - Don't add anything without evidence from this session; keep the valid \
+         information already in the existing files (the user may have hand-edited them \
+         — don't overwrite their edits).\n\
+         - `profile` is generated only if new/changed permanent information about the \
+         user was learned this session: name, background/experience, learning style, \
+         preferences, recurring strengths/weaknesses. NO TOPIC KNOWLEDGE — 'learned \
+         concept X' is progress's job; 'likes to learn from examples' goes in profile. \
+         KEEP the valid information already in the current profile (the user may have \
+         hand-edited it), ~1 page cap, merge duplicates. If nothing changed, don't \
+         generate this file at all.\n\
+         - Write no explanation/greeting outside the delimiter lines; every file is pure \
+         markdown."
     )
 }
 
-/// Açılış drilli turn'ü: progress varsa oturum başında Usta ilk sözü alır ve
-/// geri çağırma sorusu sorar (testing effect — USTA.md "Açılış Drilli" kuralı).
-/// main.rs'e bağlandığı yer: Task 3 (açılış drilli tetiği).
+/// Opening-drill turn: if progress exists, Usta speaks first at the start of the
+/// session and asks a recall question (testing effect — TEACHING.md "Opening Drill" rule).
+/// Where it hooks into main.rs: Task 3 (opening-drill trigger).
 pub fn opening_prompt(topic: &str, profile_generic: bool) -> String {
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     format!(
-        "[OTURUM AÇILIŞI — GERİ ÇAĞIRMA DRİLLİ]\n{meet_block}\
-         Konu: {topic}. Progress dosyandaki 'Geri çağırma soruları'ndan 2-3 tanesini seç \
-         ve bana SOR — cevaplarını verme, anlatma. Kısa tut: 2 dakikalık ısınma, sonra \
-         günün işine geçeriz. Progress'te soru yoksa seviyeme uygun 2 küçük hatırlama \
-         sorusu üret. Drill bitince haritadan tek cümle söyle: neredeyiz, sırada ne var \
-         (curriculum dosyan system prompt'ta)."
+        "[SESSION OPENING — RECALL DRILL]\n{meet_block}\
+         Topic: {topic}. Pick 2-3 questions from the 'Recall questions' section of your \
+         progress file and ASK me — don't answer them yourself, don't explain them. Keep \
+         it short: a 2-minute warm-up, then we move to today's work. If progress has no \
+         questions, come up with 2 small recall questions suited to my level. When the \
+         drill is done, say one sentence from the map: where we are, what's next (your \
+         curriculum file is in the system prompt)."
     )
 }
 
-/// Yeni konu tanışma turn'ü: yaklaşım + müfredat haritası henüz yok — Usta
-/// açık sohbetle türetir (USTA.md "Yeni Konu Tanışması"). Sabit form değil:
-/// kullanıcının söylediğinden türetilir, yön kullanıcıda kalır.
+/// New-topic introduction turn: no approach + curriculum map yet — Usta
+/// derives them through open conversation (TEACHING.md "New Topic Introduction"). Not a fixed
+/// form: it's derived from what the user says, direction stays with the user.
 pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool) -> String {
-    // Kullanıcının konu girişinde yazdığı ham metin tanışmanın İLK CEVABIDIR —
-    // slug'a indirgenip atılırsa model zaten söylenenleri yeniden sorar
-    // ("müşterime Coolify kuracağım, Fedora..." → "ne peşindesin?" faciası).
+    // The raw text the user typed when opening the topic IS the FIRST ANSWER of the
+    // introduction — if it's reduced to a slug and discarded, the model just re-asks
+    // what was already said ("I'll set up Coolify for my client, Fedora..." → "what are you after?" disaster).
     let intro_block = match intro {
         Some(s) if !s.trim().is_empty() => format!(
-            "\nKullanıcı konuyu açarken şunu yazdı — bu, tanışmanın İLK CEVABI sayılır:\n\
+            "\nWhen the user opened the topic, they wrote this — treat it as the FIRST \
+             ANSWER of the introduction:\n\
              \"{}\"\n\
-             Buradaki bilgiyi KULLAN: zaten söylediklerini tekrar sorma; söylediklerine \
-             bağlanarak başla ve yalnız eksik kalanları sor.\n",
+             USE this information: don't ask again what they already said; start by \
+             picking up on what they said and only ask about what's still missing.\n",
             s.trim()
         ),
         _ => String::new(),
     };
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     format!(
-        "[YENİ KONU — TANIŞMA]\n\
-         Konu: {topic}. Bu konunun yaklaşımı ve müfredat haritası henüz yok.\n{intro_block}{meet_block}\
-         Kısa, DOĞAL bir tanışma yap — bu bir form değil: tek mesajda en fazla iki soru \
-         sor, cevaba göre devam et; numaralı soru listesi basma. Öğren: ne yapmak/öğrenmek \
-         istiyor, elinde ne var. Keşif/hedef ayrımını KENDİN çıkar — kullanıcıya bu \
-         terimlerle sorma; söylediklerinden belli olmuyorsa jargonsuz tek soru: 'belirli \
-         bir tarihe/sınava mı hazırlanıyorsun, yoksa merakına mı bakıyoruz?'. Hedefliyse \
-         ne/tarih/eşik/format bilgisini sohbet içinde topla — approach'un `## Hedef` \
-         bölümüne yazılacak; harita resmi çerçeveden kurulur (sınav müfredatı / exam \
-         guide / CEFR) — web'de araştır. Alanı yeterince bilmiyorsan web'de araştır. \
-         Oturum kapanışında senden yaklaşım + TAM müfredat haritası İÇERİĞİ istenecek; \
-         dosyaları Usta kabuğu yazar, sen oturum içinde dosya yazmaya çalışma (Sert Kural 6) — \
-         tanışmayı buna göre derinleştir ama derse çevirme, kısa tut."
+        "[NEW TOPIC — INTRODUCTION]\n\
+         Topic: {topic}. This topic has no approach or curriculum map yet.\n{intro_block}{meet_block}\
+         Have a short, NATURAL introduction — this is not a form: ask at most two \
+         questions in a single message, continue based on the answer; don't dump a \
+         numbered question list. Find out: what they want to do/learn, what they \
+         already have. Whether this is exploration or goal-directed — infer it \
+         YOURSELF, don't ask the user using these terms; if it's not clear from what \
+         they said, ask one jargon-free question: 'are you preparing for a deadline or \
+         exam, or is this just out of curiosity?'. If it's goal-directed, gather the \
+         what/date/threshold/format info during the conversation — it will go into the \
+         approach's `## Hedef` section; the map is built from the official framework \
+         (exam syllabus / exam guide / CEFR) — research it on the web. If you don't \
+         know the domain well enough, research it on the web. At session close you'll \
+         be asked for the approach + FULL curriculum map CONTENT; the shell writes the \
+         files, don't try to write files yourself during the session (Hard Rule 6) — \
+         deepen the introduction accordingly but don't turn it into a lecture, keep it \
+         short."
     )
 }
 
-/// Model yanıtındaki olası ```-fence sargısını soy — dosyaya saf markdown yazılır.
+/// Strip any ```-fence wrapper from the model's reply — pure markdown is written to the file.
 pub fn clean_markdown_reply(reply: &str) -> String {
     let t = reply.trim();
     if let Some(rest) = t.strip_prefix("```") {
-        // İlk satır fence etiketi (```markdown vb.) — at.
+        // First line is the fence tag (```markdown etc.) — drop it.
         let body = rest.split_once('\n').map(|(_, b)| b).unwrap_or("");
         let body = body.trim_end();
         let body = body.strip_suffix("```").unwrap_or(body);
@@ -174,22 +187,22 @@ pub fn clean_markdown_reply(reply: &str) -> String {
     t.to_string()
 }
 
-/// Atomik yazım: tmp'ye yaz, üstüne taşı — yarım dosya asla kalmaz.
+/// Atomic write: write to tmp, then move it over the target — never leaves a half-written file.
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("dizin oluşturulamadı: {}", parent.display()))?;
+            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
     }
-    // Önceki sürümü yedekle — kötü model çıktısı tek kopyayla geri alınır.
+    // Back up the previous version — a bad model output can be restored from the single copy.
     if path.exists() {
         let bak = path.with_extension("md.bak");
         let _ = std::fs::copy(path, &bak);
     }
     let tmp = path.with_extension("md.tmp");
     std::fs::write(&tmp, content)
-        .with_context(|| format!("yazılamadı: {}", tmp.display()))?;
+        .with_context(|| format!("failed to write: {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
-        .with_context(|| format!("taşınamadı: {}", path.display()))?;
+        .with_context(|| format!("failed to move: {}", path.display()))?;
     Ok(())
 }
 
@@ -223,7 +236,7 @@ mod tests {
     #[test]
     fn closing_prompt_includes_pruning_rule() {
         let s = closing_prompt("rust", None, None, None, None);
-        assert!(s.contains("20 madde"));
+        assert!(s.contains("20 items"));
     }
 
     #[test]
@@ -286,16 +299,16 @@ mod tests {
         let s = closing_prompt("almanca", None, None, None, None);
         assert!(s.contains("## Hedef Durumu"));
         assert!(s.contains("## Hedef"));
-        assert!(s.contains("tempo"));
+        assert!(s.contains("pace assessment"));
     }
 
     #[test]
     fn closing_prompt_defines_profile_rules() {
-        let s = closing_prompt("rust", None, None, None, Some("MEVCUT PROFİL"));
+        let s = closing_prompt("rust", None, None, None, Some("CURRENT PROFILE"));
         assert!(s.contains("===DOSYA: profile==="));
-        assert!(s.contains("MEVCUT PROFİL"));
-        assert!(s.contains("KONU BİLGİSİ YAZILMAZ"));
-        assert!(s.contains("yalnız")); // yalnız yeni/değişen bilgi varsa üretilir
+        assert!(s.contains("CURRENT PROFILE"));
+        assert!(s.contains("NO TOPIC KNOWLEDGE"));
+        assert!(s.contains("only")); // generated only if new/changed info exists
     }
 
     #[test]
@@ -306,66 +319,66 @@ mod tests {
             false,
         );
         assert!(s.contains("coolify kuracağım"));
-        assert!(s.contains("İLK CEVABI"));
-        assert!(s.contains("tekrar sorma"));
-        // Intro yoksa blok hiç girmez.
+        assert!(s.contains("FIRST ANSWER"));
+        assert!(s.contains("don't ask again"));
+        // If there's no intro, the block doesn't appear at all.
         let bare = onboarding_prompt("hosting", None, false);
-        assert!(!bare.contains("İLK CEVABI"));
+        assert!(!bare.contains("FIRST ANSWER"));
     }
 
     #[test]
     fn onboarding_prompt_infers_goal_without_jargon_and_limits_questions() {
         let s = onboarding_prompt("almanca", None, false);
-        // Keşif/hedef terimleri kullanıcıya SORULMAZ — model kendisi çıkarır.
+        // Exploration/goal terms are NOT asked to the user — the model infers them itself.
         assert!(!s.contains("keşif mi"));
-        assert!(s.contains("KENDİN çıkar"));
-        // Jargonsuz yedek soru + soru limiti.
-        assert!(s.contains("tarihe/sınava"));
-        assert!(s.contains("en fazla iki soru"));
-        assert!(s.contains("Hedef"));
+        assert!(s.contains("infer it YOURSELF"));
+        // Jargon-free fallback question + question limit.
+        assert!(s.contains("a deadline or exam"));
+        assert!(s.contains("at most two questions"));
+        assert!(s.contains("## Hedef"));
     }
 
     #[test]
     fn opening_prompt_embeds_topic_and_asks_to_quiz() {
         let s = opening_prompt("rust", false);
         assert!(s.contains("rust"));
-        assert!(s.contains("GERİ ÇAĞIRMA DRİLLİ"));
-        assert!(s.contains("SOR"));
+        assert!(s.contains("RECALL DRILL"));
+        assert!(s.contains("ASK"));
     }
 
     #[test]
     fn onboarding_prompt_embeds_topic_and_open_conversation() {
         let s = onboarding_prompt("linux-guvenlik", None, false);
         assert!(s.contains("linux-guvenlik"));
-        assert!(s.contains("TANIŞMA"));
+        assert!(s.contains("INTRODUCTION"));
         assert!(s.contains("form"));
     }
 
     #[test]
     fn onboarding_prompt_does_not_tell_model_it_writes_files() {
-        // Sert Kural 6: modelin dosya yazma aracı yok — kapanış içeriğini üretir,
-        // dosyayı kabuk yazar. Prompt modeli yazma denemesine itmemeli.
+        // Hard Rule 6: the model has no file-writing tool — it produces the closing
+        // content, the shell writes the file. The prompt must not push the model to try writing.
         let s = onboarding_prompt("rust", None, false);
-        assert!(!s.contains("dosyalara yazacaksın"));
-        assert!(s.contains("kabuğu yazar"));
+        assert!(!s.contains("you will write files"));
+        assert!(s.contains("shell writes"));
     }
 
     #[test]
     fn opening_prompt_mentions_curriculum_position() {
         let s = opening_prompt("rust", false);
-        assert!(s.contains("harita"));
+        assert!(s.contains("map"));
     }
 
     #[test]
     fn opening_prompts_include_meet_block_only_when_profile_generic() {
         let on = onboarding_prompt("rust", None, true);
-        assert!(on.contains("[PROFİL BOŞ]"));
-        assert!(on.contains("1-2 soru"));
-        assert!(!onboarding_prompt("rust", None, false).contains("[PROFİL BOŞ]"));
+        assert!(on.contains("[PROFILE EMPTY]"));
+        assert!(on.contains("1-2 questions"));
+        assert!(!onboarding_prompt("rust", None, false).contains("[PROFILE EMPTY]"));
 
         let op = opening_prompt("rust", true);
-        assert!(op.contains("[PROFİL BOŞ]"));
-        assert!(!opening_prompt("rust", false).contains("[PROFİL BOŞ]"));
+        assert!(op.contains("[PROFILE EMPTY]"));
+        assert!(!opening_prompt("rust", false).contains("[PROFILE EMPTY]"));
     }
 
     #[test]
@@ -392,7 +405,7 @@ mod tests {
         let target = base.join("derin/dizin/rust.md");
         write_atomic(&target, "içerik").unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "içerik");
-        // tmp dosyası kalmamalı.
+        // No tmp file should remain.
         assert!(!target.with_extension("md.tmp").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -406,7 +419,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let target = base.join("rust.md");
         write_atomic(&target, "ilk sürüm").unwrap();
-        assert!(!target.with_extension("md.bak").exists()); // ilk yazımda yedek yok
+        assert!(!target.with_extension("md.bak").exists()); // no backup on the first write
         write_atomic(&target, "ikinci sürüm").unwrap();
         assert_eq!(
             std::fs::read_to_string(target.with_extension("md.bak")).unwrap(),

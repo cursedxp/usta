@@ -1,22 +1,23 @@
-//! Repo-kökü brain dosyalarını derleme-zamanında gömer — `usta init`'in global
-//! kuruluma yazacağı ilk-kez varsayılanlar. Canonical kaynak repo kökündeki
-//! `USTA.md` / `learner/` / `approaches/` dosyalarıdır; bu dosya sadece onları
-//! `include_str!` ile pakete taşır.
+//! Embeds repo-root brain files at compile time — the first-time defaults
+//! that `usta init` writes to the global install. The canonical source is the
+//! `USTA.md` / `learner/` / `approaches/` files at the repo root; this file
+//! just carries them into the package via `include_str!`.
 
-/// Dosyanın sahibi kim?
-/// - `Code`: canonical kaynak repo — global kopya binary'deki gömülü içerikle
-///   her açılışta senkron tutulur (repo'da düzenle → rebuild → yayılır).
-///   Global kopyayı elle düzenleme, sonraki açılışta ezilir.
-/// - `User`: ilk-kez yazılır, sonrası kullanıcınındır (profil, katalog) —
-///   asla üstüne yazılmaz.
+/// Who owns the file?
+/// - `Code`: canonical source repo — the global copy is kept in sync with the
+///   embedded content in the binary on every startup (edit in repo → rebuild
+///   → propagates). Don't edit the global copy by hand, it gets overwritten
+///   on the next startup.
+/// - `User`: written once, then it's the user's (profile, catalog) — never
+///   overwritten again.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ownership {
     Code,
     User,
 }
 
-/// `(proje-göreceli yol, içerik, sahiplik)` üçlüleri — global köke
-/// (`~/.config/usta`) birebir bu yollarla yazılır.
+/// `(project-relative path, content, ownership)` triples — written verbatim
+/// to the global root (`~/.config/usta`) using these paths.
 pub fn global_defaults() -> Vec<(&'static str, &'static str, Ownership)> {
     vec![
         ("USTA.md", include_str!("../USTA.md"), Ownership::Code),
@@ -62,9 +63,9 @@ mod tests {
 
     #[test]
     fn core_behavior_is_code_owned_learner_is_user_owned() {
-        // Code: USTA (indeks) + davranış dosyaları + approaches/*.
-        // User: USER.md (kök) + learner/index.md — `learner/` öneki artık
-        // sahiplik belirlemez (USER.md kökte ama User-owned).
+        // Code: USTA (index) + behavior files + approaches/*.
+        // User: USER.md (root) + learner/index.md — the `learner/` prefix no
+        // longer determines ownership (USER.md is at root but User-owned).
         const USER_OWNED: &[&str] = &["USER.md", "learner/index.md"];
         for (rel, _, ownership) in global_defaults() {
             let expected = if USER_OWNED.contains(&rel) {
@@ -76,10 +77,10 @@ mod tests {
         }
     }
 
-    /// Gömülü default profil (USER.md) kişisel isim TAŞIMAMALI — uygulama
-    /// herkese açık, yeni kullanıcı yabancı bir isimle karşılanmamalı (TUI
-    /// selamı bu değeri okur). Regresyon bekçisi: birileri seed'e tekrar isim
-    /// eklerse kırılır.
+    /// The embedded default profile (USER.md) must NOT carry a personal
+    /// name — the app is public, a new user shouldn't be greeted with a
+    /// stranger's name (the TUI greeting reads this value). Regression guard:
+    /// breaks if someone adds a name back to the seed.
     #[test]
     fn shipped_profile_carries_no_personal_name() {
         let profile = global_defaults()

@@ -1,8 +1,9 @@
-//! Kullanıcı girdisi: rustyline ayrı thread'de koşar, satırlar tokio kanalına
-//! akar. Böylece ana döngü girdi beklerken watcher olaylarını da işleyebilir
-//! (gerçek proaktif feedback). `ready` el-sıkışması, prompt'un Usta yanıtının
-//! ORTASINA basılmasını önler: ana döngü bir turn'ü bitirince `()` yollar,
-//! thread ancak o zaman yeni `sen> ` çizer.
+//! User input: rustyline runs in a separate thread, lines flow into a tokio
+//! channel. This way the main loop can also handle watcher events while
+//! waiting for input (real proactive feedback). The `ready` handshake prevents
+//! the prompt from being printed in the MIDDLE of Usta's response: the main
+//! loop sends `()` when it finishes a turn, only then does the thread draw a
+//! new `sen> `.
 
 use std::sync::mpsc::Receiver as ReadyReceiver;
 use std::thread;
@@ -11,15 +12,16 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
-/// Girdi olayı: bir satır veya kapanış isteği (Ctrl-C / Ctrl-D / girdi hatası).
+/// Input event: a line, or a shutdown request (Ctrl-C / Ctrl-D / input error).
 pub enum InputEvent {
     Line(String),
     Eof,
 }
 
-/// Girdi thread'ini başlat. Her `ready_rx` sinyalinden sonra TEK satır okur ve
-/// kanala yollar; ana döngü işleyip yeni `ready` gönderene dek tekrar okumaz.
-/// `ready_tx` düşerse (ana döngü bitti) thread sessizce kapanır.
+/// Start the input thread. After each `ready_rx` signal it reads a SINGLE
+/// line and sends it to the channel; it doesn't read again until the main
+/// loop processes it and sends a new `ready`.
+/// If `ready_tx` is dropped (main loop ended), the thread closes silently.
 pub fn spawn(
     prompt: &'static str,
     ready_rx: ReadyReceiver<()>,
@@ -43,7 +45,7 @@ pub fn spawn(
                         return;
                     }
                 }
-                // Ctrl-D / Ctrl-C → kapanış sinyali, thread biter.
+                // Ctrl-D / Ctrl-C → shutdown signal, thread ends.
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => {
                     let _ = tx.send(InputEvent::Eof);
                     return;
