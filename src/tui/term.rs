@@ -5,6 +5,7 @@
 use std::io::Stdout;
 
 use anyhow::Result;
+use crossterm::event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
@@ -23,6 +24,14 @@ pub fn setup() -> Result<Tui> {
     // Enter sayılıp mesajı bölmez. Desteklemeyen terminalde sessizce geçilir
     // (eski davranışa düşer).
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+    // Kitty keyboard protocol: lets modern terminals disambiguate Shift+Enter / Alt+Enter
+    // from bare Enter. Unsupported terminals are skipped silently (Ctrl+J still works).
+    if matches!(crossterm::terminal::supports_keyboard_enhancement(), Ok(true)) {
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -37,6 +46,7 @@ pub fn setup() -> Result<Tui> {
 
 /// Raw mode'u kapat — idempotent, hata yutar (kapanış yolunda panik yok).
 pub fn restore() {
+    let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     let _ = crossterm::terminal::disable_raw_mode();
 }

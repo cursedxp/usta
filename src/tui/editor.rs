@@ -46,6 +46,17 @@ impl InputBox {
         {
             return Action::Exit;
         }
+        // Newline insert (multi-line input): Shift+Enter / Alt+Enter (modern terminals via
+        // kitty keyboard protocol) or Ctrl+J (LF — universal fallback, works everywhere).
+        // Bare Enter still submits.
+        let newline = (matches!(key.code, KeyCode::Enter)
+                && key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT))
+            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('j'));
+        if newline {
+            self.cursor = None;
+            self.input.handle(tui_input::InputRequest::InsertChar('\n'));
+            return Action::None;
+        }
         match key.code {
             KeyCode::Enter => {
                 let line = self.input.value().trim().to_string();
@@ -296,5 +307,36 @@ mod tests {
         type_str(&mut b, "çğşü");
         b.handle_key(code(KeyCode::Backspace));
         assert_eq!(b.value(), "çğş");
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline_not_submit() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "a");
+        let se = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert!(matches!(b.handle_key(se), Action::None));
+        type_str(&mut b, "b");
+        assert_eq!(b.value(), "a\nb");
+        match b.handle_key(code(KeyCode::Enter)) {
+            Action::Submit(s) => assert_eq!(s, "a\nb"),
+            o => panic!("Submit bekleniyordu: {o:?}"),
+        }
+    }
+
+    #[test]
+    fn ctrl_j_inserts_newline() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "x");
+        let cj = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert!(matches!(b.handle_key(cj), Action::None));
+        assert_eq!(b.value(), "x\n");
+    }
+
+    #[test]
+    fn alt_enter_inserts_newline() {
+        let mut b = InputBox::new();
+        let ae = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
+        assert!(matches!(b.handle_key(ae), Action::None));
+        assert_eq!(b.value(), "\n");
     }
 }
