@@ -558,7 +558,7 @@ pub async fn run(
                             // Borrow care: read the last reply BEFORE any &mut session borrow.
                             let last = crate::last_assistant_text(&session);
                             match crate::show_request(arg, last.as_deref()) {
-                                None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show <topic>")?,
+                                None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
                                 Some(req) => {
                                     match ask_live(&mut tui, &mut editor, &mut events, backend,
                                                    &crate::visual::visual_system(),

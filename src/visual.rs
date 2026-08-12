@@ -11,7 +11,6 @@ const PLACEHOLDER_ANIME: &str = "/*__ANIME__*/";
 
 /// Validate the scene JSON and inject anime.js + scenes into the skeleton.
 /// Errors: not JSON, not an array, empty array, any scene missing a `caption`.
-#[allow(dead_code)]
 pub fn build_visual_html(scenes_json: &str) -> Result<String> {
     let v: serde_json::Value =
         serde_json::from_str(scenes_json).context("scene data is not valid JSON")?;
@@ -26,28 +25,21 @@ pub fn build_visual_html(scenes_json: &str) -> Result<String> {
     }
     Ok(SKELETON
         .replacen(PLACEHOLDER_ANIME, ANIME, 1)
-        .replacen(PLACEHOLDER_SCENES, &v.to_string(), 1))
+        .replacen(PLACEHOLDER_SCENES, &v.to_string().replace("</", "<\\/"), 1))
 }
 
 /// `/show` → Some(None) (visualize the last explanation); `/show <topic>` →
 /// Some(Some(topic)). Anything else → None. Slash lines never reach the LLM session.
-#[allow(dead_code)]
 pub fn parse_show_command(line: &str) -> Option<Option<String>> {
     let t = line.trim();
     if t == "/show" {
         return Some(None);
     }
     let rest = t.strip_prefix("/show ")?;
-    let topic = rest.trim();
-    if topic.is_empty() {
-        Some(None)
-    } else {
-        Some(Some(topic.to_string()))
-    }
+    Some(Some(rest.trim().to_string()))
 }
 
 /// System prompt for the visual mini-session: scene-JSON contract + pedagogy.
-#[allow(dead_code)]
 pub fn visual_system() -> String {
     "You produce animation scenes for a visual explainer. Output ONLY a JSON array \
      of scenes — no prose, no markdown fences, no HTML.\n\
@@ -75,7 +67,6 @@ pub fn visual_system() -> String {
 }
 
 /// Target file: `.usta/visuals/<topic>/<timestamp>-<concept-slug>.html`.
-#[allow(dead_code)]
 pub fn visual_path(project_root: &std::path::Path, topic: &str, concept: &str) -> std::path::PathBuf {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
     let slug = crate::slugify_topic(concept);
@@ -86,7 +77,6 @@ pub fn visual_path(project_root: &std::path::Path, topic: &str, concept: &str) -
 }
 
 /// Best-effort browser open; false = caller should just print the path.
-#[allow(dead_code)]
 pub fn open_in_browser(path: &std::path::Path) -> bool {
     let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     std::process::Command::new(cmd)
@@ -142,6 +132,8 @@ mod tests {
     fn skeleton_is_selfcontained_player() {
         assert!(SKELETON.contains(PLACEHOLDER_SCENES));
         assert!(SKELETON.contains(PLACEHOLDER_ANIME));
+        assert_eq!(SKELETON.matches(PLACEHOLDER_SCENES).count(), 1);
+        assert_eq!(SKELETON.matches(PLACEHOLDER_ANIME).count(), 1);
         assert!(SKELETON.contains("prefers-color-scheme"));
         for marker in ["id=\"prev\"", "id=\"play\"", "id=\"next\"", "id=\"caption\"", "<svg"] {
             assert!(SKELETON.contains(marker), "skeleton missing {marker}");
@@ -162,6 +154,16 @@ mod tests {
         let p = std::env::temp_dir().join("usta-visual-demo.html");
         std::fs::write(&p, html).unwrap();
         println!("demo: {}", p.display());
+    }
+
+    #[test]
+    fn build_escapes_script_closing_tag_in_captions() {
+        let json = r#"[{"caption":"the </script> tag closes it","ops":[]}]"#;
+        let html = build_visual_html(json).unwrap();
+        // The raw breakout sequence must not survive into the document …
+        assert!(!html.contains("</script> tag closes it"));
+        // … it is escaped instead.
+        assert!(html.contains("<\\/script> tag closes it"));
     }
 
     #[test]

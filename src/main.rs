@@ -245,7 +245,7 @@ async fn run_plain_loop(
                     if let Some(arg) = visual::parse_show_command(&line) {
                         let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                         match show_request(arg, last_assistant_text(session).as_deref()) {
-                            None => ui::notice("nothing to visualize yet — explain something first, or use /show <topic>"),
+                            None => ui::notice("nothing to visualize yet — explain something first, or use /show [topic]"),
                             Some(req) => {
                                 match ask_usta(backend, &visual::visual_system(), &[Message::user(req.as_str())]).await {
                                     Ok(reply) => {
