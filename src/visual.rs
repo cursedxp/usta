@@ -104,6 +104,48 @@ pub fn open_in_browser(path: &std::path::Path) -> bool {
         .is_ok()
 }
 
+/// Recognizes `[[show: <topic>]]` only when trimmed to exactly this shape (no
+/// leading/trailing text on the same line); case-insensitive on `show`.
+fn match_marker_line(line: &str) -> Option<String> {
+    let t = line.trim();
+    if t.len() < 4 || !t.starts_with("[[") || !t.ends_with("]]") {
+        return None;
+    }
+    let inner = t[2..t.len() - 2].trim_start();
+    if inner.len() < 4 || !inner[..4].eq_ignore_ascii_case("show") {
+        return None;
+    }
+    let rest = inner[4..].trim_start();
+    let rest = rest.strip_prefix(':')?;
+    let topic = rest.trim();
+    if topic.is_empty() {
+        return None;
+    }
+    Some(topic.to_string())
+}
+
+/// Extracts a natural-language `[[show: <topic>]]` trigger from a reply
+/// (Görev 4). Recognized ONLY as the reply's own LAST line (trailing
+/// whitespace on that line tolerated); case-insensitive on `show`. If the
+/// last line qualifies, EVERY standalone marker line in the reply is
+/// stripped (not just the last), and the LAST one's topic wins — this is
+/// what makes "two markers" collapse into a single trigger. A `[[show:`
+/// that isn't alone on the reply's final line (mid-text, or on an earlier
+/// line only) is left completely untouched: returns the text unchanged and
+/// `None`. Callers must run this BEFORE displaying/recording a reply — the
+/// marker never reaches the screen or session history.
+pub fn extract_show_marker(reply: &str) -> (String, Option<String>) {
+    let lines: Vec<&str> = reply.lines().collect();
+    let Some(last) = lines.last() else {
+        return (reply.to_string(), None);
+    };
+    let Some(topic) = match_marker_line(last) else {
+        return (reply.to_string(), None);
+    };
+    let kept: Vec<&str> = lines.iter().filter(|l| match_marker_line(l).is_none()).copied().collect();
+    (kept.join("\n").trim_end().to_string(), Some(topic))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +270,70 @@ mod tests {
         let s = p.to_string_lossy();
         assert!(s.starts_with("/proj/.usta/visuals/rust/"));
         assert!(s.ends_with(".html") && s.contains("how-ownership-works"));
+    }
+
+    // --- extract_show_marker (Görev 4) ---------------------------------
+
+    #[test]
+    fn extract_show_marker_strips_trailing_marker_and_returns_topic() {
+        let (clean, topic) = extract_show_marker("TCP is a handshake.\n[[show: tcp handshake]]");
+        assert_eq!(clean, "TCP is a handshake.");
+        assert_eq!(topic, Some("tcp handshake".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_no_marker_returns_unchanged() {
+        let text = "Just a plain explanation, nothing more.";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+    }
+
+    #[test]
+    fn extract_show_marker_is_case_insensitive_on_show() {
+        let (clean, topic) = extract_show_marker("Here it is.\n[[SHOW: DNS records]]");
+        assert_eq!(clean, "Here it is.");
+        assert_eq!(topic, Some("DNS records".to_string()));
+
+        let (clean2, topic2) = extract_show_marker("Here it is.\n[[Show: dns]]");
+        assert_eq!(clean2, "Here it is.");
+        assert_eq!(topic2, Some("dns".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_mid_text_not_last_line_is_untouched() {
+        // The marker text appears, but NOT alone on the final line — left as-is.
+        let text = "Check this [[show: tag]] inline mention out.";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+
+        // Marker-shaped line exists, but it's not the LAST line — untouched.
+        let text2 = "intro\n[[show: topic]]\nmore text after the marker";
+        let (clean2, topic2) = extract_show_marker(text2);
+        assert_eq!(clean2, text2);
+        assert_eq!(topic2, None);
+    }
+
+    #[test]
+    fn extract_show_marker_multiple_markers_last_wins_all_stripped() {
+        let text = "part one\n[[show: cats]]\npart two\n[[show: dogs]]";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, "part one\npart two");
+        assert_eq!(topic, Some("dogs".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_tolerates_trailing_whitespace_on_marker_line() {
+        let (clean, topic) = extract_show_marker("done explaining\n[[show: dns]]   ");
+        assert_eq!(clean, "done explaining");
+        assert_eq!(topic, Some("dns".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_turkish_topic() {
+        let (clean, topic) = extract_show_marker("işte bu.\n[[show: linux dosya ağacı]]");
+        assert_eq!(clean, "işte bu.");
+        assert_eq!(topic, Some("linux dosya ağacı".to_string()));
     }
 }

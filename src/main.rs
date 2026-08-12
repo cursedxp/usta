@@ -200,9 +200,11 @@ async fn run_plain_loop(
         recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
-                print_reply(&reply, backend.context_window());
-                recorder.assistant(&reply.text);
-                session.push_assistant(reply.text);
+                let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
+                recorder.assistant(&clean);
+                session.push_assistant(clean);
+                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
             }
             // Drill failed → don't block the session, fall silently back into normal flow.
             Err(e) => ui::warn(&format!("opening drill skipped: {e}")),
@@ -214,9 +216,11 @@ async fn run_plain_loop(
         recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
-                print_reply(&reply, backend.context_window());
-                recorder.assistant(&reply.text);
-                session.push_assistant(reply.text);
+                let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
+                recorder.assistant(&clean);
+                session.push_assistant(clean);
+                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
             }
             Err(e) => ui::warn(&format!("introduction turn skipped: {e}")),
         }
@@ -246,30 +250,7 @@ async fn run_plain_loop(
                         let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                         match show_request(arg, last_assistant_text(session).as_deref()) {
                             None => ui::notice("nothing to visualize yet — explain something first, or use /show [topic]"),
-                            Some(req) => {
-                                match ask_usta(backend, &visual::visual_system(), &[Message::user(req.as_str())]).await {
-                                    Ok(reply) => {
-                                        let json = progress::clean_markdown_reply(&reply.text);
-                                        match visual::build_visual_html(&json) {
-                                            Ok(html) => {
-                                                let path = visual::visual_path(project_root, topic, &concept);
-                                                if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-                                                match std::fs::write(&path, html) {
-                                                    Ok(()) => {
-                                                        let opened = visual::open_in_browser(&path);
-                                                        ui::notice(&format!("visual saved: {}{}", path.display(),
-                                                            if opened { "" } else { " (open it in your browser)" }));
-                                                    }
-                                                    Err(e) => ui::warn(&format!("error: {e}")),
-                                                }
-                                            }
-                                            Err(e) => ui::warn(&format!("visual generation failed ({e}) — try /show again")),
-                                        }
-                                    }
-                                    Err(e) => ui::warn(&format!("error: {e}")),
-                                }
-                                backend.reset_session(); // mini-session must not leak into the CLI session (slug parity)
-                            }
+                            Some(req) => run_visual_generation(backend, project_root, topic, &concept, &req).await,
                         }
                         let _ = ready_tx.send(());
                         continue;
@@ -282,11 +263,13 @@ async fn run_plain_loop(
                         recorder.user(&line);
                         match ask_usta(backend, &session.system, session.history()).await {
                             Ok(reply) => {
-                                print_reply(&reply, backend.context_window());
+                                let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+                                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
                                 let tokens = reply.context_tokens;
-                                recorder.assistant(&reply.text);
-                                session.push_assistant(reply.text);
+                                recorder.assistant(&clean);
+                                session.push_assistant(clean);
                                 maybe_compact(backend, session, project_root, tokens).await;
+                                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
                             }
                             Err(e) => ui::warn(&format!("error: {e}")),
                         }
@@ -328,9 +311,10 @@ async fn run_plain_loop(
                             // its own presentation language (print_reply: web + gauge).
                             Ok(FileFeedback::Sessiz) => {}
                             Ok(FileFeedback::Bildirim(m)) => println!("{m}"),
-                            Ok(FileFeedback::Yanit { tokens, reply }) => {
-                                print_reply(&reply, backend.context_window());
+                            Ok(FileFeedback::Yanit { tokens, reply, show_topic }) => {
+                                print_reply(&reply.text, reply.web, reply.context_tokens, backend.context_window());
                                 maybe_compact(backend, session, project_root, tokens).await;
+                                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
                             }
                             // Binary/deleted file etc. — pass silently, the REPL survives.
                             Err(e) => ui::warn(&format!("file feedback skipped: {}: {e}", path.display())),
@@ -1159,9 +1143,13 @@ pub(crate) enum FileFeedback {
     /// (plain: `println!`, TUI: `page_notice`).
     Bildirim(String),
     /// Actual reply — context token count + full `Reply` (the web flag is preserved).
+    /// `reply.text` is already CLEAN (marker stripped, see `visual::extract_show_marker`
+    /// in this function) — the caller prints it as-is. `show_topic` carries the
+    /// marker's topic, if any (Görev 4): the caller runs the visual flow AFTER printing.
     Yanit {
         tokens: Option<u64>,
         reply: backend::Reply,
+        show_topic: Option<String>,
     },
 }
 
@@ -1205,15 +1193,74 @@ pub(crate) async fn handle_file_change(
     recorder.user(&injected);
     let reply = ask_usta(backend, &session.system, session.history()).await?;
     let tokens = reply.context_tokens;
-    recorder.assistant(&reply.text);
-    session.push_assistant(reply.text.clone());
-    Ok(FileFeedback::Yanit { tokens, reply })
+    // Marker (Görev 4) is stripped BEFORE recording/pushing — history never
+    // carries `[[show: ...]]`, only the clean text does.
+    let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+    recorder.assistant(&clean);
+    session.push_assistant(clean.clone());
+    let display_reply = backend::Reply { text: clean, web: reply.web, context_tokens: reply.context_tokens };
+    Ok(FileFeedback::Yanit { tokens, reply: display_reply, show_topic })
 }
 
-/// Hand off Usta's reply to the presentation layer.
-fn print_reply(reply: &backend::Reply, window: u64) {
-    ui::print_usta_reply(&reply.text, reply.web);
-    ui::context_gauge(reply.context_tokens, window);
+/// Hand off Usta's reply to the presentation layer. Takes the already-CLEAN
+/// text (marker stripped by the caller via `visual::extract_show_marker`) —
+/// this function never sees a `[[show: ...]]` marker.
+fn print_reply(text: &str, web: bool, context_tokens: Option<u64>, window: u64) {
+    ui::print_usta_reply(text, web);
+    ui::context_gauge(context_tokens, window);
+}
+
+/// Runs the `/show` generation flow (mini-session → HTML → browser open).
+/// Shared by the explicit `/show <topic>` command and the auto-triggered
+/// `[[show: ...]]` marker (Görev 4) — both get the SAME guarantees: isolated
+/// mini-session, `backend.reset_session()` on every exit path (success, error,
+/// invalid JSON), and the same "try /show again" notice on bad JSON.
+async fn run_visual_generation(backend: &mut Backend, project_root: &Path, topic: &str, concept: &str, request: &str) {
+    match ask_usta(backend, &visual::visual_system(), &[Message::user(request)]).await {
+        Ok(reply) => {
+            let json = progress::clean_markdown_reply(&reply.text);
+            match visual::build_visual_html(&json) {
+                Ok(html) => {
+                    let path = visual::visual_path(project_root, topic, concept);
+                    if let Some(dir) = path.parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    match std::fs::write(&path, html) {
+                        Ok(()) => {
+                            let opened = visual::open_in_browser(&path);
+                            ui::notice(&format!(
+                                "visual saved: {}{}",
+                                path.display(),
+                                if opened { "" } else { " (open it in your browser)" }
+                            ));
+                        }
+                        Err(e) => ui::warn(&format!("error: {e}")),
+                    }
+                }
+                Err(e) => ui::warn(&format!("visual generation failed ({e}) — try /show again")),
+            }
+        }
+        Err(e) => ui::warn(&format!("error: {e}")),
+    }
+    backend.reset_session(); // mini-session must not leak into the CLI session (slug parity)
+}
+
+/// After a normal reply has been displayed and recorded, run the visual flow
+/// if `[[show: ...]]` was found in it (Görev 4). No-op when `show_topic` is
+/// `None`. Reuses `show_request` with the just-pushed clean reply as context —
+/// same composition the explicit `/show <topic>` command uses.
+async fn trigger_auto_visual(
+    backend: &mut Backend,
+    session: &Session,
+    project_root: &Path,
+    topic: &str,
+    show_topic: Option<String>,
+) {
+    let Some(t) = show_topic else { return };
+    if let Some(req) = show_request(Some(t.clone()), last_assistant_text(session).as_deref()) {
+        ui::notice(&format!("visualizing: {t}…"));
+        run_visual_generation(backend, project_root, topic, &t, &req).await;
+    }
 }
 
 #[cfg(test)]

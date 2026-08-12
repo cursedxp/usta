@@ -206,6 +206,91 @@ async fn ask_live(
     }
 }
 
+/// TUI sibling of main.rs's `run_visual_generation` — same guarantees: isolated
+/// mini-session, `backend.reset_session()` on every exit path (success, cancel,
+/// error, invalid JSON), Esc-cancellable via `ask_live`, same "try /show again"
+/// notice on bad JSON. Shared by the explicit `/show <topic>` command and the
+/// auto-triggered `[[show: ...]]` marker (Görev 4).
+#[allow(clippy::too_many_arguments)]
+async fn run_visual_generation(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    project_root: &Path,
+    topic: &str,
+    concept: &str,
+    request: &str,
+    last_tokens: Option<u64>,
+) -> Result<()> {
+    match ask_live(
+        tui,
+        editor,
+        events,
+        backend,
+        &crate::visual::visual_system(),
+        &[Message::user(request)],
+        last_tokens,
+    )
+    .await
+    {
+        Ok(AskOutcome::Reply(reply)) => {
+            let json = crate::progress::clean_markdown_reply(&reply.text);
+            match crate::visual::build_visual_html(&json) {
+                Ok(html) => {
+                    let path = crate::visual::visual_path(project_root, topic, concept);
+                    if let Some(dir) = path.parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    match std::fs::write(&path, html) {
+                        Ok(()) => {
+                            let opened = crate::visual::open_in_browser(&path);
+                            page_notice(
+                                tui,
+                                &format!(
+                                    "visual saved: {}{}",
+                                    path.display(),
+                                    if opened { "" } else { " (open it in your browser)" }
+                                ),
+                            )?;
+                        }
+                        Err(e) => page_notice(tui, &format!("error: {e}"))?,
+                    }
+                }
+                Err(e) => page_notice(tui, &format!("visual generation failed ({e}) — try /show again"))?,
+            }
+        }
+        Ok(AskOutcome::Cancelled) => page_notice(tui, "visual generation cancelled")?,
+        Err(e) => page_notice(tui, &format!("error: {e}"))?,
+    }
+    backend.reset_session(); // all paths — slug parity
+    Ok(())
+}
+
+/// After a normal reply has been displayed and recorded, run the visual flow
+/// if `[[show: ...]]` was found in it (Görev 4). No-op when `show_topic` is
+/// `None`. Reuses `show_request` with the just-pushed clean reply as context —
+/// same composition the explicit `/show <topic>` command uses.
+#[allow(clippy::too_many_arguments)]
+async fn trigger_auto_visual(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    session: &Session,
+    project_root: &Path,
+    topic: &str,
+    show_topic: Option<String>,
+    last_tokens: Option<u64>,
+) -> Result<()> {
+    let Some(t) = show_topic else { return Ok(()) };
+    if let Some(req) = crate::show_request(Some(t.clone()), crate::last_assistant_text(session).as_deref()) {
+        page_notice(tui, &format!("visualizing: {t}…"))?;
+        run_visual_generation(tui, editor, events, backend, project_root, topic, &t, &req, last_tokens).await?;
+    }
+    Ok(())
+}
+
 /// Prints the identity welcome and reads the topic from the input box. `None` =
 /// the user quit without giving a topic (Ctrl-C/D). Slug resolution is left to
 /// the caller. Watcher events are NOT consumed here during topic entry — only
@@ -519,10 +604,12 @@ pub async fn run(
     {
         Ok(AskOutcome::Reply(reply)) => {
             last_tokens = reply.context_tokens;
+            let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
             let w = current_width(&tui);
-            page_reply(&mut tui, &reply.text, w)?;
-            recorder.assistant(&reply.text);
-            session.push_assistant(reply.text);
+            page_reply(&mut tui, &clean, w)?;
+            recorder.assistant(&clean);
+            session.push_assistant(clean);
+            trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
         }
         Ok(AskOutcome::Cancelled) => {
             backend.reset_session();
@@ -576,31 +663,7 @@ pub async fn run(
                             match crate::show_request(arg, last.as_deref()) {
                                 None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
                                 Some(req) => {
-                                    match ask_live(&mut tui, &mut editor, &mut events, backend,
-                                                   &crate::visual::visual_system(),
-                                                   &[Message::user(req.as_str())], last_tokens).await {
-                                        Ok(AskOutcome::Reply(reply)) => {
-                                            let json = crate::progress::clean_markdown_reply(&reply.text);
-                                            match crate::visual::build_visual_html(&json) {
-                                                Ok(html) => {
-                                                    let path = crate::visual::visual_path(project_root, &topic, &concept);
-                                                    if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-                                                    match std::fs::write(&path, html) {
-                                                        Ok(()) => {
-                                                            let opened = crate::visual::open_in_browser(&path);
-                                                            page_notice(&mut tui, &format!("visual saved: {}{}", path.display(),
-                                                                if opened { "" } else { " (open it in your browser)" }))?;
-                                                        }
-                                                        Err(e) => page_notice(&mut tui, &format!("error: {e}"))?,
-                                                    }
-                                                }
-                                                Err(e) => page_notice(&mut tui, &format!("visual generation failed ({e}) — try /show again"))?,
-                                            }
-                                        }
-                                        Ok(AskOutcome::Cancelled) => page_notice(&mut tui, "visual generation cancelled")?,
-                                        Err(e) => page_notice(&mut tui, &format!("error: {e}"))?,
-                                    }
-                                    backend.reset_session(); // all paths — slug parity
+                                    run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
                                 }
                             }
                             continue;
@@ -616,11 +679,13 @@ pub async fn run(
                         ).await {
                             Ok(AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
+                                let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
                                 let w = current_width(&tui);
-                                page_reply(&mut tui, &reply.text, w)?;
-                                recorder.assistant(&reply.text);
-                                session.push_assistant(reply.text);
+                                page_reply(&mut tui, &clean, w)?;
+                                recorder.assistant(&clean);
+                                session.push_assistant(clean);
                                 crate::maybe_compact(backend, &mut session, project_root, last_tokens).await;
+                                trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
                             Ok(AskOutcome::Cancelled) => {
                                 // The user turn stays in history (intentional — spec B2); the CLI
@@ -662,11 +727,12 @@ pub async fn run(
                         match crate::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
                             Ok(crate::FileFeedback::Sessiz) => {}
                             Ok(crate::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
-                            Ok(crate::FileFeedback::Yanit { tokens, reply }) => {
+                            Ok(crate::FileFeedback::Yanit { tokens, reply, show_topic }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
                                 let w = current_width(&tui);
                                 page_reply(&mut tui, &reply.text, w)?;
                                 crate::maybe_compact(backend, &mut session, project_root, tokens).await;
+                                trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
                             Err(e) => page_notice(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
