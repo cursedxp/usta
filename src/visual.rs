@@ -64,6 +64,14 @@ pub fn visual_system() -> String {
        {\"op\":\"highlight\",\"id\",\"on\":bool} · {\"op\":\"remove\",\"id\"} · \
        {\"op\":\"note\",\"id\",\"x\",\"y\",\"text\"} — short callout\n\
      \n\
+     Composition (binding):\n\
+     - Align to an 8px grid: all x/y/w/h values are multiples of 8.\n\
+     - Keep at least 40px margin from stage edges; distribute elements, don't cluster.\n\
+     - Flow direction: left→right for processes, top→down for hierarchies. Never zigzag.\n\
+     - Same kind = same size (e.g. all server nodes share identical w/h).\n\
+     - Labels are at most 3 words; longer explanations go in captions or notes, never inside nodes.\n\
+     - One focal point per scene: at most one pulse or new highlight at a time.\n\
+     \n\
      Pedagogy (binding):\n\
      - 6-12 scenes; each scene makes exactly ONE idea visible. Build up cumulatively.\n\
      - Captions in the same language as the user's conversation; short, concrete, no jargon dumps.\n\
@@ -205,7 +213,8 @@ mod tests {
     fn visual_system_carries_schema_and_pedagogy() {
         let s = visual_system();
         for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
-                       "6-12 scenes", "ONE idea", "same language as the user", "800", "450"] {
+                       "6-12 scenes", "ONE idea", "same language as the user", "800", "450",
+                       "8px grid", "focal point", "3 words"] {
             assert!(s.contains(needle), "visual_system missing: {needle}");
         }
         // The model must NOT be told to write files or HTML.
