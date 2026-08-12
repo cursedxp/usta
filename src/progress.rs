@@ -71,37 +71,41 @@ pub fn closing_prompt(
     let c = curriculum.unwrap_or("(dosya henüz yok)");
     let pr = profile.unwrap_or("(dosya henüz yok)");
     format!(
-        "[OTURUM KAPANIYOR — DOSYA GÜNCELLEME]\n\
-         Görev: aşağıdaki dosyalardan güncellenmesi gerekenleri üret. Her dosyayı şu \
-         satırla başlat: `===DOSYA: <ad>===` (ad: progress | approach | curriculum | \
-         profile — örn. profil üretilecekse `===DOSYA: profile===`).\n\n\
-         Mevcut progress ({topic}):\n---\n{p}\n---\n\n\
-         Mevcut approach:\n---\n{a}\n---\n\n\
-         Mevcut curriculum:\n---\n{c}\n---\n\n\
-         Mevcut profil:\n---\n{pr}\n---\n\n\
-         Kurallar:\n\
-         - `progress` HER ZAMAN üretilir. Yapı: `# {topic} — İlerleme` başlığı + \
-         `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (KANITLA) / \
-         `## Geri çağırma soruları` (3-5 soru + tek satır cevap; oturmuş eskileri çıkar, \
-         bu oturumdan yenileri ekle) / `## Hata günlüğü` (`tip | kaç kez | son örnek`, \
-         3+ tekrar = GAP ADAYI) / `## İpucu merdiveni` / `## Hedef Durumu` — SADECE \
-         approach'ta `## Hedef` tanımlıysa yaz: kalan süre (BUGÜN bölümünden hesapla), \
-         harita ilerlemesi (%), tempo değerlendirmesi (yetişir / riskli / yetişmez + tek \
-         cümle gerekçe), ölçüm logu (`tarih | ölçüm | skor` — deneme sınavı, yazma \
-         değerlendirmesi vb.). Hedef yoksa bu bölümü hiç yazma.\n\
-         - `approach` yalnız ilk oturumda veya yaklaşım bu oturumda değiştiyse üretilir — \
-         canlı belge, _default.md'deki üç soruya cevap verir (pratik / çıktı / feedback). \
-         Hedefli öğrenmede approach `## Hedef` bölümü içerir: ne (sertifika/seviye/çıktı), \
-         sınav-değerlendirme tarihi (YYYY-MM-DD), geçme eşiği, sınav/değerlendirme formatı.\n\
-         - `curriculum` ilk oturumda TAM harita olarak çıkarılır (konu/alt-konu ağacı; her \
-         madde `görülmedi/görüldü/oturdu/derinleşildi` durumuyla; gerekiyorsa web \
-         araştırmasına dayan); sonraki oturumlarda yalnız durum değiştiyse üretilir. \
-         Kapsanmamış kritik madde haritada görünür kalmalı.\n\
-         - Dosyaları ŞİŞİRME: `Kapatılanlar` 20 maddeyi aşarsa en eskileri tek satırlık \
-         dönem özetine indir; `Hata günlüğü`nde çözülüp uzun süredir görülmeyen satırları \
-         kaldır; curriculum'da değişmeyen bölümleri olduğu gibi koru (yeniden üretme).\n\
-         - Oturumda kanıtı olmayanı ekleme; mevcut dosyalardaki geçerli bilgiyi koru \
-         (kullanıcı elle düzenlemiş olabilir — düzenlemesini ez-me).\n\
+        "[SESSION CLOSING — FILE UPDATE]\n\
+         Task: produce whichever of the files below need updating. Start each file with \
+         this line: `===DOSYA: <name>===` (name: progress | approach | curriculum | \
+         profile — e.g. if generating the profile, `===DOSYA: profile===`).\n\n\
+         Current progress ({topic}):\n---\n{p}\n---\n\n\
+         Current approach:\n---\n{a}\n---\n\n\
+         Current curriculum:\n---\n{c}\n---\n\n\
+         Current profile:\n---\n{pr}\n---\n\n\
+         Rules:\n\
+         - `progress` is ALWAYS generated. Structure: `# {topic} — İlerleme` heading + \
+         `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (PROVE IT) / \
+         `## Geri çağırma soruları` (3-5 questions + one-line answer each; drop settled \
+         old ones, add new ones from this session) / `## Hata günlüğü` (`type | count | \
+         last example`, 3+ repeats = GAP CANDIDATE) / `## İpucu merdiveni` / `## Hedef \
+         Durumu` — write ONLY if approach defines a `## Hedef`: time remaining (compute \
+         from the TODAY section), map progress (%), pace assessment (on track / at risk \
+         / behind + one-line rationale), measurement log (`date | measurement | score` — \
+         mock exam, writing assessment, etc.). If there's no goal, don't write this \
+         section at all.\n\
+         - `approach` is generated only on the first session or if the approach changed \
+         this session — a living document that answers the three questions from \
+         _default.md (practice / output / feedback). For goal-directed learning, approach \
+         includes a `## Hedef` section: what (certificate/level/output), exam/assessment \
+         date (YYYY-MM-DD), passing threshold, exam/assessment format.\n\
+         - `curriculum` is extracted as the FULL map on the first session (topic/subtopic \
+         tree; each item with a `görülmedi/görüldü/oturdu/derinleşildi` status; draw on \
+         web research if needed); on later sessions it's generated only if a status \
+         changed. An uncovered critical item must stay visible on the map.\n\
+         - Don't let the files bloat: if `Kapatılanlar` exceeds 20 items, collapse the \
+         oldest into a one-line period summary; in `Hata günlüğü`, remove resolved \
+         entries not seen in a long time; keep curriculum sections that haven't changed \
+         as-is (don't regenerate them).\n\
+         - Don't add anything without evidence from this session; keep the valid \
+         information already in the existing files (the user may have hand-edited them \
+         — don't overwrite their edits).\n\
          - `profile` is generated only if new/changed permanent information about the \
          user was learned this session: name, background/experience, learning style, \
          preferences, recurring strengths/weaknesses. NO TOPIC KNOWLEDGE — 'learned \
@@ -109,7 +113,8 @@ pub fn closing_prompt(
          KEEP the valid information already in the current profile (the user may have \
          hand-edited it), ~1 page cap, merge duplicates. If nothing changed, don't \
          generate this file at all.\n\
-         - Bölücü satırları dışında açıklama/selamlama yazma; her dosya saf markdown."
+         - Write no explanation/greeting outside the delimiter lines; every file is pure \
+         markdown."
     )
 }
 
@@ -231,7 +236,7 @@ mod tests {
     #[test]
     fn closing_prompt_includes_pruning_rule() {
         let s = closing_prompt("rust", None, None, None, None);
-        assert!(s.contains("20 madde"));
+        assert!(s.contains("20 items"));
     }
 
     #[test]
@@ -294,7 +299,7 @@ mod tests {
         let s = closing_prompt("almanca", None, None, None, None);
         assert!(s.contains("## Hedef Durumu"));
         assert!(s.contains("## Hedef"));
-        assert!(s.contains("tempo"));
+        assert!(s.contains("pace assessment"));
     }
 
     #[test]
