@@ -200,9 +200,11 @@ async fn run_plain_loop(
         recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
-                print_reply(&reply, backend.context_window());
-                recorder.assistant(&reply.text);
-                session.push_assistant(reply.text);
+                let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
+                recorder.assistant(&clean);
+                session.push_assistant(clean);
+                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
             }
             // Drill failed → don't block the session, fall silently back into normal flow.
             Err(e) => ui::warn(&format!("opening drill skipped: {e}")),
@@ -214,9 +216,11 @@ async fn run_plain_loop(
         recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
-                print_reply(&reply, backend.context_window());
-                recorder.assistant(&reply.text);
-                session.push_assistant(reply.text);
+                let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
+                recorder.assistant(&clean);
+                session.push_assistant(clean);
+                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
             }
             Err(e) => ui::warn(&format!("introduction turn skipped: {e}")),
         }
@@ -246,30 +250,7 @@ async fn run_plain_loop(
                         let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                         match show_request(arg, last_assistant_text(session).as_deref()) {
                             None => ui::notice("nothing to visualize yet — explain something first, or use /show [topic]"),
-                            Some(req) => {
-                                match ask_usta(backend, &visual::visual_system(), &[Message::user(req.as_str())]).await {
-                                    Ok(reply) => {
-                                        let json = progress::clean_markdown_reply(&reply.text);
-                                        match visual::build_visual_html(&json) {
-                                            Ok(html) => {
-                                                let path = visual::visual_path(project_root, topic, &concept);
-                                                if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-                                                match std::fs::write(&path, html) {
-                                                    Ok(()) => {
-                                                        let opened = visual::open_in_browser(&path);
-                                                        ui::notice(&format!("visual saved: {}{}", path.display(),
-                                                            if opened { "" } else { " (open it in your browser)" }));
-                                                    }
-                                                    Err(e) => ui::warn(&format!("error: {e}")),
-                                                }
-                                            }
-                                            Err(e) => ui::warn(&format!("visual generation failed ({e}) — try /show again")),
-                                        }
-                                    }
-                                    Err(e) => ui::warn(&format!("error: {e}")),
-                                }
-                                backend.reset_session(); // mini-session must not leak into the CLI session (slug parity)
-                            }
+                            Some(req) => run_visual_generation(backend, project_root, topic, &concept, &req).await,
                         }
                         let _ = ready_tx.send(());
                         continue;
@@ -282,11 +263,13 @@ async fn run_plain_loop(
                         recorder.user(&line);
                         match ask_usta(backend, &session.system, session.history()).await {
                             Ok(reply) => {
-                                print_reply(&reply, backend.context_window());
+                                let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+                                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
                                 let tokens = reply.context_tokens;
-                                recorder.assistant(&reply.text);
-                                session.push_assistant(reply.text);
+                                recorder.assistant(&clean);
+                                session.push_assistant(clean);
                                 maybe_compact(backend, session, project_root, tokens).await;
+                                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
                             }
                             Err(e) => ui::warn(&format!("error: {e}")),
                         }
@@ -328,9 +311,10 @@ async fn run_plain_loop(
                             // its own presentation language (print_reply: web + gauge).
                             Ok(FileFeedback::Sessiz) => {}
                             Ok(FileFeedback::Bildirim(m)) => println!("{m}"),
-                            Ok(FileFeedback::Yanit { tokens, reply }) => {
-                                print_reply(&reply, backend.context_window());
+                            Ok(FileFeedback::Yanit { tokens, reply, show_topic }) => {
+                                print_reply(&reply.text, reply.web, reply.context_tokens, backend.context_window());
                                 maybe_compact(backend, session, project_root, tokens).await;
+                                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
                             }
                             // Binary/deleted file etc. — pass silently, the REPL survives.
                             Err(e) => ui::warn(&format!("file feedback skipped: {}: {e}", path.display())),
@@ -920,7 +904,8 @@ fn run_topics() -> Result<()> {
 }
 
 /// `usta reset <topic>` — delete the progress for that topic in the current
-/// project (with confirmation) and drop it from the global catalog. No LLM needed.
+/// project (with confirmation), remove its generated visuals (Görev 5), and
+/// drop it from the global catalog. No LLM needed.
 fn run_reset_topic(topic: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let Some(root) = config::find_project_root(&cwd) else {
@@ -931,13 +916,18 @@ fn run_reset_topic(topic: &str) -> Result<()> {
         println!("no record: {}", path.display());
         return Ok(());
     }
-    if !confirm(&format!("{} will be deleted. Are you sure? [y/N] ", path.display()), &["e", "evet", "y", "yes"])? {
+    if !confirm(
+        &format!("{} and its visuals will be deleted. Are you sure? [y/N] ", path.display()),
+        &["e", "evet", "y", "yes"],
+    )? {
         println!("cancelled.");
         return Ok(());
     }
     std::fs::remove_file(&path)
         .with_context(|| format!("could not delete: {}", path.display()))?;
     println!("deleted: {}", path.display());
+
+    remove_topic_visuals(&root, topic)?;
 
     // Drop it from the catalog too — pass silently if the catalog doesn't exist / can't be read.
     let global = config::global_root()?;
@@ -947,6 +937,18 @@ fn run_reset_topic(topic: &str) -> Result<()> {
         progress::write_atomic(&index_path, &updated)?;
     }
     Ok(())
+}
+
+/// Removes a topic's generated visuals (`.usta/visuals/<topic>/`, Görev 5).
+/// Idempotent: a topic that never ran `/show` has no such directory — that's
+/// `NotFound`, not an error, so reset still succeeds cleanly.
+fn remove_topic_visuals(root: &Path, topic: &str) -> Result<()> {
+    let dir = root.join(".usta/visuals").join(topic);
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("could not delete: {}", dir.display())),
+    }
 }
 
 /// `usta reset --factory` — deletes the `.usta/` of every project in the catalog +
@@ -1126,6 +1128,10 @@ fn write_global_defaults(global: &Path) -> Result<Vec<(PathBuf, bool)>> {
 /// `approaches` + `.gitkeep`s — so an empty directory can still be committed).
 /// `.gitkeep` writes are silent (identical to the original `run_init` behavior);
 /// the returned list only contains the directories' `(path, was-written)` status.
+///
+/// `visuals/` (Görev 5) gets a `.gitignore` (`*`) instead of a `.gitkeep` — the
+/// directory holds generated `/show` HTML that should stay on disk but never
+/// enter the user's git repo.
 fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
     let usta_dir = cwd.join(".usta");
     let mut results = Vec::new();
@@ -1145,6 +1151,18 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
         }
     }
 
+    let visuals_dir = usta_dir.join("visuals");
+    let visuals_existed = visuals_dir.is_dir();
+    std::fs::create_dir_all(&visuals_dir)
+        .with_context(|| format!("could not create directory: {}", visuals_dir.display()))?;
+    results.push((visuals_dir.clone(), !visuals_existed));
+
+    let gitignore = visuals_dir.join(".gitignore");
+    if config::should_write(&gitignore) {
+        std::fs::write(&gitignore, "*\n")
+            .with_context(|| format!("could not write: {}", gitignore.display()))?;
+    }
+
     Ok(results)
 }
 
@@ -1159,9 +1177,13 @@ pub(crate) enum FileFeedback {
     /// (plain: `println!`, TUI: `page_notice`).
     Bildirim(String),
     /// Actual reply — context token count + full `Reply` (the web flag is preserved).
+    /// `reply.text` is already CLEAN (marker stripped, see `visual::extract_show_marker`
+    /// in this function) — the caller prints it as-is. `show_topic` carries the
+    /// marker's topic, if any (Görev 4): the caller runs the visual flow AFTER printing.
     Yanit {
         tokens: Option<u64>,
         reply: backend::Reply,
+        show_topic: Option<String>,
     },
 }
 
@@ -1205,15 +1227,80 @@ pub(crate) async fn handle_file_change(
     recorder.user(&injected);
     let reply = ask_usta(backend, &session.system, session.history()).await?;
     let tokens = reply.context_tokens;
-    recorder.assistant(&reply.text);
-    session.push_assistant(reply.text.clone());
-    Ok(FileFeedback::Yanit { tokens, reply })
+    // Marker (Görev 4) is stripped BEFORE recording/pushing — history never
+    // carries `[[show: ...]]`, only the clean text does.
+    let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+    recorder.assistant(&clean);
+    session.push_assistant(clean.clone());
+    let display_reply = backend::Reply { text: clean, web: reply.web, context_tokens: reply.context_tokens };
+    Ok(FileFeedback::Yanit { tokens, reply: display_reply, show_topic })
 }
 
-/// Hand off Usta's reply to the presentation layer.
-fn print_reply(reply: &backend::Reply, window: u64) {
-    ui::print_usta_reply(&reply.text, reply.web);
-    ui::context_gauge(reply.context_tokens, window);
+/// Hand off Usta's reply to the presentation layer. Takes the already-CLEAN
+/// text (marker stripped by the caller via `visual::extract_show_marker`) —
+/// this function never sees a `[[show: ...]]` marker.
+fn print_reply(text: &str, web: bool, context_tokens: Option<u64>, window: u64) {
+    ui::print_usta_reply(text, web);
+    ui::context_gauge(context_tokens, window);
+}
+
+/// Runs the `/show` generation flow (mini-session → HTML → browser open).
+/// Shared by the explicit `/show <topic>` command and the auto-triggered
+/// `[[show: ...]]` marker (Görev 4) — both get the SAME guarantees: isolated
+/// mini-session, `backend.reset_session()` on every exit path (success, error,
+/// invalid JSON), and the same "try /show again" notice on bad JSON.
+async fn run_visual_generation(backend: &mut Backend, project_root: &Path, topic: &str, concept: &str, request: &str) {
+    match ask_usta(backend, &visual::visual_system(), &[Message::user(request)]).await {
+        Ok(reply) => {
+            let json = progress::clean_markdown_reply(&reply.text);
+            match visual::build_visual_html(&json) {
+                Ok(html) => {
+                    let path = visual::visual_path(project_root, topic, concept);
+                    let dir = path.parent().map(|d| d.to_path_buf());
+                    if let Some(d) = &dir {
+                        let _ = std::fs::create_dir_all(d);
+                    }
+                    match std::fs::write(&path, html) {
+                        Ok(()) => {
+                            // Görev 5: keep the last 10 visuals per topic — prune AFTER
+                            // the write, so `10` is the exact post-write count on disk.
+                            if let Some(d) = &dir {
+                                visual::prune_visuals(d, 10);
+                            }
+                            let opened = visual::open_in_browser(&path);
+                            ui::notice(&format!(
+                                "visual saved: {}{}",
+                                path.display(),
+                                if opened { "" } else { " (open it in your browser)" }
+                            ));
+                        }
+                        Err(e) => ui::warn(&format!("error: {e}")),
+                    }
+                }
+                Err(e) => ui::warn(&format!("visual generation failed ({e}) — try /show again")),
+            }
+        }
+        Err(e) => ui::warn(&format!("error: {e}")),
+    }
+    backend.reset_session(); // mini-session must not leak into the CLI session (slug parity)
+}
+
+/// After a normal reply has been displayed and recorded, run the visual flow
+/// if `[[show: ...]]` was found in it (Görev 4). No-op when `show_topic` is
+/// `None`. Reuses `show_request` with the just-pushed clean reply as context —
+/// same composition the explicit `/show <topic>` command uses.
+async fn trigger_auto_visual(
+    backend: &mut Backend,
+    session: &Session,
+    project_root: &Path,
+    topic: &str,
+    show_topic: Option<String>,
+) {
+    let Some(t) = show_topic else { return };
+    if let Some(req) = show_request(Some(t.clone()), last_assistant_text(session).as_deref()) {
+        ui::notice(&format!("visualizing: {t}…"));
+        run_visual_generation(backend, project_root, topic, &t, &req).await;
+    }
 }
 
 #[cfg(test)]
@@ -1489,7 +1576,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
 
         let results = write_project_scaffold(&base).unwrap();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
         assert!(results.iter().all(|(_, wrote)| *wrote));
         assert!(base.join(".usta/learner/progress").is_dir());
         assert!(base.join(".usta/approaches").is_dir());
@@ -1499,6 +1586,69 @@ mod tests {
         // Second call: directories already exist → `wrote` should be false, no panic.
         let results2 = write_project_scaffold(&base).unwrap();
         assert!(results2.iter().all(|(_, wrote)| !*wrote));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Görev 5: scaffold writes `.usta/visuals/.gitignore` (`*`) — generated
+    /// visual HTML never leaks into the user's git repo, while the files
+    /// themselves stay on disk.
+    #[test]
+    fn write_project_scaffold_writes_visuals_gitignore() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_visuals_gitignore_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        write_project_scaffold(&base).unwrap();
+
+        let gitignore = base.join(".usta/visuals/.gitignore");
+        assert!(gitignore.is_file());
+        assert_eq!(std::fs::read_to_string(&gitignore).unwrap(), "*\n");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Görev 5: `usta reset <topic>` also removes `.usta/visuals/<topic>/`.
+    /// `run_reset_topic` itself reads stdin (confirm) and `cwd`, so it isn't
+    /// unit-testable directly — this tests the extracted deletion step,
+    /// following the same temp-dir pattern as the scaffold tests above.
+    #[test]
+    fn remove_topic_visuals_deletes_a_populated_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_reset_visuals_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let topic_dir = base.join(".usta/visuals/rust");
+        std::fs::create_dir_all(&topic_dir).unwrap();
+        std::fs::write(topic_dir.join("2026-01-01-000000-ownership.html"), "x").unwrap();
+        let sibling_dir = base.join(".usta/visuals/dns");
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::write(sibling_dir.join("2026-01-01-000000-records.html"), "x").unwrap();
+
+        remove_topic_visuals(&base, "rust").unwrap();
+
+        assert!(!topic_dir.exists(), "topic visuals dir must be gone after reset");
+        // Sibling topics are untouched — reset is scoped to the one topic.
+        assert!(sibling_dir.is_dir());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn remove_topic_visuals_missing_dir_is_not_an_error() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_reset_visuals_missing_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // No `.usta/visuals/rust` was ever created (topic never ran `/show`).
+        assert!(remove_topic_visuals(&base, "rust").is_ok());
 
         let _ = std::fs::remove_dir_all(&base);
     }

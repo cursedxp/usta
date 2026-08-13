@@ -87,6 +87,68 @@ pub fn open_in_browser(path: &Path) -> bool
 
 `/show [topic]` satırı In-session commands bölümüne eklenir + test substring'i.
 
+## Tasarım Dili
+
+Görev 1-5'in çıktısı (uygulandı). İki katmanlı bir ayrım: **stil kod'da donmuş, kompozisyon modelde serbest.** Model hiçbir zaman renk/font/çizim-stili SEÇMEZ — sadece Bölüm 2'deki şema ile sahneyi *kurar* (hangi element nerede, hangi op ne zaman).
+
+### Katman 1 — Kod'da donmuş token'lar (model görmez, değiştiremez)
+
+Kaynak: Claude Design projesi "usta-visual-explainer" (Görev 1, Anil onaylı — `.superpowers/sdd/frozen-tokens.md`). `visual_skeleton.html` içine gömülü; `visual_system()` promptunda bu değerlerden tek kelime geçmez.
+
+```
+LIGHT (warm paper):
+--bg:#efe7d6; --paper:#f7f1e3; --ink:#33302b; --ink-soft:#6f685c; --line:#3d3730;
+--accent:#e8862e; --marker-blue:#1e6fd9; --marker-green:#2f9e44; --marker-violet:#9c36b5;
+--note-bg:#ffedcf; --note-border:#e8862e; --paper-dot:rgba(51,48,43,.05); --shadow:rgba(51,42,20,.14);
+
+DARK (charcoal board):
+--bg:#14161a; --paper:#1e2024; --ink:#ece7dd; --ink-soft:#a39a8b; --line:#d9d3c7;
+--accent:#f09040; --marker-blue:#5b9bff; --marker-green:#5bc46e; --marker-violet:#cc7ee8;
+--note-bg:#33291a; --note-border:#f09040; --paper-dot:rgba(236,231,221,.045); --shadow:rgba(0,0,0,.45);
+
+Motion (anime.js): TIMING={fast:300,normal:600,pulse:700,packet:1100}ms
+                   EASE={enter:'easeOutBack',move:'easeInOutQuad',pulse:'easeInOutSine',packet:'easeInOutSine'}
+
+Çizim (rough.js): roughness:1.2 · bowing:1.1 · strokeWidth(node/note:2, arrow:2.5, highlight:3) · fillStyle:'solid'
+                  seed = FNV-1a(element id) % 10000 → element başına deterministik (replay'de titreme yok)
+                  node stroke=--ink · arrow (2 rough çizgi, marker-end YOK) stroke=--line ·
+                  note stroke=--note-border fill=--note-bg · packet r=8 stroke+fill=--accent ·
+                  highlight = 6px pad'li ek rough rect, stroke=--accent
+                  buton çerçevesi: border-radius:255px 14px 225px 14px/14px 225px 14px 255px (el çizimi hissi)
+
+Tipografi: Excalifont (latin-extended woff2 data-URI, OFL-1.1, ağ isteği yok) — fallback 'Comic Sans MS','Segoe Print',cursive,system-ui
+           Boyutlar: caption 21 · node 22 · note 18 · arrow-label 17px · UI chrome system-ui kalabilir
+```
+
+Tema seçimi tarayıcının `prefers-color-scheme`'ine bırakılır — Usta hangi temada olduğunu bilmez/sormaz.
+
+### Katman 2 — Promptta kompozisyon kuralları (`visual_system()`, `src/visual.rs`)
+
+Model'e verilen **bağlayıcı** kurallar stil değil, yerleşim ve pedagojidir:
+- 8px grid'e hizala (tüm x/y/w/h 8'in katı); kenarlardan ≥40px boşluk; elemanları dağıt, kümeleme.
+- Akış yönü: süreçler için soldan-sağa, hiyerarşiler için yukarıdan-aşağı — asla zigzag.
+- Aynı tür = aynı boyut (ör. tüm server node'ları aynı w/h).
+- Etiket ≤3 kelime; uzun açıklama caption'a veya note'a gider, node içine değil.
+- Sahne başına tek odak noktası (aynı anda en fazla bir pulse/yeni highlight).
+- 6-12 sahne, sahne başına TEK fikir, kümülatif inşa; caption kullanıcının diliyle; ≤6 görünür element; anlam taşıyan hareket (akış=packet, tepki=pulse, hatırla=highlight); somut benzetme bir note'ta; kapanışta özet sahnesi.
+
+Model bu kuralları JSON `ops` diziyle uygular (Bölüm 2'deki şema) — `add/arrow/packet/pulse/highlight/move/remove/note`. Renk, font, çizgi kalınlığı, easing gibi hiçbir görsel karar modelin elinde değildir; bunlar Katman 1'de sabittir.
+
+### `[[show: …]]` işaretçisi (Görev 4 — doğal dil tetikleyici)
+
+Açık komut (`/show [konu]`) dışında, normal sohbet yanıtı içinde model `[[show: <konu>]]` yazarak görselleştirmeyi kendi önerebilir — ama SADECE kullanıcının açık isteği üzerine (ör. "bunu çizer misin", "görsel göster"); Usta kendiliğinden görsel dayatmaz. Davranış (`extract_show_marker`, `src/visual.rs`):
+- İşaretçi yalnızca yanıtın **son satırında**, tek başına ise tanınır (baştaki/sondaki boşluk tolere edilir, `show` case-insensitive). Metin ortasında veya son satır değilse dokunulmaz.
+- Tanınırsa: yanıttaki TÜM tekil işaretçi satırları temizlenir (birden fazla varsa sonuncusunun konusu kazanır), kullanıcı işaretçiyi asla görmez, oturum geçmişine de girmez.
+- **Marker-only yanıt** (temizlik sonrası metin boş kalırsa): boş asistan mesajı Messages API'yi bozacağı için, `(visual explainer: <konu>)` sentetik bir yer tutucu yanıt yerine geçer — hem boş-mesaj hatasını önler hem "burada bir görsel gösterildi" bağlamını gelecekteki turn'lere taşır.
+- Tetiklenince: mevcut `/show` akışının birebir aynısı çalışır (izole mini-oturum → JSON → HTML → tarayıcı) ve `backend.reset_session()` her çıkış yolunda çalışır (bkz. Görev 6 carry-forward düzeltmesi, `src/tui/run.rs`/`src/main.rs`).
+
+### Saklama politikası (Görev 5)
+
+- **Konu başına son 10:** her `/show` sonrası `prune_visuals` `.usta/visuals/<topic>/` altındaki `.html` dosyalarını dosya adı (=zaman damgası) sırasına göre sıralar, en eski fazlalıkları siler — yazma tamamlandıktan SONRA çalışır, yani "10" her zaman diskteki gerçek son sayıdır.
+- **Git'e girmez:** proje scaffold'u `.usta/visuals/.gitignore` (`*`) yazar — üretilen görseller repo'ya asla commit edilmez, brain notu değil geçici çıktıdır.
+- **`usta reset <topic>`:** progress dosyasıyla birlikte `.usta/visuals/<topic>/` tamamen silinir (`remove_topic_visuals` — dizin hiç oluşmamışsa da hatasız geçer, idempotent).
+- **`usta reset --factory`:** katalogdaki her projenin `.usta/` klasörünü (dolayısıyla tüm konuların tüm görsellerini) siler — Usta'yı fabrika ayarına döndürür, seçici değildir.
+
 ## Hata durumları
 
 - Model çıktısı geçerli JSON değil → bildirim `visual generation failed (invalid scene data) — try /show again`, dosya yazılmaz. Retry YOK (v1) — kullanıcı tekrar dener.

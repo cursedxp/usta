@@ -6,8 +6,10 @@ use anyhow::{bail, Context, Result};
 
 const SKELETON: &str = include_str!("visual_skeleton.html");
 const ANIME: &str = include_str!("vendor/anime.min.js");
+const ROUGH: &str = include_str!("vendor/rough.min.js");
 const PLACEHOLDER_SCENES: &str = "/*__SCENES__*/[]";
 const PLACEHOLDER_ANIME: &str = "/*__ANIME__*/";
+const PLACEHOLDER_ROUGH: &str = "/*__ROUGH__*/";
 
 /// Validate the scene JSON and inject anime.js + scenes into the skeleton.
 /// Errors: not JSON, not an array, empty array, any scene missing a `caption`.
@@ -24,6 +26,7 @@ pub fn build_visual_html(scenes_json: &str) -> Result<String> {
         }
     }
     Ok(SKELETON
+        .replacen(PLACEHOLDER_ROUGH, ROUGH, 1)
         .replacen(PLACEHOLDER_ANIME, ANIME, 1)
         .replacen(PLACEHOLDER_SCENES, &v.to_string().replace("</", "<\\/"), 1))
 }
@@ -51,7 +54,9 @@ pub fn visual_system() -> String {
      of scenes — no prose, no markdown fences, no HTML.\n\
      \n\
      Stage: 800 x 450 coordinate space.\n\
-     Scene: {\"caption\": string, \"duration\": ms (optional, default 3500), \"ops\": [...]}\n\
+     Scene: {\"caption\": string, \"duration\": ms (optional, default 3500), \
+     \"detail\": 2-3 sentence deeper note (optional — only when the visual alone may not suffice), \
+     \"ops\": [...]}\n\
      Ops:\n\
      - {\"op\":\"add\",\"el\":{\"id\",\"type\":\"node|circle|text\",...}} — node: x,y,w,h,label; \
        circle: cx,cy,r,label; text: x,y,text,size\n\
@@ -61,6 +66,14 @@ pub fn visual_system() -> String {
        {\"op\":\"highlight\",\"id\",\"on\":bool} · {\"op\":\"remove\",\"id\"} · \
        {\"op\":\"note\",\"id\",\"x\",\"y\",\"text\"} — short callout\n\
      \n\
+     Composition (binding):\n\
+     - Align to an 8px grid: all x/y/w/h values are multiples of 8.\n\
+     - Keep at least 40px margin from stage edges; distribute elements, don't cluster.\n\
+     - Flow direction: left→right for processes, top→down for hierarchies. Never zigzag.\n\
+     - Same kind = same size (e.g. all server nodes share identical w/h).\n\
+     - Labels are at most 3 words; longer explanations go in captions or notes, never inside nodes.\n\
+     - One focal point per scene: at most one pulse or new highlight at a time.\n\
+     \n\
      Pedagogy (binding):\n\
      - 6-12 scenes; each scene makes exactly ONE idea visible. Build up cumulatively.\n\
      - Captions in the same language as the user's conversation; short, concrete, no jargon dumps.\n\
@@ -68,6 +81,7 @@ pub fn visual_system() -> String {
      - Prefer motion that carries meaning (packets for data flow, pulse for 'this reacts', \
        highlight for 'remember this').\n\
      - Use a concrete analogy where it helps, in a note.\n\
+     - Add detail only where the drawing genuinely needs backup; most scenes should not have it.\n\
      - End with a summary scene that shows the whole picture once more."
         .to_string()
 }
@@ -82,6 +96,31 @@ pub fn visual_path(project_root: &std::path::Path, topic: &str, concept: &str) -
         .join(format!("{stamp}-{slug}.html"))
 }
 
+/// Keeps at most `keep` `*.html` files in `dir`, deleting the oldest first.
+/// Filenames are `visual_path`'s `YYYY-MM-DD-HHMMSS-<slug>.html` stamp, which
+/// sorts lexicographically = chronologically, so a plain string sort is enough
+/// (no mtime reads needed). Call this AFTER writing the new visual — `keep` is
+/// then the exact count left on disk (Görev 5: retention, "last 10 per topic").
+/// Best-effort: a missing/unreadable `dir`, or a failure to delete one file, is
+/// silently ignored — pruning must never turn a successful `/show` into an error.
+pub fn prune_visuals(dir: &std::path::Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("html"))
+        .collect();
+    if files.len() <= keep {
+        return;
+    }
+    files.sort();
+    for stale in &files[..files.len() - keep] {
+        let _ = std::fs::remove_file(stale);
+    }
+}
+
 /// Best-effort browser open; false = caller should just print the path.
 pub fn open_in_browser(path: &std::path::Path) -> bool {
     let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -93,21 +132,78 @@ pub fn open_in_browser(path: &std::path::Path) -> bool {
         .is_ok()
 }
 
+/// Recognizes `[[show: <topic>]]` only when trimmed to exactly this shape (no
+/// leading/trailing text on the same line); case-insensitive on `show`.
+fn match_marker_line(line: &str) -> Option<String> {
+    let t = line.trim();
+    if t.len() < 4 || !t.starts_with("[[") || !t.ends_with("]]") {
+        return None;
+    }
+    let inner = t[2..t.len() - 2].trim_start();
+    // Byte-wise compare — `inner[..4]` as a str slice would PANIC when a
+    // multi-byte char straddles byte 4 (e.g. `[[abcş]]`); `as_bytes()` can't.
+    if inner.len() < 4 || !inner.as_bytes()[..4].eq_ignore_ascii_case(b"show") {
+        return None;
+    }
+    // `inner[4..]` is safe here: the first 4 bytes are confirmed ASCII "show",
+    // so byte 4 is a char boundary.
+    let rest = inner[4..].trim_start();
+    let rest = rest.strip_prefix(':')?;
+    let topic = rest.trim();
+    if topic.is_empty() {
+        return None;
+    }
+    Some(topic.to_string())
+}
+
+/// Extracts a natural-language `[[show: <topic>]]` trigger from a reply
+/// (Görev 4). Recognized ONLY as the reply's own LAST line (trailing
+/// whitespace on that line tolerated); case-insensitive on `show`. If the
+/// last line qualifies, EVERY standalone marker line in the reply is
+/// stripped (not just the last), and the LAST one's topic wins — this is
+/// what makes "two markers" collapse into a single trigger. A `[[show:`
+/// that isn't alone on the reply's final line (mid-text, or on an earlier
+/// line only) is left completely untouched: returns the text unchanged and
+/// `None`. Callers must run this BEFORE displaying/recording a reply — the
+/// marker never reaches the screen or session history.
+///
+/// Marker-only reply: if stripping leaves nothing, a short synthetic
+/// stand-in (`(visual explainer: <topic>)`) is returned instead of an empty
+/// string — every call site pushes the clean text into session history, and
+/// an empty assistant message would make the NEXT API turn fail (the
+/// Messages API rejects empty content). The stand-in doubles as useful
+/// context: future turns can see a visual was shown here.
+pub fn extract_show_marker(reply: &str) -> (String, Option<String>) {
+    let lines: Vec<&str> = reply.lines().collect();
+    let Some(last) = lines.last() else {
+        return (reply.to_string(), None);
+    };
+    let Some(topic) = match_marker_line(last) else {
+        return (reply.to_string(), None);
+    };
+    let kept: Vec<&str> = lines.iter().filter(|l| match_marker_line(l).is_none()).copied().collect();
+    let clean = kept.join("\n").trim_end().to_string();
+    if clean.trim().is_empty() {
+        return (format!("(visual explainer: {topic})"), Some(topic));
+    }
+    (clean, Some(topic))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"[
-      {"caption":"Browser and server appear","duration":3000,"ops":[
+      {"caption":"Browser and server appear","duration":3000,"detail":"Two machines, two roles: your browser asks, the server answers. Everything that follows is just this conversation.","ops":[
         {"op":"add","el":{"id":"b","type":"node","x":80,"y":200,"w":140,"h":70,"label":"Browser"}},
         {"op":"add","el":{"id":"s","type":"node","x":580,"y":200,"w":140,"h":70,"label":"Server"}}
       ]},
-      {"caption":"A request travels","ops":[
+      {"caption":"A request travels","detail":"The browser opens a TCP connection first, then sends an HTTP GET. Headers ride along with the request: host, cookies, accepted formats.","ops":[
         {"op":"arrow","id":"a1","from":"b","to":"s","label":"GET /"},
         {"op":"packet","along":"a1","label":"GET"},
         {"op":"pulse","id":"s"}
       ]},
-      {"caption":"The response comes back","ops":[
+      {"caption":"The response comes back","detail":"The server replies with a status code (200 = OK) and the page's HTML. The browser then renders it — and fires new requests for images, CSS and scripts the same way.","ops":[
         {"op":"remove","id":"a1"},
         {"op":"arrow","id":"a2","from":"s","to":"b","label":"200 OK"},
         {"op":"packet","along":"a2"},
@@ -124,6 +220,20 @@ mod tests {
         assert!(html.contains("\"caption\":\"A request travels\""));
         assert!(!html.contains(PLACEHOLDER_ANIME), "anime placeholder must be consumed");
         assert!(!html.contains("/*__SCENES__*/"), "scenes placeholder must be consumed");
+        // rough.js (vendored Görev 2): MIT header inlined, placeholder consumed.
+        assert!(html.contains("rough.js v4.6.6"), "vendored rough.js (with MIT header) must be inlined");
+        assert!(!html.contains(PLACEHOLDER_ROUGH), "rough placeholder must be consumed");
+    }
+
+    #[test]
+    fn build_accepts_optional_detail_and_inlines_it() {
+        // "detail" is optional player chrome — a scene carrying one must validate,
+        // and its text must land verbatim in the built HTML (drawer content source).
+        let html = build_visual_html(SAMPLE).unwrap();
+        assert!(html.contains("\"detail\":\"The browser opens a TCP connection first"));
+        // scenes without detail stay valid too (SAMPLE's other scenes have none)
+        let no_detail = r#"[{"caption":"plain","ops":[]}]"#;
+        assert!(build_visual_html(no_detail).is_ok());
     }
 
     #[test]
@@ -138,18 +248,27 @@ mod tests {
     fn skeleton_is_selfcontained_player() {
         assert!(SKELETON.contains(PLACEHOLDER_SCENES));
         assert!(SKELETON.contains(PLACEHOLDER_ANIME));
+        assert!(SKELETON.contains(PLACEHOLDER_ROUGH), "skeleton missing /*__ROUGH__*/ placeholder");
         assert_eq!(SKELETON.matches(PLACEHOLDER_SCENES).count(), 1);
         assert_eq!(SKELETON.matches(PLACEHOLDER_ANIME).count(), 1);
+        assert_eq!(SKELETON.matches(PLACEHOLDER_ROUGH).count(), 1);
         assert!(SKELETON.contains("prefers-color-scheme"));
         for marker in ["id=\"prev\"", "id=\"play\"", "id=\"next\"", "id=\"caption\"", "<svg"] {
             assert!(SKELETON.contains(marker), "skeleton missing {marker}");
         }
+        // Görev 2 (frozen design tokens): Excalifont embedded as data-URI @font-face, no
+        // network loads — verify the marker text and license note are present in-source.
+        assert!(SKELETON.contains("@font-face"), "skeleton missing @font-face");
+        assert!(SKELETON.contains("Excalifont"), "skeleton missing Excalifont font-family");
+        assert!(SKELETON.contains("data:font/woff2;base64,"), "font must be embedded as data-URI, not linked");
+        assert!(SKELETON.contains("OFL-1.1"), "skeleton missing OFL-1.1 license note for the embedded font");
         // Offline guarantee: no external loads at runtime. (Plain `http://` cannot be
         // asserted away — the SVG namespace URI legitimately contains it.)
         assert!(!SKELETON.contains("<script src"));
         assert!(!SKELETON.contains("<link "));
         assert!(!SKELETON.contains("fetch("));
         assert!(!ANIME.contains("<script src"));
+        assert!(!ROUGH.contains("<script src"));
     }
 
     /// Writes a demo to temp — run with `--nocapture` and open the printed path
@@ -190,7 +309,9 @@ mod tests {
     fn visual_system_carries_schema_and_pedagogy() {
         let s = visual_system();
         for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
-                       "6-12 scenes", "ONE idea", "same language as the user", "800", "450"] {
+                       "6-12 scenes", "ONE idea", "same language as the user", "800", "450",
+                       "8px grid", "focal point", "3 words",
+                       "\"detail\"", "most scenes should not have it"] {
             assert!(s.contains(needle), "visual_system missing: {needle}");
         }
         // The model must NOT be told to write files or HTML.
@@ -204,5 +325,166 @@ mod tests {
         let s = p.to_string_lossy();
         assert!(s.starts_with("/proj/.usta/visuals/rust/"));
         assert!(s.ends_with(".html") && s.contains("how-ownership-works"));
+    }
+
+    // --- extract_show_marker (Görev 4) ---------------------------------
+
+    #[test]
+    fn extract_show_marker_strips_trailing_marker_and_returns_topic() {
+        let (clean, topic) = extract_show_marker("TCP is a handshake.\n[[show: tcp handshake]]");
+        assert_eq!(clean, "TCP is a handshake.");
+        assert_eq!(topic, Some("tcp handshake".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_no_marker_returns_unchanged() {
+        let text = "Just a plain explanation, nothing more.";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+    }
+
+    #[test]
+    fn extract_show_marker_is_case_insensitive_on_show() {
+        let (clean, topic) = extract_show_marker("Here it is.\n[[SHOW: DNS records]]");
+        assert_eq!(clean, "Here it is.");
+        assert_eq!(topic, Some("DNS records".to_string()));
+
+        let (clean2, topic2) = extract_show_marker("Here it is.\n[[Show: dns]]");
+        assert_eq!(clean2, "Here it is.");
+        assert_eq!(topic2, Some("dns".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_mid_text_not_last_line_is_untouched() {
+        // The marker text appears, but NOT alone on the final line — left as-is.
+        let text = "Check this [[show: tag]] inline mention out.";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+
+        // Marker-shaped line exists, but it's not the LAST line — untouched.
+        let text2 = "intro\n[[show: topic]]\nmore text after the marker";
+        let (clean2, topic2) = extract_show_marker(text2);
+        assert_eq!(clean2, text2);
+        assert_eq!(topic2, None);
+    }
+
+    #[test]
+    fn extract_show_marker_multiple_markers_last_wins_all_stripped() {
+        let text = "part one\n[[show: cats]]\npart two\n[[show: dogs]]";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, "part one\npart two");
+        assert_eq!(topic, Some("dogs".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_tolerates_trailing_whitespace_on_marker_line() {
+        let (clean, topic) = extract_show_marker("done explaining\n[[show: dns]]   ");
+        assert_eq!(clean, "done explaining");
+        assert_eq!(topic, Some("dns".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_marker_only_reply_yields_synthetic_standin() {
+        // A reply that is NOTHING but the marker must not produce an empty
+        // clean text — an empty assistant message would 400 the next API turn.
+        let (clean, topic) = extract_show_marker("[[show: tcp handshake]]");
+        assert_eq!(clean, "(visual explainer: tcp handshake)");
+        assert_eq!(topic, Some("tcp handshake".to_string()));
+
+        // Same when only whitespace / blank lines surround the marker.
+        let (clean2, topic2) = extract_show_marker("\n  \n[[show: dns]]   ");
+        assert_eq!(clean2, "(visual explainer: dns)");
+        assert_eq!(topic2, Some("dns".to_string()));
+    }
+
+    #[test]
+    fn extract_show_marker_empty_topic_is_rejected() {
+        // `[[show:]]` (no topic) is not a marker — text untouched, no trigger.
+        let text = "explanation\n[[show:]]";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+
+        // Colon followed by only whitespace is equally empty.
+        let text2 = "explanation\n[[show:   ]]";
+        let (clean2, topic2) = extract_show_marker(text2);
+        assert_eq!(clean2, text2);
+        assert_eq!(topic2, None);
+    }
+
+    #[test]
+    fn extract_show_marker_multibyte_final_line_does_not_panic() {
+        // Regression: `inner[..4]` was a BYTE slice — a multi-byte char
+        // straddling byte 4 on a `[[...]]` final line panicked the process
+        // (reachable on EVERY assistant reply). `ş` is 2 bytes at index 3-4.
+        let text = "bir açıklama\n[[abcş]]";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+
+        // All-multibyte "command" word — unchanged + None, no panic.
+        let text2 = "açıklama\n[[şşşş: x]]";
+        let (clean2, topic2) = extract_show_marker(text2);
+        assert_eq!(clean2, text2);
+        assert_eq!(topic2, None);
+    }
+
+    #[test]
+    fn extract_show_marker_turkish_topic() {
+        let (clean, topic) = extract_show_marker("işte bu.\n[[show: linux dosya ağacı]]");
+        assert_eq!(clean, "işte bu.");
+        assert_eq!(topic, Some("linux dosya ağacı".to_string()));
+    }
+
+    // --- prune_visuals (Görev 5) ----------------------------------------
+
+    fn temp_visuals_dir(name: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!("usta_visual_test_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn prune_visuals_keeps_only_the_newest_n() {
+        let dir = temp_visuals_dir("prune_12to10");
+        // 12 files, timestamps 00..11 — filenames sort lexicographically = chronologically.
+        for i in 0..12 {
+            std::fs::write(dir.join(format!("2026-01-01-0000{i:02}-topic.html")), "x").unwrap();
+        }
+        prune_visuals(&dir, 10);
+        let mut remaining: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining.len(), 10, "only 10 newest files should remain");
+        // The two oldest (00, 01) must be gone; the newest (02..11) must remain.
+        assert!(!remaining.iter().any(|n| n.contains("000000")));
+        assert!(!remaining.iter().any(|n| n.contains("000001")));
+        assert!(remaining.iter().any(|n| n.contains("000011")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_visuals_fewer_than_limit_is_untouched() {
+        let dir = temp_visuals_dir("prune_fewer");
+        for i in 0..3 {
+            std::fs::write(dir.join(format!("2026-01-01-0000{i:02}-topic.html")), "x").unwrap();
+        }
+        prune_visuals(&dir, 10);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_visuals_nonexistent_dir_does_not_panic() {
+        let dir = std::env::temp_dir().join(format!("usta_visual_test_missing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        prune_visuals(&dir, 10); // must not panic
     }
 }
