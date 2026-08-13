@@ -81,6 +81,8 @@ pub fn visual_system() -> String {
        from nodes and arrows.\n\
      - The engine nudges overlapping elements apart as a safety net, but good composition \
        is still YOUR job — nudged layouts look worse than planned ones.\n\
+     - Arrows stay attached: they follow moved elements and disappear with removed ones. \
+       For a summary scene, prefer removing old arrows and drawing a fresh clean layout.\n\
      \n\
      Pedagogy (binding):\n\
      - 6-12 scenes; each scene makes exactly ONE idea visible. Build up cumulatively.\n\
@@ -317,6 +319,12 @@ mod tests {
         {"op":"pulse","id":"c1"},
         {"op":"highlight","id":"n4","on":true},
         {"op":"packet","along":"a1","label":"flow"}
+      ]},
+      {"caption":"Root moves — its arrow should follow, not point at empty space","ops":[
+        {"op":"move","id":"root","x":560,"y":280}
+      ]},
+      {"caption":"The explaining note is removed — its arrow should vanish with it","ops":[
+        {"op":"remove","id":"n3"}
       ]}
     ]"#;
 
@@ -329,6 +337,8 @@ mod tests {
         let html = build_visual_html(TORTURE).unwrap();
         let p = std::env::temp_dir().join("usta-visual-torture.html");
         assert!(html.contains("A note lands directly on top of the root node"));
+        assert!(html.contains("Root moves"), "move-retarget torture scene must be present");
+        assert!(html.contains("explaining note is removed"), "remove-cascade torture scene must be present");
         std::fs::write(&p, html).unwrap();
         println!("torture: {}", p.display());
     }
@@ -363,7 +373,8 @@ mod tests {
         for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
                        "6-12 scenes", "ONE idea", "same language as the user", "800", "450",
                        "8px grid", "focal point", "3 words", "NO OVERLAP", "clear space",
-                       "\"detail\"", "most scenes should not have it", "safety net"] {
+                       "\"detail\"", "most scenes should not have it", "safety net",
+                       "stay attached"] {
             assert!(s.contains(needle), "visual_system missing: {needle}");
         }
         // The model must NOT be told to write files or HTML.

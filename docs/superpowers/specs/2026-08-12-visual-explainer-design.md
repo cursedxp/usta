@@ -143,6 +143,7 @@ Katman 2 modelin niyetidir; motor `2026-08-13-visual-overlap-engine-design.md`'d
 - DOM'a eklendikten sonra `getBBox()` ile gerçek kutu alınır; tahminden büyükse (ör. uzun metin) tek seferlik ikinci bir düzeltme turu çalışır.
 - `move` op'u kasıtlı olarak nudge YAPMAZ — modelin anlatı hareketi bozulmasın diye.
 - Arama tamamen deterministik olduğundan replay (◀ / ▶|) her seferinde aynı yerleşimi üretir.
+- Oklar artık canlı bağlantı: from/to id'leri saklanır, `move` edilen elemanı gösteren oklar yeni konuma yeniden çizilir, `remove` edilen elemana bağlı oklar da sahneden kalkar (bkz. `2026-08-13-visual-live-arrows-design.md`).
 
 ### `[[show: …]]` işaretçisi (Görev 4 — doğal dil tetikleyici)
 
