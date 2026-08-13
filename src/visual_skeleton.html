@@ -192,6 +192,71 @@ function intersects(a, b) {
   return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
 }
 
+// Given a candidate box, return {dx, dy} to shift it so its 24px-inflated box no longer
+// intersects any currently-visible box element. Deterministic: fixed step (8px), fixed
+// direction order, fixed ring growth — same (box, meta) always yields the same answer,
+// which is required for renderUpTo's instant replay to reproduce identical layouts.
+//
+// Clearance model: 24px total clearance around the NEW element. We inflate the CANDIDATE
+// by 24 and test against the EXISTING boxes uninflated (inflate(existing,0)) — inflating
+// only one side keeps the clearance at 24px total, not 48px.
+//
+// excludeId lets the getBBox correction pass (which re-resolves an element already
+// written into `meta`) skip colliding with itself.
+function resolveCollision(box, excludeId) {
+  const STEP = 8, MAX_RINGS = 40, MARGIN = 40, STAGE_W = 800, STAGE_H = 450;
+
+  const existing = [];
+  for (const id in meta) {
+    if (id === excludeId) continue;
+    const b = aabbOf(id);
+    if (b) existing.push(b);
+  }
+
+  function isClear(cand) {
+    const infl = inflate(cand, 24);
+    for (const eb of existing) if (intersects(infl, inflate(eb, 0))) return false;
+    return true;
+  }
+  function overlapArea(cand) {
+    const infl = inflate(cand, 24);
+    let total = 0;
+    for (const eb of existing) {
+      const ex1 = Math.max(infl.x1, eb.x1), ex2 = Math.min(infl.x2, eb.x2);
+      const ey1 = Math.max(infl.y1, eb.y1), ey2 = Math.min(infl.y2, eb.y2);
+      if (ex2 > ex1 && ey2 > ey1) total += (ex2 - ex1) * (ey2 - ey1);
+    }
+    return total;
+  }
+  function inBounds(cand) {
+    return cand.x1 >= MARGIN && cand.y1 >= MARGIN && cand.x2 <= STAGE_W - MARGIN && cand.y2 <= STAGE_H - MARGIN;
+  }
+  function shifted(dx, dy) { return { x1: box.x1 + dx, y1: box.y1 + dy, x2: box.x2 + dx, y2: box.y2 + dy }; }
+
+  if (isClear(box)) return { dx: 0, dy: 0 };
+
+  // Fixed order per ring: down, up, right, left, then the four diagonals — the ring
+  // radius grows (step*ring) each pass, producing the "spiral" the spec describes.
+  const DIRS = [
+    [0, 1], [0, -1], [1, 0], [-1, 0],
+    [1, 1], [-1, 1], [1, -1], [-1, -1],
+  ];
+
+  let bestDx = 0, bestDy = 0, bestOverlap = overlapArea(box); // never-give-up fallback baseline
+  for (let ring = 1; ring <= MAX_RINGS; ring++) {
+    const dist = ring * STEP;
+    for (const [sx, sy] of DIRS) {
+      const dx = sx * dist, dy = sy * dist;
+      const cand = shifted(dx, dy);
+      if (!inBounds(cand)) continue;
+      if (isClear(cand)) return { dx, dy };
+      const ov = overlapArea(cand);
+      if (ov < bestOverlap) { bestOverlap = ov; bestDx = dx; bestDy = dy; }
+    }
+  }
+  return { dx: bestDx, dy: bestDy }; // least-intersection candidate — element is always drawn
+}
+
 // Point where the ray from box center toward `toCenter` crosses the box's edge.
 // fromBox = {x1,y1,x2,y2}; toCenter = {cx,cy} (or {x,y}). Returns {x,y} on the edge.
 function edgePoint(fromBox, toCenter) {
@@ -252,8 +317,34 @@ async function apply(op, animate) {
   const find = id => document.getElementById("el-" + id);
   switch (op.op) {
     case "add": {
-      const g = makeElement(op.el);
+      // Predict the box BEFORE it exists in the DOM and nudge the spec coords so the
+      // element is CREATED already clear — arrows/moves computed later read the final center.
+      const predicted = aabbFromSpec(op);
+      const { dx, dy } = resolveCollision(predicted);
+      let spec = op.el;
+      if (dx || dy) {
+        spec = Object.assign({}, op.el); // don't mutate SCENES — renderUpTo replays op.el fresh
+        if (spec.type === "circle") { spec.cx = (spec.cx || 0) + dx; spec.cy = (spec.cy || 0) + dy; }
+        else { spec.x = (spec.x || 0) + dx; spec.y = (spec.y || 0) + dy; } // node/text
+        console.debug("[nudge]", spec.id, dx, dy);
+      }
+      const g = makeElement(spec);
       root.appendChild(g);
+      // Second correction pass: real rendered glyphs can be wider than the text-length
+      // estimate aabbFromSpec used. One extra round only — no loop, stays deterministic.
+      const bb = g.getBBox();
+      if (bb.width > 0 && bb.height > 0) {
+        const predW = predicted.x2 - predicted.x1, predH = predicted.y2 - predicted.y1;
+        if (bb.width > predW || bb.height > predH) {
+          const real = { x1: bb.x, y1: bb.y, x2: bb.x + bb.width, y2: bb.y + bb.height };
+          const r2 = resolveCollision(real, spec.id);
+          if (r2.dx || r2.dy) {
+            anime.set(g, { translateX: r2.dx, translateY: r2.dy });
+            meta[spec.id].cx += r2.dx; meta[spec.id].cy += r2.dy;
+            console.debug("[nudge]", spec.id, r2.dx, r2.dy);
+          }
+        }
+      }
       if (animate) { g.style.opacity = 0; await tween({ targets: g, opacity: [0, 1], duration: 450 }); }
       break; }
     case "remove": {
@@ -363,17 +454,37 @@ async function apply(op, animate) {
       break; }
     case "note": {
       const id = op.id || "note";
+      // Same nudge treatment as `add`: predict from the op, resolve, use LOCAL nudged
+      // coords — op.x/op.y themselves are never mutated, so replay recomputes identically.
+      const predicted = aabbFromSpec(op);
+      const { dx, dy } = resolveCollision(predicted);
+      const nx = op.x + dx, ny = op.y + dy;
+      if (dx || dy) console.debug("[nudge]", id, dx, dy);
       const g = el("g", { id: "el-" + id });
       g.classList.add("notebox");
       const w = Math.max(140, (op.text || "").length * 9.5 + 28), h = 42;
-      const shape = rc.rectangle(op.x - w / 2, op.y - h / 2, w, h,
+      const shape = rc.rectangle(nx - w / 2, ny - h / 2, w, h,
         roughOpts(id, { stroke: "var(--note-border)", fill: "var(--note-bg)", fillStyle: "solid", strokeWidth: 2 }));
       g.appendChild(shape);
-      const t = el("text", { x: op.x, y: op.y, class: "lbl" });
+      const t = el("text", { x: nx, y: ny, class: "lbl" });
       t.textContent = op.text || ""; g.appendChild(t);
-      meta[id] = { cx: op.x, cy: op.y, kind: "rect", ox: op.x - w / 2, oy: op.y - h / 2, w, h };
-      orig[id] = { cx: op.x, cy: op.y };
+      meta[id] = { cx: nx, cy: ny, kind: "rect", ox: nx - w / 2, oy: ny - h / 2, w, h };
+      orig[id] = { cx: nx, cy: ny };
       root.appendChild(g);
+      // Second correction pass, same rationale as `add`.
+      const bb = g.getBBox();
+      if (bb.width > 0 && bb.height > 0) {
+        const predW = predicted.x2 - predicted.x1, predH = predicted.y2 - predicted.y1;
+        if (bb.width > predW || bb.height > predH) {
+          const real = { x1: bb.x, y1: bb.y, x2: bb.x + bb.width, y2: bb.y + bb.height };
+          const r2 = resolveCollision(real, id);
+          if (r2.dx || r2.dy) {
+            anime.set(g, { translateX: r2.dx, translateY: r2.dy });
+            meta[id].cx += r2.dx; meta[id].cy += r2.dy;
+            console.debug("[nudge]", id, r2.dx, r2.dy);
+          }
+        }
+      }
       if (animate) { g.style.opacity = 0; await tween({ targets: g, opacity: [0, 1], duration: 420 }); }
       break; }
   }
