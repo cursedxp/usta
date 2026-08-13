@@ -64,22 +64,19 @@
   button:hover { background:rgba(240,144,64,.18); color:var(--accent) }
   #counter { font:15px system-ui,sans-serif; font-variant-numeric:tabular-nums;
              color:rgba(236,231,221,.45); padding-left:6px }
-  /* caption row: floating overlay pill + optional ⓘ detail toggle, bottom-center */
-  #caption-row { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:10;
-                 display:flex; align-items:center; gap:8px }
-  #caption { min-height:1.4em; text-align:center; font-size:21px; padding:10px 22px;
+  /* caption: floating overlay pill, bottom-center, reads over the fullscreen stage */
+  #caption { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:10;
+             min-height:1.4em; text-align:center; font-size:21px; padding:10px 22px;
              max-width:70ch; width:max-content; color:var(--ink);
              background:var(--paper); border:2px solid var(--line);
              border-radius:225px 14px 255px 14px/14px 255px 14px 225px;
              box-shadow:0 6px 18px var(--shadow) }
-  /* detail toggle: content-side language — quiet hand-drawn circled i, only shown
-     when the active scene carries a "detail" (progressive disclosure) */
-  #detail-btn { width:40px; height:40px; flex:0 0 auto; padding:0;
-                background:var(--paper); color:var(--ink-soft); border:2px solid var(--line);
-                border-radius:52% 48% 45% 55%/48% 55% 52% 45%;
-                font:italic 20px/1 Excalifont,"Comic Sans MS","Segoe Print",cursive,serif;
-                box-shadow:0 6px 18px var(--shadow); cursor:pointer }
-  #detail-btn:hover { background:var(--paper); border-color:var(--accent); color:var(--accent) }
+  /* detail toggle: lives in the notch — same elegant chrome language as the other
+     buttons, hairline separator; dimmed (never hidden) when the scene has no detail */
+  #detail-btn { margin-left:4px; padding-left:16px;
+                border-left:1px solid rgba(255,255,255,.12); border-radius:0 9px 9px 0 }
+  #detail-btn[aria-disabled="true"] { opacity:.35; cursor:default }
+  #detail-btn[aria-disabled="true"]:hover { background:transparent; color:rgba(236,231,221,.92) }
   /* detail drawer: right-side sliding sidebar, overlays the stage (no reflow) */
   #detail-panel { position:fixed; top:72px; right:0; bottom:96px; z-index:9;
                   width:clamp(300px,26vw,380px);
@@ -103,15 +100,13 @@
   <button id="play">▶ play</button>
   <button id="next">▶|</button>
   <span id="counter"></span>
+  <button id="detail-btn" aria-disabled="true" aria-expanded="false" aria-controls="detail-panel" aria-label="details">ⓘ</button>
 </div>
 <main><svg id="stage" viewBox="0 0 800 450" preserveAspectRatio="xMidYMid meet">
   <g id="root"></g>
 </svg></main>
 <aside id="detail-panel"></aside>
-<div id="caption-row">
-  <div id="caption"></div>
-  <button id="detail-btn" style="display:none" aria-expanded="false" aria-controls="detail-panel" aria-label="details">i</button>
-</div>
+<div id="caption"></div>
 <script>/*__ROUGH__*/</script>
 <script>/*__ANIME__*/</script>
 <script>
@@ -287,20 +282,25 @@ async function showScene(i, animate) {
   for (const op of SCENES[i].ops || []) await apply(op, animate);
 }
 
-// Detail drawer (player chrome, not an op): ⓘ appears only when the active scene
-// carries a "detail"; scene change auto-closes and re-syncs the button.
+// Detail drawer (player chrome, not an op). detailOpen is a session preference:
+// open by default, the notch toggle flips it and it STICKS across scene changes.
+// The panel shows only when (detailOpen && active scene has a detail); scenes
+// without detail dim the toggle and hide the panel, but don't reset the preference.
 const detailBtn = document.getElementById("detail-btn");
 const detailPanel = document.getElementById("detail-panel");
+let detailOpen = true;
 function syncDetail() {
   const d = (cur >= 0 && SCENES[cur] && SCENES[cur].detail) || "";
-  detailPanel.classList.remove("open");
-  detailBtn.setAttribute("aria-expanded", "false");
-  detailBtn.style.display = d ? "" : "none";
   detailPanel.textContent = d;
+  detailBtn.setAttribute("aria-disabled", String(!d));
+  const visible = !!d && detailOpen;
+  detailPanel.classList.toggle("open", visible);
+  detailBtn.setAttribute("aria-expanded", String(visible));
 }
 detailBtn.onclick = () => {
-  const open = detailPanel.classList.toggle("open");
-  detailBtn.setAttribute("aria-expanded", String(open));
+  if (detailBtn.getAttribute("aria-disabled") === "true") return;
+  detailOpen = !detailOpen;
+  syncDetail();
 };
 
 async function renderUpTo(i) { // deterministic replay, instant
