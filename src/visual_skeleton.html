@@ -35,17 +35,22 @@
     }
   }
   * { box-sizing:border-box; margin:0 }
+  :root { --panel-w: clamp(300px,26vw,380px) }
   html, body { height:100% }
   body { background:var(--bg); color:var(--ink);
          font:16px/1.45 Excalifont,"Comic Sans MS","Segoe Print",cursive,system-ui,sans-serif;
          height:100vh; overflow:hidden;
          display:flex; flex-direction:column }
-  /* sketchboard: Excalidraw-style dotted grid over the paper backdrop (both themes via --paper-dot) */
+  /* sketchboard: Excalidraw-style dotted grid over the paper backdrop (both themes via --paper-dot).
+     When the detail panel is open the stage FITS the remaining width (padding-right reflow,
+     transition mirrors the panel slide) — canvas content is never occluded. */
   main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
          background:var(--paper);
          background-image: radial-gradient(var(--paper-dot) 1px, transparent 1px);
          background-size: 22px 22px;
-         padding-top:64px }
+         padding-top:64px;
+         transition:padding-right .3s ease }
+  body.panel-open main { padding-right:var(--panel-w) }
   svg { width:100%; height:100%; display:block; flex:1 1 auto; min-height:0 }
   /* notch: elegant chrome, not whiteboard content — macOS-notch / Dynamic-Island dark glass,
      smooth bottom corners, translucent in BOTH themes (backdrop-filter is offline-safe) */
@@ -64,13 +69,16 @@
   button:hover { background:rgba(240,144,64,.18); color:var(--accent) }
   #counter { font:15px system-ui,sans-serif; font-variant-numeric:tabular-nums;
              color:rgba(236,231,221,.45); padding-left:6px }
-  /* caption: floating overlay pill, bottom-center, reads over the fullscreen stage */
+  /* caption: floating overlay pill, centered on the VISIBLE stage area
+     (shifts left by half the panel width while the panel is open) */
   #caption { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:10;
              min-height:1.4em; text-align:center; font-size:21px; padding:10px 22px;
              max-width:70ch; width:max-content; color:var(--ink);
              background:var(--paper); border:2px solid var(--line);
              border-radius:225px 14px 255px 14px/14px 255px 14px 225px;
-             box-shadow:0 6px 18px var(--shadow) }
+             box-shadow:0 6px 18px var(--shadow);
+             transition:transform .3s ease }
+  body.panel-open #caption { transform:translateX(calc(-50% - var(--panel-w)/2)) }
   /* detail toggle: lives in the notch — same elegant chrome language as the other
      buttons, hairline separator; dimmed (never hidden) when the scene has no detail */
   #detail-btn { margin-left:4px; padding-left:16px;
@@ -80,7 +88,7 @@
   /* detail panel: CHROME, not canvas content — full-height glass sheet in the notch's
      elegant language (dark translucent on BOTH themes), designed typography, no sketch */
   #detail-panel { position:fixed; top:0; right:0; bottom:0; z-index:9;
-                  width:clamp(300px,26vw,380px);
+                  width:var(--panel-w);
                   background:rgba(20,22,26,.88);
                   -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px);
                   border-left:1px solid rgba(255,255,255,.08);
@@ -309,6 +317,7 @@ function syncDetail() {
   detailBtn.setAttribute("aria-disabled", String(!d));
   const visible = !!d && detailOpen;
   detailPanel.classList.toggle("open", visible);
+  document.body.classList.toggle("panel-open", visible); // stage reflow: fit remaining width
   detailBtn.setAttribute("aria-expanded", String(visible));
 }
 detailBtn.onclick = () => {
