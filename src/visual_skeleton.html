@@ -40,25 +40,30 @@
          font:16px/1.45 Excalifont,"Comic Sans MS","Segoe Print",cursive,system-ui,sans-serif;
          height:100vh; overflow:hidden;
          display:flex; flex-direction:column }
+  /* sketchboard: Excalidraw-style dotted grid over the paper backdrop (both themes via --paper-dot) */
   main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
          background:var(--paper);
          background-image: radial-gradient(var(--paper-dot) 1px, transparent 1px);
-         background-size: 16px 16px;
+         background-size: 22px 22px;
          padding-top:64px }
   svg { width:100%; height:100%; display:block; flex:1 1 auto; min-height:0 }
-  /* notch: hangs from the top edge, Dynamic-Island style — only bottom corners rounded */
+  /* notch: elegant chrome, not whiteboard content — macOS-notch / Dynamic-Island dark glass,
+     smooth bottom corners, translucent in BOTH themes (backdrop-filter is offline-safe) */
   #bar { position:fixed; top:0; left:50%; transform:translateX(-50%); z-index:10;
-         display:flex; gap:10px; align-items:center;
-         background:var(--paper); border:2px solid var(--line); border-top:none;
-         border-radius:0 0 22px 22px;
+         display:flex; gap:6px; align-items:center;
+         background:rgba(20,22,26,.82);
+         -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+         border:1px solid rgba(255,255,255,.08); border-top:none;
+         border-radius:0 0 18px 18px;
          box-shadow:0 6px 18px var(--shadow);
-         padding:10px 20px 12px }
-  /* hand-drawn button frame: mismatched corner radii fake a sketchy rectangle */
-  button { background:var(--paper); color:var(--ink); border:2px solid var(--line);
-           border-radius:255px 14px 225px 14px/14px 225px 14px 255px;
-           padding:8px 16px; font:15px system-ui,sans-serif; cursor:pointer }
-  button:hover { border-color:var(--accent) }
-  #counter { opacity:.6; font:15px system-ui,sans-serif; font-variant-numeric:tabular-nums; color:var(--ink-soft) }
+         padding:8px 18px 10px }
+  /* notch buttons: minimal — no borders, light ink on dark glass regardless of theme */
+  button { background:transparent; color:rgba(236,231,221,.92); border:none;
+           border-radius:9px;
+           padding:7px 14px; font:15px system-ui,sans-serif; cursor:pointer }
+  button:hover { background:rgba(240,144,64,.18); color:var(--accent) }
+  #counter { font:15px system-ui,sans-serif; font-variant-numeric:tabular-nums;
+             color:rgba(236,231,221,.45); padding-left:6px }
   /* caption: floating overlay pill, bottom-center, reads over the fullscreen stage */
   #caption { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:10;
              min-height:1.4em; text-align:center; font-size:21px; padding:10px 22px;
