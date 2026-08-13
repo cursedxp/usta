@@ -79,6 +79,8 @@ pub fn visual_system() -> String {
      - For standalone phrases use `note` (it draws its own background box and never \
        clips); use bare `text` only for tiny annotations floating in EMPTY space, far \
        from nodes and arrows.\n\
+     - The engine nudges overlapping elements apart as a safety net, but good composition \
+       is still YOUR job — nudged layouts look worse than planned ones.\n\
      \n\
      Pedagogy (binding):\n\
      - 6-12 scenes; each scene makes exactly ONE idea visible. Build up cumulatively.\n\
@@ -287,6 +289,50 @@ mod tests {
         println!("demo: {}", p.display());
     }
 
+    /// Deliberately overlapping scene JSON (Görev 4 — torture fixture) that
+    /// mimics the broken "image-7" screenshots the overlap-engine spec
+    /// describes: a note dropped exactly on a node, a circle buried under a
+    /// note, a wide note an arrow leaves from, and a bare `text` crowding a
+    /// node. The Rust side only builds the HTML — the runtime engine
+    /// (AABB + edge-arrows + auto-nudge, `visual_skeleton.html`) is what
+    /// must pull these apart; verified separately via headless Chrome.
+    const TORTURE: &str = r#"[
+      {"caption":"A note lands directly on top of the root node","ops":[
+        {"op":"add","el":{"id":"root","type":"node","x":80,"y":200,"w":140,"h":70,"label":"Root"}},
+        {"op":"note","id":"n1","x":80,"y":200,"text":"tek giris noktasi"}
+      ]},
+      {"caption":"A circle sits buried under an incoming note","ops":[
+        {"op":"add","el":{"id":"c1","type":"circle","cx":300,"cy":220,"r":50,"label":"Core"}},
+        {"op":"note","id":"n2","x":270,"y":190,"text":"senin klasorun: home"}
+      ]},
+      {"caption":"A wide note spawns an arrow toward the root","ops":[
+        {"op":"note","id":"n3","x":400,"y":350,"text":"This deliberately long callout text is here to force the note bounding box to stretch wide across the stage"},
+        {"op":"arrow","id":"a1","from":"n3","to":"root","label":"explains"}
+      ]},
+      {"caption":"A bare text label crowds a fresh node","ops":[
+        {"op":"add","el":{"id":"n4","type":"node","x":600,"y":100,"w":140,"h":70,"label":"Cache"}},
+        {"op":"add","el":{"id":"t1","type":"text","x":605,"y":110,"text":"right next to it","size":17}}
+      ]},
+      {"caption":"Everything at once — summary","ops":[
+        {"op":"pulse","id":"c1"},
+        {"op":"highlight","id":"n4","on":true},
+        {"op":"packet","along":"a1","label":"flow"}
+      ]}
+    ]"#;
+
+    /// Same pattern as `demo_html_for_manual_check`, but for the torture
+    /// fixture — run with `--nocapture` and open the printed path to eyeball
+    /// whether the runtime engine actually pulls every collision apart
+    /// (Görev 4's Rust-side deliverable; the headless-Chrome check is separate).
+    #[test]
+    fn torture_html_for_manual_check() {
+        let html = build_visual_html(TORTURE).unwrap();
+        let p = std::env::temp_dir().join("usta-visual-torture.html");
+        assert!(html.contains("A note lands directly on top of the root node"));
+        std::fs::write(&p, html).unwrap();
+        println!("torture: {}", p.display());
+    }
+
     #[test]
     fn build_escapes_script_closing_tag_in_captions() {
         let json = r#"[{"caption":"the </script> tag closes it","ops":[]}]"#;
@@ -317,7 +363,7 @@ mod tests {
         for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
                        "6-12 scenes", "ONE idea", "same language as the user", "800", "450",
                        "8px grid", "focal point", "3 words", "NO OVERLAP", "clear space",
-                       "\"detail\"", "most scenes should not have it"] {
+                       "\"detail\"", "most scenes should not have it", "safety net"] {
             assert!(s.contains(needle), "visual_system missing: {needle}");
         }
         // The model must NOT be told to write files or HTML.
