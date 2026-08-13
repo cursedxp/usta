@@ -77,16 +77,23 @@
                 border-left:1px solid rgba(255,255,255,.12); border-radius:0 9px 9px 0 }
   #detail-btn[aria-disabled="true"] { opacity:.35; cursor:default }
   #detail-btn[aria-disabled="true"]:hover { background:transparent; color:rgba(236,231,221,.92) }
-  /* detail drawer: right-side sliding sidebar, overlays the stage (no reflow) */
-  #detail-panel { position:fixed; top:72px; right:0; bottom:96px; z-index:9;
+  /* detail panel: CHROME, not canvas content — full-height glass sheet in the notch's
+     elegant language (dark translucent on BOTH themes), designed typography, no sketch */
+  #detail-panel { position:fixed; top:0; right:0; bottom:0; z-index:9;
                   width:clamp(300px,26vw,380px);
-                  background:var(--paper); border:2px solid var(--line); border-right:none;
-                  border-radius:18px 0 0 14px/14px 0 0 18px;
-                  box-shadow:-6px 4px 18px var(--shadow);
-                  padding:20px 22px; font-size:17.5px; line-height:1.55; color:var(--ink);
+                  background:rgba(20,22,26,.88);
+                  -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px);
+                  border-left:1px solid rgba(255,255,255,.08);
+                  box-shadow:-8px 0 24px var(--shadow);
+                  padding:72px 26px 28px;
+                  font:15.5px/1.6 system-ui,sans-serif; color:rgba(255,255,255,.85);
                   overflow-y:auto;
                   transform:translateX(110%); transition:transform .3s ease }
   #detail-panel.open { transform:translateX(0) }
+  #detail-overline { font-size:11px; font-weight:600; letter-spacing:.08em;
+                     text-transform:uppercase; color:rgba(255,255,255,.5); margin-bottom:6px }
+  #detail-caption { font-size:13px; color:rgba(255,255,255,.45); margin-bottom:18px }
+  #detail-text { max-width:34ch }
   .lbl { fill:var(--ink); font-family:Excalifont,"Comic Sans MS","Segoe Print",cursive,system-ui,sans-serif;
          font-size:16px; text-anchor:middle; dominant-baseline:middle }
   .node .lbl, .circ .lbl { font-size:22px }
@@ -105,7 +112,11 @@
 <main><svg id="stage" viewBox="0 0 800 450" preserveAspectRatio="xMidYMid meet">
   <g id="root"></g>
 </svg></main>
-<aside id="detail-panel"></aside>
+<aside id="detail-panel">
+  <div id="detail-overline">Details</div>
+  <div id="detail-caption"></div>
+  <div id="detail-text"></div>
+</aside>
 <div id="caption"></div>
 <script>/*__ROUGH__*/</script>
 <script>/*__ANIME__*/</script>
@@ -288,10 +299,13 @@ async function showScene(i, animate) {
 // without detail dim the toggle and hide the panel, but don't reset the preference.
 const detailBtn = document.getElementById("detail-btn");
 const detailPanel = document.getElementById("detail-panel");
+const detailCaption = document.getElementById("detail-caption");
+const detailText = document.getElementById("detail-text");
 let detailOpen = true;
 function syncDetail() {
   const d = (cur >= 0 && SCENES[cur] && SCENES[cur].detail) || "";
-  detailPanel.textContent = d;
+  detailText.textContent = d;
+  detailCaption.textContent = d ? (SCENES[cur].caption || "") : "";
   detailBtn.setAttribute("aria-disabled", String(!d));
   const visible = !!d && detailOpen;
   detailPanel.classList.toggle("open", visible);
