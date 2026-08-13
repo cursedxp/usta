@@ -137,9 +137,13 @@ fn match_marker_line(line: &str) -> Option<String> {
         return None;
     }
     let inner = t[2..t.len() - 2].trim_start();
-    if inner.len() < 4 || !inner[..4].eq_ignore_ascii_case("show") {
+    // Byte-wise compare — `inner[..4]` as a str slice would PANIC when a
+    // multi-byte char straddles byte 4 (e.g. `[[abcş]]`); `as_bytes()` can't.
+    if inner.len() < 4 || !inner.as_bytes()[..4].eq_ignore_ascii_case(b"show") {
         return None;
     }
+    // `inner[4..]` is safe here: the first 4 bytes are confirmed ASCII "show",
+    // so byte 4 is a char boundary.
     let rest = inner[4..].trim_start();
     let rest = rest.strip_prefix(':')?;
     let topic = rest.trim();
@@ -390,6 +394,23 @@ mod tests {
 
         // Colon followed by only whitespace is equally empty.
         let text2 = "explanation\n[[show:   ]]";
+        let (clean2, topic2) = extract_show_marker(text2);
+        assert_eq!(clean2, text2);
+        assert_eq!(topic2, None);
+    }
+
+    #[test]
+    fn extract_show_marker_multibyte_final_line_does_not_panic() {
+        // Regression: `inner[..4]` was a BYTE slice — a multi-byte char
+        // straddling byte 4 on a `[[...]]` final line panicked the process
+        // (reachable on EVERY assistant reply). `ş` is 2 bytes at index 3-4.
+        let text = "bir açıklama\n[[abcş]]";
+        let (clean, topic) = extract_show_marker(text);
+        assert_eq!(clean, text);
+        assert_eq!(topic, None);
+
+        // All-multibyte "command" word — unchanged + None, no panic.
+        let text2 = "açıklama\n[[şşşş: x]]";
         let (clean2, topic2) = extract_show_marker(text2);
         assert_eq!(clean2, text2);
         assert_eq!(topic2, None);
