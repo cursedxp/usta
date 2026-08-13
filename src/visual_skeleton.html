@@ -192,6 +192,22 @@ function intersects(a, b) {
   return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
 }
 
+// Point where the ray from box center toward `toCenter` crosses the box's edge.
+// fromBox = {x1,y1,x2,y2}; toCenter = {cx,cy} (or {x,y}). Returns {x,y} on the edge.
+function edgePoint(fromBox, toCenter) {
+  const bcx = (fromBox.x1 + fromBox.x2) / 2, bcy = (fromBox.y1 + fromBox.y2) / 2;
+  const halfW = (fromBox.x2 - fromBox.x1) / 2, halfH = (fromBox.y2 - fromBox.y1) / 2;
+  const tx = toCenter.cx !== undefined ? toCenter.cx : toCenter.x;
+  const ty = toCenter.cy !== undefined ? toCenter.cy : toCenter.y;
+  const dx = tx - bcx, dy = ty - bcy;
+  if (dx === 0 && dy === 0) return { x: bcx, y: bcy }; // toCenter coincides with box center
+  let t = Infinity;
+  if (dx !== 0) t = Math.min(t, halfW / Math.abs(dx));
+  if (dy !== 0) t = Math.min(t, halfH / Math.abs(dy));
+  if (!isFinite(t)) t = 0;
+  return { x: bcx + dx * t, y: bcy + dy * t };
+}
+
 // Deterministic per-element roughness: same element id always sketches identically,
 // so replay (renderUpTo) never shows the shapes "re-rolling" their hand-drawn wobble.
 function fnv1a(str) {
@@ -262,10 +278,22 @@ async function apply(op, animate) {
       const g = el("g", { id: "el-" + op.id });
       g.classList.add("arrow");
       const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len;
-      const pad = 46; // don't pierce the boxes
-      const x1 = a.cx + ux * pad, y1 = a.cy + uy * pad;
-      const x2 = b.cx - ux * pad, y2 = b.cy - uy * pad;
+      const cux = dx / len, cuy = dy / len; // center→center unit vector
+      const fromBox = aabbOf(op.from), toBox = aabbOf(op.to);
+      const gap = 12;
+      // Edge math is unstable when either end isn't a box, centers coincide, or the
+      // boxes overlap — fall back to the old fixed-pad-from-center behavior.
+      const degenerate = !fromBox || !toBox || (dx === 0 && dy === 0) || intersects(fromBox, toBox);
+      let x1, y1, x2, y2;
+      if (degenerate) {
+        const pad = 46; // don't pierce the boxes
+        x1 = a.cx + cux * pad; y1 = a.cy + cuy * pad;
+        x2 = b.cx - cux * pad; y2 = b.cy - cuy * pad;
+      } else {
+        const p1 = edgePoint(fromBox, b), p2 = edgePoint(toBox, a);
+        x1 = p1.x + cux * gap; y1 = p1.y + cuy * gap;   // 12px off the source box edge, toward `to`
+        x2 = p2.x - cux * gap; y2 = p2.y - cuy * gap;   // 12px off the target box edge, toward `from`
+      }
       // Invisible straight guide — anime.path() needs one clean single-segment path to
       // sample; rough's sketchy stroke is multi-subpath and unusable for motion-path.
       // The guide is never painted (stroke:none); the rough strokes below are visual-only.
@@ -277,7 +305,10 @@ async function apply(op, animate) {
       const body = rc.line(x1, y1, x2, y2, Object.assign({ seed }, lineOpts));
       g.appendChild(body);
       // Arrowhead drawn as two hand-drawn rough lines (a "V") instead of marker-end —
-      // SVG markers can't carry rough's sketchy stroke.
+      // SVG markers can't carry rough's sketchy stroke. Direction is recomputed from the
+      // actual (possibly edge-clipped) endpoints, not the center→center vector.
+      const edx = x2 - x1, edy = y2 - y1, elen = Math.hypot(edx, edy) || 1;
+      const ux = edx / elen, uy = edy / elen;
       const headLen = 14, spread = Math.PI / 7, back = Math.atan2(uy, ux) + Math.PI;
       const h1 = rc.line(x2, y2, x2 + Math.cos(back - spread) * headLen, y2 + Math.sin(back - spread) * headLen,
         Object.assign({ seed: seed + 1 }, lineOpts));
