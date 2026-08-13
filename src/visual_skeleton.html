@@ -411,8 +411,27 @@ async function apply(op, animate) {
       break; }
     case "remove": {
       const g = find(op.id); if (!g) break;
-      if (animate) await tween({ targets: g, opacity: 0, duration: 420 });
-      g.remove(); break; }
+      // Cascade: collect arrows connected to this element BEFORE removing anything.
+      // Arrow meta carries from/to; box/text meta never does, so this loop only ever
+      // matches arrows. An arrow's own from/to point at boxes (never at another arrow
+      // id), so removing an arrow directly never matches here — cascade is
+      // one-directional (element -> arrow); removing an arrow removes only that arrow.
+      const arrowIds = [];
+      for (const k in meta) {
+        const m = meta[k];
+        if (m && m.from !== undefined && m.to !== undefined && (m.from === op.id || m.to === op.id)) arrowIds.push(k);
+      }
+      const arrowGroups = arrowIds.map(find).filter(Boolean);
+      // Same fade window: element + every cascaded arrow fade together, same duration.
+      if (animate) await Promise.all([g, ...arrowGroups].map(t => tween({ targets: t, opacity: 0, duration: 420 })));
+      g.remove();
+      arrowGroups.forEach(ag => ag.remove());
+      // Meta cleanup — no leak: a later op reusing this id (or a cascaded arrow's id)
+      // starts clean instead of inheriting stale from/to/cx/cy. orig[] only exists for
+      // elements made via makeElement/note (never for arrows), so only op.id needs it.
+      delete meta[op.id]; delete orig[op.id];
+      arrowIds.forEach(k => delete meta[k]);
+      break; }
     case "move": {
       const g = find(op.id); if (!g) break;
       const o = orig[op.id] || centerOf(op.id);
