@@ -73,6 +73,12 @@ pub fn visual_system() -> String {
      - Same kind = same size (e.g. all server nodes share identical w/h).\n\
      - Labels are at most 3 words; longer explanations go in captions or notes, never inside nodes.\n\
      - One focal point per scene: at most one pulse or new highlight at a time.\n\
+     - NO OVERLAP: elements must never touch or cover each other. Text is wider than you \
+       think — estimate ~0.6 × font-size per character (a 10-char label at 17px ≈ 100px \
+       wide, centered on its x) and keep at least 24px clear space around every element.\n\
+     - For standalone phrases use `note` (it draws its own background box and never \
+       clips); use bare `text` only for tiny annotations floating in EMPTY space, far \
+       from nodes and arrows.\n\
      \n\
      Pedagogy (binding):\n\
      - 6-12 scenes; each scene makes exactly ONE idea visible. Build up cumulatively.\n\
@@ -310,7 +316,7 @@ mod tests {
         let s = visual_system();
         for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
                        "6-12 scenes", "ONE idea", "same language as the user", "800", "450",
-                       "8px grid", "focal point", "3 words",
+                       "8px grid", "focal point", "3 words", "NO OVERLAP", "clear space",
                        "\"detail\"", "most scenes should not have it"] {
             assert!(s.contains(needle), "visual_system missing: {needle}");
         }
