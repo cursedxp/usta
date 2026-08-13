@@ -35,22 +35,37 @@
     }
   }
   * { box-sizing:border-box; margin:0 }
+  html, body { height:100% }
   body { background:var(--bg); color:var(--ink);
          font:16px/1.45 Excalifont,"Comic Sans MS","Segoe Print",cursive,system-ui,sans-serif;
-         min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:24px; gap:14px }
-  main { width:min(880px,100%); background:var(--paper); border-radius:14px; padding:16px;
-         box-shadow:0 4px 24px var(--shadow);
+         height:100vh; overflow:hidden;
+         display:flex; flex-direction:column }
+  main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
+         background:var(--paper);
          background-image: radial-gradient(var(--paper-dot) 1px, transparent 1px);
-         background-size: 16px 16px }
-  svg { width:100%; height:auto; display:block }
-  #caption { min-height:3em; text-align:center; font-size:21px; padding:8px 16px; max-width:840px; color:var(--ink) }
-  #bar { display:flex; gap:10px; align-items:center }
+         background-size: 16px 16px;
+         padding-top:64px }
+  svg { width:100%; height:100%; display:block; flex:1 1 auto; min-height:0 }
+  /* notch: hangs from the top edge, Dynamic-Island style — only bottom corners rounded */
+  #bar { position:fixed; top:0; left:50%; transform:translateX(-50%); z-index:10;
+         display:flex; gap:10px; align-items:center;
+         background:var(--paper); border:2px solid var(--line); border-top:none;
+         border-radius:0 0 22px 22px;
+         box-shadow:0 6px 18px var(--shadow);
+         padding:10px 20px 12px }
   /* hand-drawn button frame: mismatched corner radii fake a sketchy rectangle */
   button { background:var(--paper); color:var(--ink); border:2px solid var(--line);
            border-radius:255px 14px 225px 14px/14px 225px 14px 255px;
            padding:8px 16px; font:15px system-ui,sans-serif; cursor:pointer }
   button:hover { border-color:var(--accent) }
   #counter { opacity:.6; font:15px system-ui,sans-serif; font-variant-numeric:tabular-nums; color:var(--ink-soft) }
+  /* caption: floating overlay pill, bottom-center, reads over the fullscreen stage */
+  #caption { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:10;
+             min-height:1.4em; text-align:center; font-size:21px; padding:10px 22px;
+             max-width:70ch; width:max-content; color:var(--ink);
+             background:var(--paper); border:2px solid var(--line);
+             border-radius:225px 14px 255px 14px/14px 255px 14px 225px;
+             box-shadow:0 6px 18px var(--shadow) }
   .lbl { fill:var(--ink); font-family:Excalifont,"Comic Sans MS","Segoe Print",cursive,system-ui,sans-serif;
          font-size:16px; text-anchor:middle; dominant-baseline:middle }
   .node .lbl, .circ .lbl { font-size:22px }
@@ -59,16 +74,16 @@
             font-size:17px; text-anchor:middle }
   .packet { fill:var(--accent) }
 </style>
-<main><svg id="stage" viewBox="0 0 800 450">
-  <g id="root"></g>
-</svg></main>
-<div id="caption"></div>
 <div id="bar">
   <button id="prev">◀</button>
   <button id="play">▶ play</button>
   <button id="next">▶|</button>
   <span id="counter"></span>
 </div>
+<main><svg id="stage" viewBox="0 0 800 450" preserveAspectRatio="xMidYMid meet">
+  <g id="root"></g>
+</svg></main>
+<div id="caption"></div>
 <script>/*__ROUGH__*/</script>
 <script>/*__ANIME__*/</script>
 <script>
