@@ -309,7 +309,7 @@ const detailBtn = document.getElementById("detail-btn");
 const detailPanel = document.getElementById("detail-panel");
 const detailCaption = document.getElementById("detail-caption");
 const detailText = document.getElementById("detail-text");
-let detailOpen = true;
+let detailOpen = false; // closed by default — the notch ⓘ opens it (Anil's call)
 function syncDetail() {
   const d = (cur >= 0 && SCENES[cur] && SCENES[cur].detail) || "";
   detailText.textContent = d;
