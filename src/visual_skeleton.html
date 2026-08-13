@@ -313,6 +313,68 @@ function makeElement(spec) {
   return g;
 }
 
+// Pure (re)draw of one arrow's visual content from CURRENT meta centers. Reads
+// meta[arrowId].{from,to,label} and rebuilds the CHILDREN of the existing el-<arrowId>
+// group — the group element itself (id, class list, e.g. a live "hl" highlight class)
+// is left untouched, so external references and highlight state survive. Rough seed is
+// derived from arrowId, so the same connection always sketches identically on redraw.
+// Updates meta[arrowId].path/cx/cy in place; never touches meta[arrowId].from/to/label.
+function drawArrowGeometry(arrowId) {
+  const m = meta[arrowId];
+  const a = centerOf(m.from), b = centerOf(m.to);
+  const g = document.getElementById("el-" + arrowId);
+  while (g.firstChild) g.removeChild(g.firstChild);
+  const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
+  const cux = dx / len, cuy = dy / len; // center→center unit vector
+  const fromBox = aabbOf(m.from), toBox = aabbOf(m.to);
+  const gap = 12;
+  // Edge math is unstable when either end isn't a box, centers coincide, or the
+  // boxes overlap — fall back to the old fixed-pad-from-center behavior.
+  let useFallback = !fromBox || !toBox || (dx === 0 && dy === 0) || intersects(fromBox, toBox);
+  let x1, y1, x2, y2;
+  if (!useFallback) {
+    const p1 = edgePoint(fromBox, b), p2 = edgePoint(toBox, a);
+    x1 = p1.x + cux * gap; y1 = p1.y + cuy * gap;   // 12px off the source box edge, toward `to`
+    x2 = p2.x - cux * gap; y2 = p2.y - cuy * gap;   // 12px off the target box edge, toward `from`
+    // Close-but-not-overlapping boxes: the two 12px gaps can push the endpoints PAST
+    // each other, drawing the arrow backwards through both boxes. Detect the crossing
+    // by projecting (p2-p1) onto the center→center axis — if it's non-positive the
+    // endpoints have crossed/coincided, so bail to the fixed-pad path.
+    const proj = (x2 - x1) * cux + (y2 - y1) * cuy;
+    if (proj <= 1) useFallback = true;
+  }
+  if (useFallback) {
+    const pad = 46; // don't pierce the boxes
+    x1 = a.cx + cux * pad; y1 = a.cy + cuy * pad;
+    x2 = b.cx - cux * pad; y2 = b.cy - cuy * pad;
+  }
+  // Invisible straight guide — anime.path() needs one clean single-segment path to
+  // sample; rough's sketchy stroke is multi-subpath and unusable for motion-path.
+  // The guide is never painted (stroke:none); the rough strokes below are visual-only.
+  const guide = el("path", { d: `M ${x1} ${y1} L ${x2} ${y2}` });
+  guide.style.stroke = "none"; guide.style.fill = "none";
+  g.appendChild(guide);
+  const seed = fnv1a(arrowId);
+  const lineOpts = { roughness: 1.2, bowing: 1.1, stroke: "var(--line)", strokeWidth: 2.5 };
+  const body = rc.line(x1, y1, x2, y2, Object.assign({ seed }, lineOpts));
+  g.appendChild(body);
+  // Arrowhead drawn as two hand-drawn rough lines (a "V") instead of marker-end —
+  // SVG markers can't carry rough's sketchy stroke. Direction is recomputed from the
+  // actual (possibly edge-clipped) endpoints, not the center→center vector.
+  const edx = x2 - x1, edy = y2 - y1, elen = Math.hypot(edx, edy) || 1;
+  const ux = edx / elen, uy = edy / elen;
+  const headLen = 14, spread = Math.PI / 7, back = Math.atan2(uy, ux) + Math.PI;
+  const h1 = rc.line(x2, y2, x2 + Math.cos(back - spread) * headLen, y2 + Math.sin(back - spread) * headLen,
+    Object.assign({ seed: seed + 1 }, lineOpts));
+  const h2 = rc.line(x2, y2, x2 + Math.cos(back + spread) * headLen, y2 + Math.sin(back + spread) * headLen,
+    Object.assign({ seed: seed + 2 }, lineOpts));
+  g.appendChild(h1); g.appendChild(h2);
+  if (m.label) { const t = el("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8, class: "alabel" });
+    t.textContent = m.label; g.appendChild(t); }
+  m.path = guide;
+  m.cx = (x1 + x2) / 2; m.cy = (y1 + y2) / 2;
+}
+
 async function apply(op, animate) {
   const find = id => document.getElementById("el-" + id);
   switch (op.op) {
@@ -364,58 +426,13 @@ async function apply(op, animate) {
       meta[op.id] = Object.assign({}, meta[op.id], { cx: nx, cy: ny });
       break; }
     case "arrow": {
-      const a = centerOf(op.from), b = centerOf(op.to);
       const g = el("g", { id: "el-" + op.id });
       g.classList.add("arrow");
-      const dx = b.cx - a.cx, dy = b.cy - a.cy, len = Math.hypot(dx, dy) || 1;
-      const cux = dx / len, cuy = dy / len; // center→center unit vector
-      const fromBox = aabbOf(op.from), toBox = aabbOf(op.to);
-      const gap = 12;
-      // Edge math is unstable when either end isn't a box, centers coincide, or the
-      // boxes overlap — fall back to the old fixed-pad-from-center behavior.
-      let useFallback = !fromBox || !toBox || (dx === 0 && dy === 0) || intersects(fromBox, toBox);
-      let x1, y1, x2, y2;
-      if (!useFallback) {
-        const p1 = edgePoint(fromBox, b), p2 = edgePoint(toBox, a);
-        x1 = p1.x + cux * gap; y1 = p1.y + cuy * gap;   // 12px off the source box edge, toward `to`
-        x2 = p2.x - cux * gap; y2 = p2.y - cuy * gap;   // 12px off the target box edge, toward `from`
-        // Close-but-not-overlapping boxes: the two 12px gaps can push the endpoints PAST
-        // each other, drawing the arrow backwards through both boxes. Detect the crossing
-        // by projecting (p2-p1) onto the center→center axis — if it's non-positive the
-        // endpoints have crossed/coincided, so bail to the fixed-pad path.
-        const proj = (x2 - x1) * cux + (y2 - y1) * cuy;
-        if (proj <= 1) useFallback = true;
-      }
-      if (useFallback) {
-        const pad = 46; // don't pierce the boxes
-        x1 = a.cx + cux * pad; y1 = a.cy + cuy * pad;
-        x2 = b.cx - cux * pad; y2 = b.cy - cuy * pad;
-      }
-      // Invisible straight guide — anime.path() needs one clean single-segment path to
-      // sample; rough's sketchy stroke is multi-subpath and unusable for motion-path.
-      // The guide is never painted (stroke:none); the rough strokes below are visual-only.
-      const guide = el("path", { d: `M ${x1} ${y1} L ${x2} ${y2}` });
-      guide.style.stroke = "none"; guide.style.fill = "none";
-      g.appendChild(guide);
-      const seed = fnv1a(op.id);
-      const lineOpts = { roughness: 1.2, bowing: 1.1, stroke: "var(--line)", strokeWidth: 2.5 };
-      const body = rc.line(x1, y1, x2, y2, Object.assign({ seed }, lineOpts));
-      g.appendChild(body);
-      // Arrowhead drawn as two hand-drawn rough lines (a "V") instead of marker-end —
-      // SVG markers can't carry rough's sketchy stroke. Direction is recomputed from the
-      // actual (possibly edge-clipped) endpoints, not the center→center vector.
-      const edx = x2 - x1, edy = y2 - y1, elen = Math.hypot(edx, edy) || 1;
-      const ux = edx / elen, uy = edy / elen;
-      const headLen = 14, spread = Math.PI / 7, back = Math.atan2(uy, ux) + Math.PI;
-      const h1 = rc.line(x2, y2, x2 + Math.cos(back - spread) * headLen, y2 + Math.sin(back - spread) * headLen,
-        Object.assign({ seed: seed + 1 }, lineOpts));
-      const h2 = rc.line(x2, y2, x2 + Math.cos(back + spread) * headLen, y2 + Math.sin(back + spread) * headLen,
-        Object.assign({ seed: seed + 2 }, lineOpts));
-      g.appendChild(h1); g.appendChild(h2);
-      if (op.label) { const t = el("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8, class: "alabel" });
-        t.textContent = op.label; g.appendChild(t); }
       root.appendChild(g);
-      meta[op.id] = { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, path: guide };
+      // meta must carry from/to/label BEFORE drawArrowGeometry runs — it looks the
+      // group up by id and reads these fields to compute the current geometry.
+      meta[op.id] = { from: op.from, to: op.to, label: op.label };
+      drawArrowGeometry(op.id);
       if (animate) { g.style.opacity = 0; await tween({ targets: g, opacity: [0, 1], duration: 500 }); }
       break; }
     case "packet": {
