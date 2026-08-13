@@ -202,9 +202,8 @@ function edgePoint(fromBox, toCenter) {
   const dx = tx - bcx, dy = ty - bcy;
   if (dx === 0 && dy === 0) return { x: bcx, y: bcy }; // toCenter coincides with box center
   let t = Infinity;
-  if (dx !== 0) t = Math.min(t, halfW / Math.abs(dx));
-  if (dy !== 0) t = Math.min(t, halfH / Math.abs(dy));
-  if (!isFinite(t)) t = 0;
+  if (dx !== 0) t = Math.min(t, halfW / Math.abs(dx)); // at least one of dx/dy is nonzero
+  if (dy !== 0) t = Math.min(t, halfH / Math.abs(dy)); // (both-zero returned above), so t is finite
   return { x: bcx + dx * t, y: bcy + dy * t };
 }
 
@@ -283,16 +282,23 @@ async function apply(op, animate) {
       const gap = 12;
       // Edge math is unstable when either end isn't a box, centers coincide, or the
       // boxes overlap — fall back to the old fixed-pad-from-center behavior.
-      const degenerate = !fromBox || !toBox || (dx === 0 && dy === 0) || intersects(fromBox, toBox);
+      let useFallback = !fromBox || !toBox || (dx === 0 && dy === 0) || intersects(fromBox, toBox);
       let x1, y1, x2, y2;
-      if (degenerate) {
-        const pad = 46; // don't pierce the boxes
-        x1 = a.cx + cux * pad; y1 = a.cy + cuy * pad;
-        x2 = b.cx - cux * pad; y2 = b.cy - cuy * pad;
-      } else {
+      if (!useFallback) {
         const p1 = edgePoint(fromBox, b), p2 = edgePoint(toBox, a);
         x1 = p1.x + cux * gap; y1 = p1.y + cuy * gap;   // 12px off the source box edge, toward `to`
         x2 = p2.x - cux * gap; y2 = p2.y - cuy * gap;   // 12px off the target box edge, toward `from`
+        // Close-but-not-overlapping boxes: the two 12px gaps can push the endpoints PAST
+        // each other, drawing the arrow backwards through both boxes. Detect the crossing
+        // by projecting (p2-p1) onto the center→center axis — if it's non-positive the
+        // endpoints have crossed/coincided, so bail to the fixed-pad path.
+        const proj = (x2 - x1) * cux + (y2 - y1) * cuy;
+        if (proj <= 1) useFallback = true;
+      }
+      if (useFallback) {
+        const pad = 46; // don't pierce the boxes
+        x1 = a.cx + cux * pad; y1 = a.cy + cuy * pad;
+        x2 = b.cx - cux * pad; y2 = b.cy - cuy * pad;
       }
       // Invisible straight guide — anime.path() needs one clean single-segment path to
       // sample; rough's sketchy stroke is multi-subpath and unusable for motion-path.
