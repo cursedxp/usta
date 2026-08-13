@@ -146,6 +146,52 @@ function el(tag, attrs) { const e = document.createElementNS(NS, tag);
   for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
 function centerOf(id) { return meta[id] || { cx: 400, cy: 225 }; }
 
+// Axis-aligned bounding box of a CURRENTLY VISIBLE box-type element (node/circle/text/note).
+// Reflects the element's CURRENT center (cx,cy), so it stays correct after a `move`.
+// Returns null for unknown ids and for non-box entries (e.g. arrows, which have no `kind`).
+function aabbOf(id) {
+  const m = meta[id]; if (!m) return null;
+  if (m.kind === "circle") {
+    const r = m.r || 0;
+    return { x1: m.cx - r, y1: m.cy - r, x2: m.cx + r, y2: m.cy + r };
+  }
+  if (m.kind === "rect" || m.kind === "text") {
+    const w = m.w || 0, h = m.h || 0;
+    return { x1: m.cx - w / 2, y1: m.cy - h / 2, x2: m.cx + w / 2, y2: m.cy + h / 2 };
+  }
+  return null;
+}
+
+// Predicted box of a NOT-YET-ADDED element, from its op spec, before it exists in the DOM.
+// Mirrors makeElement's / the "note" case's geometry exactly.
+function aabbFromSpec(op) {
+  if (op.op === "note") {
+    const w = Math.max(140, (op.text || "").length * 9.5 + 28), h = 42;
+    return { x1: op.x - w / 2, y1: op.y - h / 2, x2: op.x + w / 2, y2: op.y + h / 2 };
+  }
+  const spec = op.el || {};
+  if (spec.type === "node") {
+    const w = spec.w || 140, h = spec.h || 70;
+    return { x1: spec.x, y1: spec.y, x2: spec.x + w, y2: spec.y + h };
+  }
+  if (spec.type === "circle") {
+    const r = spec.r || 34;
+    return { x1: spec.cx - r, y1: spec.cy - r, x2: spec.cx + r, y2: spec.cy + r };
+  }
+  // text
+  const fontSize = spec.size || 16;
+  const tw = (spec.text || spec.label || "").length * fontSize * 0.62;
+  const th = fontSize * 1.4;
+  return { x1: spec.x - tw / 2, y1: spec.y - th / 2, x2: spec.x + tw / 2, y2: spec.y + th / 2 };
+}
+
+function inflate(box, pad) { return { x1: box.x1 - pad, y1: box.y1 - pad, x2: box.x2 + pad, y2: box.y2 + pad }; }
+
+function intersects(a, b) {
+  if (!a || !b) return false;
+  return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
+}
+
 // Deterministic per-element roughness: same element id always sketches identically,
 // so replay (renderUpTo) never shows the shapes "re-rolling" their hand-drawn wobble.
 function fnv1a(str) {
@@ -178,7 +224,10 @@ function makeElement(spec) {
   } else { // text
     const t = el("text", { x: spec.x, y: spec.y, class: "lbl", "font-size": spec.size || 16 });
     t.textContent = spec.text || spec.label || ""; g.appendChild(t);
-    meta[spec.id] = { cx: spec.x, cy: spec.y, kind: "text" };
+    const fontSize = spec.size || 16;
+    const tw = (spec.text || spec.label || "").length * fontSize * 0.62;
+    const th = fontSize * 1.4;
+    meta[spec.id] = { cx: spec.x, cy: spec.y, kind: "text", w: tw, h: th };
   }
   orig[spec.id] = Object.assign({}, meta[spec.id]);
   return g;
