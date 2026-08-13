@@ -194,7 +194,7 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"[
-      {"caption":"Browser and server appear","duration":3000,"ops":[
+      {"caption":"Browser and server appear","duration":3000,"detail":"Two machines, two roles: your browser asks, the server answers. Everything that follows is just this conversation.","ops":[
         {"op":"add","el":{"id":"b","type":"node","x":80,"y":200,"w":140,"h":70,"label":"Browser"}},
         {"op":"add","el":{"id":"s","type":"node","x":580,"y":200,"w":140,"h":70,"label":"Server"}}
       ]},
@@ -203,7 +203,7 @@ mod tests {
         {"op":"packet","along":"a1","label":"GET"},
         {"op":"pulse","id":"s"}
       ]},
-      {"caption":"The response comes back","ops":[
+      {"caption":"The response comes back","detail":"The server replies with a status code (200 = OK) and the page's HTML. The browser then renders it — and fires new requests for images, CSS and scripts the same way.","ops":[
         {"op":"remove","id":"a1"},
         {"op":"arrow","id":"a2","from":"s","to":"b","label":"200 OK"},
         {"op":"packet","along":"a2"},
