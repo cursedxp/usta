@@ -54,7 +54,9 @@ pub fn visual_system() -> String {
      of scenes — no prose, no markdown fences, no HTML.\n\
      \n\
      Stage: 800 x 450 coordinate space.\n\
-     Scene: {\"caption\": string, \"duration\": ms (optional, default 3500), \"ops\": [...]}\n\
+     Scene: {\"caption\": string, \"duration\": ms (optional, default 3500), \
+     \"detail\": 2-3 sentence deeper note (optional — only when the visual alone may not suffice), \
+     \"ops\": [...]}\n\
      Ops:\n\
      - {\"op\":\"add\",\"el\":{\"id\",\"type\":\"node|circle|text\",...}} — node: x,y,w,h,label; \
        circle: cx,cy,r,label; text: x,y,text,size\n\
@@ -79,6 +81,7 @@ pub fn visual_system() -> String {
      - Prefer motion that carries meaning (packets for data flow, pulse for 'this reacts', \
        highlight for 'remember this').\n\
      - Use a concrete analogy where it helps, in a note.\n\
+     - Add detail only where the drawing genuinely needs backup; most scenes should not have it.\n\
      - End with a summary scene that shows the whole picture once more."
         .to_string()
 }
@@ -195,7 +198,7 @@ mod tests {
         {"op":"add","el":{"id":"b","type":"node","x":80,"y":200,"w":140,"h":70,"label":"Browser"}},
         {"op":"add","el":{"id":"s","type":"node","x":580,"y":200,"w":140,"h":70,"label":"Server"}}
       ]},
-      {"caption":"A request travels","ops":[
+      {"caption":"A request travels","detail":"The browser opens a TCP connection first, then sends an HTTP GET. Headers ride along with the request: host, cookies, accepted formats.","ops":[
         {"op":"arrow","id":"a1","from":"b","to":"s","label":"GET /"},
         {"op":"packet","along":"a1","label":"GET"},
         {"op":"pulse","id":"s"}
@@ -220,6 +223,17 @@ mod tests {
         // rough.js (vendored Görev 2): MIT header inlined, placeholder consumed.
         assert!(html.contains("rough.js v4.6.6"), "vendored rough.js (with MIT header) must be inlined");
         assert!(!html.contains(PLACEHOLDER_ROUGH), "rough placeholder must be consumed");
+    }
+
+    #[test]
+    fn build_accepts_optional_detail_and_inlines_it() {
+        // "detail" is optional player chrome — a scene carrying one must validate,
+        // and its text must land verbatim in the built HTML (drawer content source).
+        let html = build_visual_html(SAMPLE).unwrap();
+        assert!(html.contains("\"detail\":\"The browser opens a TCP connection first"));
+        // scenes without detail stay valid too (SAMPLE's other scenes have none)
+        let no_detail = r#"[{"caption":"plain","ops":[]}]"#;
+        assert!(build_visual_html(no_detail).is_ok());
     }
 
     #[test]
@@ -296,7 +310,8 @@ mod tests {
         let s = visual_system();
         for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
                        "6-12 scenes", "ONE idea", "same language as the user", "800", "450",
-                       "8px grid", "focal point", "3 words"] {
+                       "8px grid", "focal point", "3 words",
+                       "\"detail\"", "most scenes should not have it"] {
             assert!(s.contains(needle), "visual_system missing: {needle}");
         }
         // The model must NOT be told to write files or HTML.
