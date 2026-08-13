@@ -223,7 +223,10 @@ async fn run_visual_generation(
     request: &str,
     last_tokens: Option<u64>,
 ) -> Result<()> {
-    match ask_live(
+    // `page_notice(...)?` must NOT be allowed to early-return here — every arm's
+    // notice Result is captured instead, so `backend.reset_session()` below always
+    // runs before any terminal-IO error is propagated (Görev 6 carry-forward fix).
+    let notice_result: Result<()> = match ask_live(
         tui,
         editor,
         events,
@@ -258,19 +261,19 @@ async fn run_visual_generation(
                                     path.display(),
                                     if opened { "" } else { " (open it in your browser)" }
                                 ),
-                            )?;
+                            )
                         }
-                        Err(e) => page_notice(tui, &format!("error: {e}"))?,
+                        Err(e) => page_notice(tui, &format!("error: {e}")),
                     }
                 }
-                Err(e) => page_notice(tui, &format!("visual generation failed ({e}) — try /show again"))?,
+                Err(e) => page_notice(tui, &format!("visual generation failed ({e}) — try /show again")),
             }
         }
-        Ok(AskOutcome::Cancelled) => page_notice(tui, "visual generation cancelled")?,
-        Err(e) => page_notice(tui, &format!("error: {e}"))?,
-    }
-    backend.reset_session(); // all paths — slug parity
-    Ok(())
+        Ok(AskOutcome::Cancelled) => page_notice(tui, "visual generation cancelled"),
+        Err(e) => page_notice(tui, &format!("error: {e}")),
+    };
+    backend.reset_session(); // all paths — slug parity, ALWAYS runs (see notice_result above)
+    notice_result
 }
 
 /// After a normal reply has been displayed and recorded, run the visual flow
