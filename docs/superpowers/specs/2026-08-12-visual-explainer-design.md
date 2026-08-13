@@ -134,6 +134,16 @@ Model'e verilen **bağlayıcı** kurallar stil değil, yerleşim ve pedagojidir:
 
 Model bu kuralları JSON `ops` diziyle uygular (Bölüm 2'deki şema) — `add/arrow/packet/pulse/highlight/move/remove/note`. Renk, font, çizgi kalınlığı, easing gibi hiçbir görsel karar modelin elinde değildir; bunlar Katman 1'de sabittir.
 
+### Katman 3 — Motor emniyeti (anti-overlap)
+
+Katman 2 modelin niyetidir; motor `2026-08-13-visual-overlap-engine-design.md`'de tanımlı ikinci bir emniyet katmanı taşır — model önerir, motor garanti eder:
+- Her kutu-tipi eleman (node/circle/note/text) için AABB (eksen-hizalı sınır kutusu) hesaplanır.
+- Ok uçları artık sabit pad yerine kaynak/hedef AABB kenarından + 12px boşlukla başlar.
+- `add`/`note` op'unda eleman eklenmeden önce mevcut AABB'ler 24px şişirilerek çarpışma test edilir; çakışırsa deterministik bir arama (sabit yön sırası, 8px adım) ilk boş konumu bulur ve spec koordinatına delta olarak uygulanır.
+- DOM'a eklendikten sonra `getBBox()` ile gerçek kutu alınır; tahminden büyükse (ör. uzun metin) tek seferlik ikinci bir düzeltme turu çalışır.
+- `move` op'u kasıtlı olarak nudge YAPMAZ — modelin anlatı hareketi bozulmasın diye.
+- Arama tamamen deterministik olduğundan replay (◀ / ▶|) her seferinde aynı yerleşimi üretir.
+
 ### `[[show: …]]` işaretçisi (Görev 4 — doğal dil tetikleyici)
 
 Açık komut (`/show [konu]`) dışında, normal sohbet yanıtı içinde model `[[show: <konu>]]` yazarak görselleştirmeyi kendi önerebilir — ama SADECE kullanıcının açık isteği üzerine (ör. "bunu çizer misin", "görsel göster"); Usta kendiliğinden görsel dayatmaz. Davranış (`extract_show_marker`, `src/visual.rs`):
