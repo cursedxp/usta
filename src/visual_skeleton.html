@@ -424,6 +424,16 @@ async function apply(op, animate) {
       // Only the absolute center moves — kind/ox/oy/w/h/r stay put, they're the *local*
       // (untranslated) geometry rough needs to redraw a highlight overlay inside this <g>.
       meta[op.id] = Object.assign({}, meta[op.id], { cx: nx, cy: ny });
+      // Retarget: any arrow using the moved id as an endpoint snaps to the new center.
+      // Runs AFTER the center update above so drawArrowGeometry reads the fresh position.
+      // Instant/tween-less regardless of animate — the element's own move already tweened,
+      // arrows just snap (spec: animating the arrow too is YAGNI).
+      for (const k in meta) {
+        const m = meta[k];
+        if (m && m.from !== undefined && m.to !== undefined && (m.from === op.id || m.to === op.id)) {
+          if (document.getElementById("el-" + k)) drawArrowGeometry(k);
+        }
+      }
       break; }
     case "arrow": {
       const g = el("g", { id: "el-" + op.id });
