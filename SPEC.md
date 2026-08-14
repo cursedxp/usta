@@ -52,7 +52,7 @@
 - **`usta`** (argsız) → eksikse global + proje `.usta/` **otomatik kurulur** (bootstrap), sonra konuyu sorar (TTY'de) veya `genel`'e düşer (piped).
 - **`usta start <konu>`** → konu açıkça verilir (slug'lanır: `"JavaScript Basics"` → `javascript`). Kısayol.
 - **`usta init`** → opsiyonel; sadece kurar (başlatmadan), per-dosya durum yazar. Artık zorunlu değil.
-- Konu = öğrenme başlığı/dosyalama anahtarı (`progress/<konu>.md`). **Ne inşa ettiğin** (proje/hedef) klasör + sohbette söylenir — Usta parça-başı "spek'in ne?" diye sorar.
+- Konu = öğrenme başlığı/dosyalama anahtarı (`progress/<konu>.md`). **Ne inşa ettiğin** `mentor/PROJECT.md`'de yaşar (Usta tanışmadan yazar, kullanıcı elle düzenleyebilir); Usta önce oraya bakar, orada yoksa sorar. Projenin durumu `mentor/PROGRESS.md`'de (Bitti/Yapılıyor/Sırada + append-only Kararlar).
 
 ## 4.6 Pedagoji Katmanı (v0.3)
 
@@ -156,6 +156,9 @@ usta/
     _default.md          # "spek gereksiz, direkt yap" mantığı
   projects/
     rust-takvim/         # aktif iş bağlamı, per-slice mini-spekler
+  mentor/                # KULLANICIYA DÖNÜK, görünür — proje root'unda (.usta DIŞINDA)
+    PROJECT.md           # proje tanımı (Ne/Neden/Ölçek/Stack/Kapsam Dışı) — Usta tanışmadan yazar, kullanıcı editler
+    PROGRESS.md          # proje durumu (Bitti/Yapılıyor/Sırada) + append-only Kararlar — kapanış flush'ı yazar, reset dokunmaz
   src/                   # Rust: cli, claude client, watcher, research, health
   Cargo.toml
 ```

@@ -9,6 +9,10 @@ Not a big document. Three questions for that piece:
 - **How do we know it's done?** (acceptance criterion, one sentence)
 - **What's the smallest working first version?** (start here)
 
+Before asking for a spec, check `mentor/PROJECT.md` in your system prompt — if the
+project definition is already there, don't re-ask it piece by piece; only ask for
+the mini-spec of the CURRENT piece.
+
 That's it. The user writes it, you briefly discuss it, then code. Don't stall trying to perfect the spec.
 
 ## 2. Scale-aware architecture

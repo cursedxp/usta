@@ -29,6 +29,7 @@ Domain-agnostik — Rust, JavaScript, marketing, ne öğreniyorsan. İlk kullan�
 | 🌍 **Her konu** | Rust'a özgü değil. Yeni konuda (Linux güvenliği, GTM, ne olursa) Usta yaklaşımı **tanışmayla türetir**, web-araştırmalı **müfredat haritası** çıkarır (`görülmedi → görüldü → oturdu → derinleşildi`). Kapsam bekçiliği: havada hiçbir şey kalmaz. |
 | 🎨 **Terminal arayüzü** | Claude Code tarzı inline TUI (ratatui): açılışta çift kolonlu hoş-geldin kutusu (öğrenme durumu + sırada ne var), canlı dört-kenarlı girdi kutusu, yapışık durum satırı (spinner + bağlam göstergesi). Akış normal scrollback'te kalır — yukarı kaydır, kopyala. Pipe/`NO_COLOR`'da otomatik düz mod (script'ler bozulmaz). |
 | 🗂️ **Yönetim** | `usta topics` nerede ne öğrendiğini gösterir; `reset` konuyu veya her şeyi sıfırlar. |
+| 📋 **Proje bağlamı** | Proje tanımı + durumu görünür `mentor/` klasöründe yaşar (`PROJECT.md` + `PROGRESS.md`). Usta tanışmadan doldurur, her oturum günceller — "spek'in ne?" diye baştan sormaz. |
 
 ## Kurulum
 
