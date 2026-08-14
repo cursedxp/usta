@@ -102,6 +102,16 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     read_all_approaches(project_usta.as_ref(), global, &mut parts);
 
     read_section(&global.join("USER.md"), "USER.md", &mut parts);
+
+    // User-facing project context: definition + status live in the VISIBLE
+    // `mentor/` dir at the project root (not under `.usta/`) so the user can
+    // read and hand-edit them (spec: mentor layer). Loaded right after the
+    // profile: who first, then which project, then how to teach.
+    if let Some(p) = project {
+        read_section(&p.join("mentor/PROJECT.md"), "mentor/PROJECT.md", &mut parts);
+        read_section(&p.join("mentor/PROGRESS.md"), "mentor/PROGRESS.md", &mut parts);
+    }
+
     read_section(
         &global.join("learner/index.md"),
         "learner/index.md",
@@ -263,6 +273,30 @@ mod tests {
         let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
         assert!(sys.contains("SEVIYE: başlangıç"));
         assert!(sys.contains("learner/progress/rust.md"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn mentor_files_included_when_present_skipped_when_absent() {
+        let (global, project) = temp_pair("mentor");
+        fs::create_dir_all(global.join("approaches")).unwrap();
+        fs::write(global.join("SOUL.md"), "SOUL").unwrap();
+
+        // absent → no mentor section at all
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-14");
+        assert!(!sys.contains("mentor/PROJECT.md"));
+
+        // present → both labeled sections appear
+        let mentor = project.join("mentor");
+        fs::create_dir_all(&mentor).unwrap();
+        fs::write(mentor.join("PROJECT.md"), "PRJICERIK").unwrap();
+        fs::write(mentor.join("PROGRESS.md"), "PPGICERIK").unwrap();
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-14");
+        assert!(sys.contains("mentor/PROJECT.md"));
+        assert!(sys.contains("PRJICERIK"));
+        assert!(sys.contains("mentor/PROGRESS.md"));
+        assert!(sys.contains("PPGICERIK"));
 
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }
