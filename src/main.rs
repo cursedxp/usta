@@ -756,6 +756,42 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     }
 }
 
+/// System prompt for the one-shot start suggestion (spec: project-aware start).
+/// Mirrors the slug mini-session: single call, session reset afterwards.
+pub(crate) fn start_suggest_system() -> String {
+    "You are Usta, a Socratic engineering mentor. The user has a project \
+     definition (given in the user message) but does NOT know where to start \
+     learning. Propose the single best starting topic. Reply in the language \
+     of the project file. FIRST line must be exactly `KONU: <topic-slug>` \
+     (lowercase, hyphenated, 1-3 words). Then 2-4 sentences: why this topic \
+     first, and ONE concrete first step small enough to start today. No \
+     greeting, no markdown headings, nothing after the suggestion."
+        .to_string()
+}
+
+/// Parse the suggestion reply: first `KONU:` line → slug (normalized through
+/// slugify_topic), remaining lines → suggestion text shown to the user.
+/// No `KONU:` marker or empty slug → None (caller falls back to manual entry).
+pub(crate) fn parse_start_suggestion(reply: &str) -> Option<(String, String)> {
+    let mut lines = reply.trim().lines();
+    let first = lines.next()?.trim();
+    let rest_raw = first.strip_prefix("KONU:")?;
+    // `slugify_topic` never returns an empty string — it falls back to
+    // "genel" for empty/whitespace input. So the emptiness check MUST happen
+    // here, before slugify_topic runs, or a blank `KONU:` line would wrongly
+    // parse to Some(("genel", ...)) instead of None.
+    if rest_raw.trim().is_empty() {
+        return None;
+    }
+    // `slugify_topic` splits on whitespace only, so a hyphen already inside
+    // the KONU value (e.g. "rust-temelleri") would otherwise be stripped and
+    // the words glued together ("rusttemelleri"). Turn hyphens/underscores
+    // into spaces first, same trick `finalize_slug` uses for model replies.
+    let slug = slugify_topic(&rest_raw.replace(['-', '_'], " "));
+    let text = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+    Some((slug, text))
+}
+
 /// New-topic confirmation text (for TUI tui_confirm). The plain path uses its own
 /// `[e/H]` rustyline format — the wording is deliberately different, the two surfaces are separate.
 pub(crate) fn new_topic_confirm_msg(slug: &str) -> String {
@@ -1755,6 +1791,37 @@ mod tests {
         let s = slug_system(&[]);
         assert!(s.contains("slug"));
         assert!(!s.contains("Existing topics"));
+    }
+
+    #[test]
+    fn start_suggest_system_defines_konu_contract() {
+        let s = start_suggest_system();
+        assert!(s.contains("KONU:"));
+        assert!(s.contains("first step"));
+    }
+
+    #[test]
+    fn parse_start_suggestion_splits_slug_and_text() {
+        let reply = "KONU: rust-temelleri\nStart with Rust because the backend is Rust.\nFirst step: cargo new.";
+        let (slug, text) = parse_start_suggestion(reply).unwrap();
+        assert_eq!(slug, "rust-temelleri");
+        assert!(text.contains("First step"));
+        assert!(!text.contains("KONU:"));
+    }
+
+    #[test]
+    fn parse_start_suggestion_normalizes_messy_slug_line() {
+        let (slug, _) = parse_start_suggestion("KONU: Rust Temelleri!\ngerekçe").unwrap();
+        assert_eq!(slug, "rust-temelleri");
+    }
+
+    #[test]
+    fn parse_start_suggestion_tolerates_missing_text_rejects_missing_konu() {
+        let (slug, text) = parse_start_suggestion("KONU: rust").unwrap();
+        assert_eq!(slug, "rust");
+        assert_eq!(text, "");
+        assert!(parse_start_suggestion("just prose, no marker").is_none());
+        assert!(parse_start_suggestion("KONU:   \ntext").is_none());
     }
 
     #[test]
