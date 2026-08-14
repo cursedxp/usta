@@ -414,6 +414,10 @@ async fn flush_progress(
     let p_path = flush_target("progress", project_root, global_for_paths, &session.topic).unwrap();
     let a_path = flush_target("approach", project_root, global_for_paths, &session.topic).unwrap();
     let c_path = flush_target("curriculum", project_root, global_for_paths, &session.topic).unwrap();
+    let prj_path =
+        flush_target("project", project_root, global_for_paths, &session.topic).unwrap();
+    let ppg_path =
+        flush_target("project-progress", project_root, global_for_paths, &session.topic).unwrap();
     let pr_path = global
         .as_ref()
         .map(|g| flush_target("profile", project_root, g, &session.topic).unwrap());
@@ -426,6 +430,8 @@ async fn flush_progress(
         read(&a_path).as_deref(),
         read(&c_path).as_deref(),
         pr_path.as_deref().and_then(read).as_deref(),
+        read(&prj_path).as_deref(),
+        read(&ppg_path).as_deref(),
     )));
     let reply = ask_usta(backend, &session.system, &history).await?;
     let files = progress::split_files(&reply.text);
@@ -437,6 +443,8 @@ async fn flush_progress(
             "progress" => p_path.clone(),
             "approach" => a_path.clone(),
             "curriculum" => c_path.clone(),
+            "project" => prj_path.clone(),
+            "project-progress" => ppg_path.clone(),
             "profile" => match &pr_path {
                 Some(p) => p.clone(),
                 // no global root — the warning was already given above.

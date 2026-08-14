@@ -76,20 +76,27 @@ pub fn closing_prompt(
     approach: Option<&str>,
     curriculum: Option<&str>,
     profile: Option<&str>,
+    project: Option<&str>,
+    project_progress: Option<&str>,
 ) -> String {
     let p = progress.unwrap_or("(dosya henüz yok)");
     let a = approach.unwrap_or("(dosya henüz yok)");
     let c = curriculum.unwrap_or("(dosya henüz yok)");
     let pr = profile.unwrap_or("(dosya henüz yok)");
+    let prj = project.unwrap_or("(dosya henüz yok)");
+    let ppg = project_progress.unwrap_or("(dosya henüz yok)");
     format!(
         "[SESSION CLOSING — FILE UPDATE]\n\
          Task: produce whichever of the files below need updating. Start each file with \
          this line: `===DOSYA: <name>===` (name: progress | approach | curriculum | \
-         profile — e.g. if generating the profile, `===DOSYA: profile===`).\n\n\
+         profile | project | project-progress — e.g. if generating the profile, \
+         `===DOSYA: profile===`).\n\n\
          Current progress ({topic}):\n---\n{p}\n---\n\n\
          Current approach:\n---\n{a}\n---\n\n\
          Current curriculum:\n---\n{c}\n---\n\n\
          Current profile:\n---\n{pr}\n---\n\n\
+         Current project definition (mentor/PROJECT.md):\n---\n{prj}\n---\n\n\
+         Current project status (mentor/PROGRESS.md):\n---\n{ppg}\n---\n\n\
          Rules:\n\
          - `progress` is ALWAYS generated. Structure: `# {topic} — İlerleme` heading + \
          `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (PROVE IT) / \
@@ -124,6 +131,26 @@ pub fn closing_prompt(
          KEEP the valid information already in the current profile (the user may have \
          hand-edited it), ~1 page cap, merge duplicates. If nothing changed, don't \
          generate this file at all.\n\
+         - `project` is the USER-FACING project definition, written to `mentor/PROJECT.md` \
+         at the project root. Generate it ONLY when (a) the file doesn't exist yet and a \
+         concrete project was discussed this session, or (b) the project definition \
+         materially changed this session. Structure: `# <Project name> — Proje Tanımı` \
+         heading + `## Ne` (1-2 sentences: what is being built) / `## Neden` \
+         (goal/motivation, tie to the learning goal) / `## Ölçek` (solo-scale vs \
+         1000-user scale — architecture advice anchors to this) / `## Stack` (language, \
+         tools, WHY chosen) / `## Kapsam Dışı` (deliberate non-goals). For non-software \
+         domains keep the same skeleton but adapt content (e.g. channels/tools instead \
+         of stack). KEEP the user's hand-edits. If no project was discussed, do NOT \
+         generate this file.\n\
+         - `project-progress` is the USER-FACING project status, written to \
+         `mentor/PROGRESS.md`. Generate it in every session where work happened ON THE \
+         PROJECT (not for pure concept-learning sessions). Structure: `# <Project name> \
+         — Durum` heading + `## Bitti` / `## Yapılıyor` / `## Sırada` (rewrite these \
+         three with the CURRENT state — they are a pointer, not a journal) + \
+         `## Kararlar` (append-only decision log: `- YYYY-MM-DD | decision | one-line \
+         why`; append ONLY decisions taken this session; NEVER delete or rewrite \
+         existing lines). This tracks the PROJECT's state — the learner's knowledge \
+         belongs in `progress`, not here.\n\
          - Write no explanation/greeting outside the delimiter lines; every file is pure \
          markdown."
     )
@@ -233,26 +260,26 @@ mod tests {
 
     #[test]
     fn closing_prompt_embeds_topic_and_existing() {
-        let s = closing_prompt("rust", Some("- Seviye: orta"), None, None, None);
+        let s = closing_prompt("rust", Some("- Seviye: orta"), None, None, None, None, None);
         assert!(s.contains("rust"));
         assert!(s.contains("- Seviye: orta"));
     }
 
     #[test]
     fn closing_prompt_marks_missing_file() {
-        let s = closing_prompt("rust", None, None, None, None);
+        let s = closing_prompt("rust", None, None, None, None, None, None);
         assert!(s.contains("(dosya henüz yok)"));
     }
 
     #[test]
     fn closing_prompt_includes_pruning_rule() {
-        let s = closing_prompt("rust", None, None, None, None);
+        let s = closing_prompt("rust", None, None, None, None, None, None);
         assert!(s.contains("20 items"));
     }
 
     #[test]
     fn closing_prompt_requests_rich_sections() {
-        let s = closing_prompt("rust", None, None, None, None);
+        let s = closing_prompt("rust", None, None, None, None, None, None);
         assert!(s.contains("Geri çağırma soruları"));
         assert!(s.contains("Hata günlüğü"));
         assert!(s.contains("İpucu merdiveni"));
@@ -310,7 +337,15 @@ mod tests {
 
     #[test]
     fn closing_prompt_embeds_all_three_currents_and_delimiter() {
-        let s = closing_prompt("rust", Some("PMEVCUT"), Some("AMEVCUT"), Some("CMEVCUT"), None);
+        let s = closing_prompt(
+            "rust",
+            Some("PMEVCUT"),
+            Some("AMEVCUT"),
+            Some("CMEVCUT"),
+            None,
+            None,
+            None,
+        );
         assert!(s.contains("PMEVCUT"));
         assert!(s.contains("AMEVCUT"));
         assert!(s.contains("CMEVCUT"));
@@ -320,7 +355,7 @@ mod tests {
 
     #[test]
     fn closing_prompt_defines_goal_sections() {
-        let s = closing_prompt("almanca", None, None, None, None);
+        let s = closing_prompt("almanca", None, None, None, None, None, None);
         assert!(s.contains("## Hedef Durumu"));
         assert!(s.contains("## Hedef"));
         assert!(s.contains("pace assessment"));
@@ -328,11 +363,45 @@ mod tests {
 
     #[test]
     fn closing_prompt_defines_profile_rules() {
-        let s = closing_prompt("rust", None, None, None, Some("CURRENT PROFILE"));
+        let s = closing_prompt("rust", None, None, None, Some("CURRENT PROFILE"), None, None);
         assert!(s.contains("===DOSYA: profile==="));
         assert!(s.contains("CURRENT PROFILE"));
         assert!(s.contains("NO TOPIC KNOWLEDGE"));
         assert!(s.contains("only")); // generated only if new/changed info exists
+    }
+
+    #[test]
+    fn closing_prompt_includes_mentor_file_rules() {
+        let s = closing_prompt("rust", None, None, None, None, None, None);
+        assert!(s.contains("project-progress"));
+        assert!(s.contains("mentor/PROJECT.md"));
+        assert!(s.contains("mentor/PROGRESS.md"));
+        // append-only decision log rule must be spelled out
+        assert!(s.contains("NEVER delete"));
+        assert!(s.contains("## Kararlar"));
+    }
+
+    #[test]
+    fn closing_prompt_embeds_current_mentor_files() {
+        let s = closing_prompt(
+            "rust",
+            None,
+            None,
+            None,
+            None,
+            Some("PRJMEVCUT"),
+            Some("PPGMEVCUT"),
+        );
+        assert!(s.contains("PRJMEVCUT"));
+        assert!(s.contains("PPGMEVCUT"));
+    }
+
+    #[test]
+    fn split_files_carries_mentor_names() {
+        let reply = "===DOSYA: project===\nP\n===DOSYA: project-progress===\nQ";
+        let files = split_files(reply);
+        assert_eq!(files[0], ("project".to_string(), "P".to_string()));
+        assert_eq!(files[1], ("project-progress".to_string(), "Q".to_string()));
     }
 
     #[test]
