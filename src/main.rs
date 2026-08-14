@@ -375,11 +375,15 @@ fn build_session(
 /// person, shared across all topics); `progress`/`approach`/`curriculum` go to the
 /// PROJECT root (`project_root`). Unknown name → `None` — this lets the "unknown
 /// file skipped" safety in `flush_progress` be tested in isolation.
+/// `project`/`project-progress` go to the visible `mentor/` dir under the project
+/// root (user-facing, spec: mentor layer).
 fn flush_target(name: &str, project_root: &Path, global: &Path, topic: &str) -> Option<PathBuf> {
     match name {
         "progress" => Some(progress::progress_path(project_root, topic)),
         "approach" => Some(progress::approach_path(project_root, topic)),
         "curriculum" => Some(progress::curriculum_path(project_root, topic)),
+        "project" => Some(progress::project_md_path(project_root)),
+        "project-progress" => Some(progress::project_progress_path(project_root)),
         "profile" => Some(global.join("USER.md")),
         _ => None,
     }
@@ -1326,6 +1330,20 @@ mod tests {
         assert_eq!(
             flush_target("curriculum", project, global, "rust"),
             Some(PathBuf::from("/proje/.usta/learner/curriculum/rust.md"))
+        );
+    }
+
+    #[test]
+    fn flush_target_routes_mentor_files_to_project_root() {
+        let project = Path::new("/tmp/proj");
+        let global = Path::new("/tmp/global");
+        assert_eq!(
+            flush_target("project", project, global, "rust"),
+            Some(PathBuf::from("/tmp/proj/mentor/PROJECT.md"))
+        );
+        assert_eq!(
+            flush_target("project-progress", project, global, "rust"),
+            Some(PathBuf::from("/tmp/proj/mentor/PROGRESS.md"))
         );
     }
 
