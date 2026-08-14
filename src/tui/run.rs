@@ -477,9 +477,50 @@ pub async fn run(
                     // when local is non-empty, so this normally isn't reached. Its natural
                     // counterpart in the loop is "swallow, ask again" — this is the safe fallback.
                     None => {}
-                    // TODO(Task 3): propose a starting point from PROJECT.md instead of
-                    // silently swallowing — placeholder to keep this match exhaustive.
-                    Some(crate::TopicChoice::Suggest) => {}
+                    Some(crate::TopicChoice::Suggest) => {
+                        // One-shot suggestion from mentor/PROJECT.md (spec: project-aware
+                        // start). Same mechanics as the slug mini-session: single call,
+                        // then ALWAYS reset.
+                        let project_md = read(progress::project_md_path(project_root)).unwrap_or_default();
+                        let outcome = ask_live(
+                            &mut tui,
+                            &mut editor,
+                            &mut events,
+                            backend,
+                            &crate::start_suggest_system(),
+                            &[Message::user(project_md.as_str())],
+                            None,
+                        )
+                        .await;
+                        backend.reset_session(); // suggestion chat must not leak into the session
+                        let parsed = match outcome {
+                            Ok(AskOutcome::Reply(reply)) => crate::parse_start_suggestion(&reply.text),
+                            Ok(AskOutcome::Cancelled) | Err(_) => None,
+                        };
+                        let Some((slug, text)) = parsed else {
+                            page_notice(&mut tui, "suggestion failed — type a topic")?;
+                            continue;
+                        };
+                        if !text.is_empty() {
+                            page_notice(&mut tui, &text)?;
+                        }
+                        if tui_confirm(
+                            &mut tui,
+                            &editor,
+                            &mut events,
+                            &format!("start with '{slug}'? [E/h]"),
+                        )
+                        .await?
+                        {
+                            page_notice(&mut tui, &format!("topic: {slug}"))?;
+                            intro = Some(format!(
+                                "Usta's own opening suggestion (already shown to the user, \
+                                 they accepted it — continue from its first step, don't repeat it):\n{text}"
+                            ));
+                            break slug;
+                        }
+                        page_notice(&mut tui, "cancelled — type a topic")?;
+                    }
                     Some(crate::TopicChoice::Resume(t)) => {
                         page_notice(&mut tui, &format!("resuming: {t}"))?;
                         resumed = true; // for the full-mode welcome below
