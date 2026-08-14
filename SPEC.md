@@ -53,6 +53,7 @@
 - **`usta start <konu>`** → konu açıkça verilir (slug'lanır: `"JavaScript Basics"` → `javascript`). Kısayol.
 - **`usta init`** → opsiyonel; sadece kurar (başlatmadan), per-dosya durum yazar. Artık zorunlu değil.
 - Konu = öğrenme başlığı/dosyalama anahtarı (`progress/<konu>.md`). **Ne inşa ettiğin** `mentor/PROJECT.md`'de yaşar (Usta tanışmadan yazar, kullanıcı elle düzenleyebilir); Usta önce oraya bakar, orada yoksa sorar. Projenin durumu `mentor/PROGRESS.md`'de (Bitti/Yapılıyor/Sırada + append-only Kararlar).
+- **Proje-farkında başlangıç:** ilk oturumda (`local` boş) `mentor/PROJECT.md` doluysa konu girişinde **boş Enter = başlangıç önerisi** — Usta PROJECT.md'den konu + gerekçe + somut ilk adım önerir (tek mini-çağrı, sonrası koşulsuz session reset — slug mini-oturum paritesi), kullanıcı onaylarsa oturum o konuyla açılır; öneri metni `intro` olarak onboarding'e taşınır (Usta kendi önerisini tekrar anlatmaz, ilk adımdan devam eder). Welcome/prompt satırı bu durumda "PROJECT.md found — press Enter, Usta suggests where to start." ipucunu gösterir. `local` doluysa boş Enter = **resume** (öncelikli, değişmedi). Plain/pipe yolunda öneri yok.
 
 ## 4.6 Pedagoji Katmanı (v0.3)
 
