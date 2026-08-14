@@ -194,8 +194,9 @@ async fn run_plain_loop(
 
     // Opening drill: if progress exists from previous sessions, Usta speaks first,
     // warming up with 2-3 recall questions (testing effect — USTA.md rule).
+    let project_known = progress::project_md_path(project_root).exists();
     if has_progress {
-        let opening = progress::opening_prompt(topic, profile_generic);
+        let opening = progress::opening_prompt(topic, profile_generic, project_known);
         session.push_user(&opening);
         recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
@@ -211,7 +212,7 @@ async fn run_plain_loop(
         }
     } else {
         // New topic: no approach/map yet — introduction turn, Usta speaks first.
-        let onboarding = progress::onboarding_prompt(topic, intro, profile_generic);
+        let onboarding = progress::onboarding_prompt(topic, intro, profile_generic, project_known);
         session.push_user(&onboarding);
         recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {

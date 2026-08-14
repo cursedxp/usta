@@ -593,10 +593,11 @@ pub async fn run(
         .as_deref()
         .map(crate::profile_is_generic)
         .unwrap_or(true);
+    let project_known = progress::project_md_path(project_root).exists();
     let opening = if has_progress {
-        progress::opening_prompt(&topic, profile_generic)
+        progress::opening_prompt(&topic, profile_generic, project_known)
     } else {
-        progress::onboarding_prompt(&topic, intro.as_deref(), profile_generic)
+        progress::onboarding_prompt(&topic, intro.as_deref(), profile_generic, project_known)
     };
     session.push_user(&opening);
     recorder.user(&opening);

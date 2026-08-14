@@ -159,8 +159,16 @@ pub fn closing_prompt(
 /// Opening-drill turn: if progress exists, Usta speaks first at the start of the
 /// session and asks a recall question (testing effect — TEACHING.md "Opening Drill" rule).
 /// Where it hooks into main.rs: Task 3 (opening-drill trigger).
-pub fn opening_prompt(topic: &str, profile_generic: bool) -> String {
+pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -> String {
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
+    let project_block = if project_known {
+        "\nThe project files mentor/PROJECT.md and mentor/PROGRESS.md are in your \
+         system prompt — do NOT re-ask project basics. After the drill, add one \
+         sentence on where the PROJECT left off, taken from the `## Sırada` section \
+         of mentor/PROGRESS.md.\n"
+    } else {
+        ""
+    };
     format!(
         "[SESSION OPENING — RECALL DRILL]\n{meet_block}\
          Topic: {topic}. Pick 2-3 questions from the 'Recall questions' section of your \
@@ -168,14 +176,19 @@ pub fn opening_prompt(topic: &str, profile_generic: bool) -> String {
          it short: a 2-minute warm-up, then we move to today's work. If progress has no \
          questions, come up with 2 small recall questions suited to my level. When the \
          drill is done, say one sentence from the map: where we are, what's next (your \
-         curriculum file is in the system prompt)."
+         curriculum file is in the system prompt).{project_block}"
     )
 }
 
 /// New-topic introduction turn: no approach + curriculum map yet — Usta
 /// derives them through open conversation (TEACHING.md "New Topic Introduction"). Not a fixed
 /// form: it's derived from what the user says, direction stays with the user.
-pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool) -> String {
+pub fn onboarding_prompt(
+    topic: &str,
+    intro: Option<&str>,
+    profile_generic: bool,
+    project_known: bool,
+) -> String {
     // The raw text the user typed when opening the topic IS the FIRST ANSWER of the
     // introduction — if it's reduced to a slug and discarded, the model just re-asks
     // what was already said ("I'll set up Coolify for my client, Fedora..." → "what are you after?" disaster).
@@ -191,9 +204,20 @@ pub fn onboarding_prompt(topic: &str, intro: Option<&str>, profile_generic: bool
         _ => String::new(),
     };
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
+    let project_block = if project_known {
+        "\nThe project files mentor/PROJECT.md and mentor/PROGRESS.md are in your \
+         system prompt — do NOT re-ask project basics; connect this new topic to \
+         the existing project context.\n"
+    } else {
+        "\nThere is no mentor/PROJECT.md for this project yet. During the \
+         introduction also find out, naturally (not as a form): what they're \
+         building, why, rough scale, stack/tools and why. At session close you'll \
+         be asked for a `project` file — the shell writes it; don't write files \
+         yourself during the session.\n"
+    };
     format!(
         "[NEW TOPIC — INTRODUCTION]\n\
-         Topic: {topic}. This topic has no approach or curriculum map yet.\n{intro_block}{meet_block}\
+         Topic: {topic}. This topic has no approach or curriculum map yet.\n{intro_block}{meet_block}{project_block}\
          Have a short, NATURAL introduction — this is not a form: ask at most two \
          questions in a single message, continue based on the answer; don't dump a \
          numbered question list. Find out: what they want to do/learn, what they \
@@ -405,23 +429,42 @@ mod tests {
     }
 
     #[test]
+    fn opening_prompt_mentions_project_pointer_when_known() {
+        let s = opening_prompt("rust", false, true);
+        assert!(s.contains("mentor/PROGRESS.md"));
+        assert!(s.contains("Sırada"));
+        let s = opening_prompt("rust", false, false);
+        assert!(!s.contains("mentor/PROGRESS.md"));
+    }
+
+    #[test]
+    fn onboarding_prompt_asks_project_basics_only_when_unknown() {
+        let s = onboarding_prompt("rust", None, false, false);
+        assert!(s.contains("mentor/PROJECT.md"));
+        assert!(s.contains("what they're building"));
+        let s = onboarding_prompt("rust", None, false, true);
+        assert!(!s.contains("what they're building"));
+    }
+
+    #[test]
     fn onboarding_prompt_carries_user_intro_and_forbids_reasking() {
         let s = onboarding_prompt(
             "hosting",
             Some("müşterimin hesabına coolify kuracağım, Fedora, temel güvenlik lazım"),
+            false,
             false,
         );
         assert!(s.contains("coolify kuracağım"));
         assert!(s.contains("FIRST ANSWER"));
         assert!(s.contains("don't ask again"));
         // If there's no intro, the block doesn't appear at all.
-        let bare = onboarding_prompt("hosting", None, false);
+        let bare = onboarding_prompt("hosting", None, false, false);
         assert!(!bare.contains("FIRST ANSWER"));
     }
 
     #[test]
     fn onboarding_prompt_infers_goal_without_jargon_and_limits_questions() {
-        let s = onboarding_prompt("almanca", None, false);
+        let s = onboarding_prompt("almanca", None, false, false);
         // Exploration/goal terms are NOT asked to the user — the model infers them itself.
         assert!(!s.contains("keşif mi"));
         assert!(s.contains("infer it YOURSELF"));
@@ -433,7 +476,7 @@ mod tests {
 
     #[test]
     fn opening_prompt_embeds_topic_and_asks_to_quiz() {
-        let s = opening_prompt("rust", false);
+        let s = opening_prompt("rust", false, false);
         assert!(s.contains("rust"));
         assert!(s.contains("RECALL DRILL"));
         assert!(s.contains("ASK"));
@@ -441,7 +484,7 @@ mod tests {
 
     #[test]
     fn onboarding_prompt_embeds_topic_and_open_conversation() {
-        let s = onboarding_prompt("linux-guvenlik", None, false);
+        let s = onboarding_prompt("linux-guvenlik", None, false, false);
         assert!(s.contains("linux-guvenlik"));
         assert!(s.contains("INTRODUCTION"));
         assert!(s.contains("form"));
@@ -451,27 +494,27 @@ mod tests {
     fn onboarding_prompt_does_not_tell_model_it_writes_files() {
         // Hard Rule 6: the model has no file-writing tool — it produces the closing
         // content, the shell writes the file. The prompt must not push the model to try writing.
-        let s = onboarding_prompt("rust", None, false);
+        let s = onboarding_prompt("rust", None, false, false);
         assert!(!s.contains("you will write files"));
         assert!(s.contains("shell writes"));
     }
 
     #[test]
     fn opening_prompt_mentions_curriculum_position() {
-        let s = opening_prompt("rust", false);
+        let s = opening_prompt("rust", false, false);
         assert!(s.contains("map"));
     }
 
     #[test]
     fn opening_prompts_include_meet_block_only_when_profile_generic() {
-        let on = onboarding_prompt("rust", None, true);
+        let on = onboarding_prompt("rust", None, true, false);
         assert!(on.contains("[PROFILE EMPTY]"));
         assert!(on.contains("1-2 questions"));
-        assert!(!onboarding_prompt("rust", None, false).contains("[PROFILE EMPTY]"));
+        assert!(!onboarding_prompt("rust", None, false, false).contains("[PROFILE EMPTY]"));
 
-        let op = opening_prompt("rust", true);
+        let op = opening_prompt("rust", true, false);
         assert!(op.contains("[PROFILE EMPTY]"));
-        assert!(!opening_prompt("rust", false).contains("[PROFILE EMPTY]"));
+        assert!(!opening_prompt("rust", false, false).contains("[PROFILE EMPTY]"));
     }
 
     #[test]
