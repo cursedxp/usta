@@ -1164,6 +1164,20 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
         }
     }
 
+    // Visible, user-facing project docs (mentor/PROJECT.md + PROGRESS.md are
+    // written by the closing flush; the dir is scaffolded so it's visible from
+    // day one). Deliberately OUTSIDE `.usta/` — reset must never touch it.
+    let mentor_dir = cwd.join("mentor");
+    let mentor_existed = mentor_dir.is_dir();
+    std::fs::create_dir_all(&mentor_dir)
+        .with_context(|| format!("could not create directory: {}", mentor_dir.display()))?;
+    results.push((mentor_dir.clone(), !mentor_existed));
+    let mentor_gitkeep = mentor_dir.join(".gitkeep");
+    if config::should_write(&mentor_gitkeep) {
+        std::fs::write(&mentor_gitkeep, "")
+            .with_context(|| format!("could not write: {}", mentor_gitkeep.display()))?;
+    }
+
     let visuals_dir = usta_dir.join("visuals");
     let visuals_existed = visuals_dir.is_dir();
     std::fs::create_dir_all(&visuals_dir)
@@ -1362,6 +1376,33 @@ mod tests {
             flush_target("bilinmeyen", Path::new("/proje"), Path::new("/glob"), "rust"),
             None
         );
+    }
+
+    #[test]
+    fn write_project_scaffold_creates_visible_mentor_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_mentor_scaffold_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        write_project_scaffold(&base).unwrap();
+        assert!(base.join("mentor").is_dir());
+        assert!(base.join("mentor/.gitkeep").is_file());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reset_topic_leaves_mentor_dir_untouched() {
+        // reset deletes under `.usta/` only — mentor/ is the user's project doc,
+        // possibly committed to their repo. Guard that contract with the same
+        // path logic run_reset_topic uses (progress_path is under .usta).
+        let root = Path::new("/tmp/proj");
+        let p = progress::progress_path(root, "rust");
+        assert!(p.starts_with(root.join(".usta")));
+        assert!(!progress::project_md_path(root).starts_with(root.join(".usta")));
     }
 
     #[test]
@@ -1603,7 +1644,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
 
         let results = write_project_scaffold(&base).unwrap();
-        assert_eq!(results.len(), 3);
+        assert_eq!(results.len(), 4);
         assert!(results.iter().all(|(_, wrote)| *wrote));
         assert!(base.join(".usta/learner/progress").is_dir());
         assert!(base.join(".usta/approaches").is_dir());
