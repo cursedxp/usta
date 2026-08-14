@@ -426,6 +426,10 @@ pub async fn run(
                 o.truncate(4);
                 o
             };
+            // Whether PROJECT.md has content — gates the empty-Enter "suggest" flow.
+            let project_known = std::fs::read_to_string(progress::project_md_path(project_root))
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
             // The identity welcome is only printed on the first turn — it's not
             // printed again if the new-topic confirmation is rejected and we go back
             // to the entry question.
@@ -467,12 +471,15 @@ pub async fn run(
                     page_notice(&mut tui, "that command works inside a session — pick a topic first")?;
                     continue;
                 }
-                match crate::interpret_topic_input(&raw, &local) {
+                match crate::interpret_topic_input(&raw, &local, project_known) {
                     // SAFE FALLBACK: interpret only returns None when (input is empty +
                     // local is empty); ask_topic only produces the empty-Enter sentinel
                     // when local is non-empty, so this normally isn't reached. Its natural
                     // counterpart in the loop is "swallow, ask again" — this is the safe fallback.
                     None => {}
+                    // TODO(Task 3): propose a starting point from PROJECT.md instead of
+                    // silently swallowing — placeholder to keep this match exhaustive.
+                    Some(crate::TopicChoice::Suggest) => {}
                     Some(crate::TopicChoice::Resume(t)) => {
                         page_notice(&mut tui, &format!("resuming: {t}"))?;
                         resumed = true; // for the full-mode welcome below

@@ -634,7 +634,7 @@ async fn resolve_topic(
         // Interpret the topic input: resume or new topic? (spec K1). In the plain path
         // the resume/new distinction only shows up in the slug — the TUI's visual notice
         // difference doesn't apply here.
-        match interpret_topic_input(raw, &local) {
+        match interpret_topic_input(raw, &local, false) {
             None => return Ok(("genel".to_string(), None)),
             Some(TopicChoice::Resume(t)) => return Ok((t, None)),
             Some(TopicChoice::New(raw)) => {
@@ -661,6 +661,7 @@ async fn resolve_topic(
                 );
                 // Loop restarts: "What's the topic?" is asked again.
             }
+            Some(TopicChoice::Suggest) => unreachable!("plain path passes project_known=false"),
         }
     }
 }
@@ -768,16 +769,23 @@ pub(crate) enum TopicChoice {
     Resume(String),
     /// New-topic flow — raw input (the caller slugifies it).
     New(String),
+    /// Empty Enter with no resumable topic but a filled mentor/PROJECT.md —
+    /// Usta proposes where to start (spec: project-aware start).
+    Suggest,
 }
 
 /// Deterministic selection rules — order follows spec §3/K1's table. `None` =
 /// swallow the input (empty + no topic to resume). No LLM; sentences return
 /// `New`, K2 (slug_system) kicks in there.
-pub(crate) fn interpret_topic_input(raw: &str, local: &[String]) -> Option<TopicChoice> {
+pub(crate) fn interpret_topic_input(raw: &str, local: &[String], project_known: bool) -> Option<TopicChoice> {
     let raw = raw.trim();
     // 1-2: empty Enter.
     if raw.is_empty() {
-        return local.first().map(|t| TopicChoice::Resume(t.clone()));
+        return match local.first() {
+            Some(t) => Some(TopicChoice::Resume(t.clone())), // resume wins over suggest
+            None if project_known => Some(TopicChoice::Suggest),
+            None => None,
+        };
     }
     // 3: numeric selection.
     if let Ok(n) = raw.parse::<usize>() {
@@ -1752,15 +1760,15 @@ mod tests {
     #[test]
     fn interpret_empty_resumes_latest_or_swallows() {
         let local = vec!["son-konu".to_string(), "eski".to_string()];
-        assert!(matches!(interpret_topic_input("", &local), Some(TopicChoice::Resume(t)) if t == "son-konu"));
-        assert!(interpret_topic_input("  ", &[]).is_none()); // no topic → swallow
+        assert!(matches!(interpret_topic_input("", &local, false), Some(TopicChoice::Resume(t)) if t == "son-konu"));
+        assert!(interpret_topic_input("  ", &[], false).is_none()); // no topic → swallow
     }
 
     #[test]
     fn interpret_digit_selects_from_list_out_of_range_is_new() {
         let local = vec!["a".to_string(), "b".to_string()];
-        assert!(matches!(interpret_topic_input("2", &local), Some(TopicChoice::Resume(t)) if t == "b"));
-        assert!(matches!(interpret_topic_input("5", &local), Some(TopicChoice::New(r)) if r == "5"));
+        assert!(matches!(interpret_topic_input("2", &local, false), Some(TopicChoice::Resume(t)) if t == "b"));
+        assert!(matches!(interpret_topic_input("5", &local, false), Some(TopicChoice::New(r)) if r == "5"));
     }
 
     #[test]
@@ -1768,7 +1776,7 @@ mod tests {
         let local = vec!["linux-guvenlik".to_string()];
         // Slugify match: Turkish spelling is caught too.
         assert!(matches!(
-            interpret_topic_input("Linux Güvenlik", &local),
+            interpret_topic_input("Linux Güvenlik", &local, false),
             Some(TopicChoice::Resume(t)) if t == "linux-guvenlik"
         ));
     }
@@ -1777,21 +1785,44 @@ mod tests {
     fn interpret_resume_phrases_short_input_only() {
         let local = vec!["son-konu".to_string()];
         for s in ["devam", "devam edelim", "kaldığımız yerden devam", "continue", "resume"] {
-            assert!(matches!(interpret_topic_input(s, &local), Some(TopicChoice::Resume(t)) if t == "son-konu"), "{s}");
+            assert!(matches!(interpret_topic_input(s, &local, false), Some(TopicChoice::Resume(t)) if t == "son-konu"), "{s}");
         }
         // >4 words → goes to the LLM/new-topic flow (K2 catches it).
         assert!(matches!(
-            interpret_topic_input("devam edelim ama bu sefer docker öğrenelim", &local),
+            interpret_topic_input("devam edelim ama bu sefer docker öğrenelim", &local, false),
             Some(TopicChoice::New(_))
         ));
         // Resume pattern but no topic exists → new topic.
-        assert!(matches!(interpret_topic_input("devam", &[]), Some(TopicChoice::New(_))));
+        assert!(matches!(interpret_topic_input("devam", &[], false), Some(TopicChoice::New(_))));
     }
 
     #[test]
     fn interpret_other_input_is_new() {
         let local = vec!["son-konu".to_string()];
-        assert!(matches!(interpret_topic_input("docker compose", &local), Some(TopicChoice::New(r)) if r == "docker compose"));
+        assert!(matches!(interpret_topic_input("docker compose", &local, false), Some(TopicChoice::New(r)) if r == "docker compose"));
+    }
+
+    #[test]
+    fn empty_enter_suggests_when_no_local_topics_and_project_known() {
+        assert!(matches!(
+            interpret_topic_input("", &[], true),
+            Some(TopicChoice::Suggest)
+        ));
+        assert!(matches!(interpret_topic_input("  ", &[], true), Some(TopicChoice::Suggest)));
+    }
+
+    #[test]
+    fn empty_enter_resume_beats_suggest_when_local_exists() {
+        let local = vec!["rust".to_string()];
+        assert!(matches!(
+            interpret_topic_input("", &local, true),
+            Some(TopicChoice::Resume(t)) if t == "rust"
+        ));
+    }
+
+    #[test]
+    fn empty_enter_without_project_stays_none() {
+        assert!(interpret_topic_input("", &[], false).is_none());
     }
 
     #[test]
