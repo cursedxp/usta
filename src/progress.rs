@@ -26,6 +26,17 @@ pub fn curriculum_path(project_root: &Path, topic: &str) -> PathBuf {
         .join(format!("{topic}.md"))
 }
 
+/// User-facing project definition: `<project>/mentor/PROJECT.md`.
+/// Lives OUTSIDE `.usta/` on purpose — visible and hand-editable (spec: mentor layer).
+pub fn project_md_path(project_root: &Path) -> PathBuf {
+    project_root.join("mentor/PROJECT.md")
+}
+
+/// User-facing project status + decision log: `<project>/mentor/PROGRESS.md`.
+pub fn project_progress_path(project_root: &Path) -> PathBuf {
+    project_root.join("mentor/PROGRESS.md")
+}
+
 /// Closing-reply delimiter — the model starts every file with this.
 pub const FILE_DELIM: &str = "===DOSYA:";
 
@@ -245,6 +256,19 @@ mod tests {
         assert!(s.contains("Geri çağırma soruları"));
         assert!(s.contains("Hata günlüğü"));
         assert!(s.contains("İpucu merdiveni"));
+    }
+
+    #[test]
+    fn mentor_paths_build_expected_layout() {
+        let root = Path::new("/tmp/proj");
+        assert_eq!(
+            project_md_path(root),
+            Path::new("/tmp/proj/mentor/PROJECT.md")
+        );
+        assert_eq!(
+            project_progress_path(root),
+            Path::new("/tmp/proj/mentor/PROGRESS.md")
+        );
     }
 
     #[test]
