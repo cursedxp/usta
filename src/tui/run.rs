@@ -315,6 +315,7 @@ async fn ask_topic(
     dir: &str,
     local: &[String],
     other: &[String],
+    project_known: bool,
     show_welcome: bool,
 ) -> Result<Option<String>> {
     // Topic lists (project-local + other projects) are computed by the caller
@@ -325,8 +326,13 @@ async fn ask_topic(
     if show_welcome {
         let name = profile.and_then(welcome::extract_name);
         let width = current_width(tui);
-        page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, width))?;
-        page_notice(tui, "What do you want to learn? (a word, or describe it in a sentence)")?;
+        page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, project_known, width))?;
+        let prompt_line = if project_known {
+            "What do you want to learn? (Enter = Usta suggests from PROJECT.md; or type a topic)"
+        } else {
+            "What do you want to learn? (a word, or describe it in a sentence)"
+        };
+        page_notice(tui, prompt_line)?;
     }
 
     loop {
@@ -335,9 +341,13 @@ async fn ask_topic(
             Some(Ok(Event::Key(k))) => {
                 // Empty Enter = resume sentinel (only when there's a topic to resume) —
                 // we catch it before the editor swallows the empty line (spec K1 rule 1).
+                // `editor.handle_key` returns `Action::None` on an empty Enter, so without
+                // this early return the key would be silently swallowed. Empty Enter also
+                // returns the sentinel when a project is known, so the Suggest flow can
+                // trigger even with no resumable topics.
                 if matches!(k.code, KeyCode::Enter)
                     && editor.value().trim().is_empty()
-                    && !local.is_empty()
+                    && (!local.is_empty() || project_known)
                 {
                     return Ok(Some(String::new()));
                 }
@@ -444,6 +454,7 @@ pub async fn run(
                     &short_dir(project_root),
                     &local,
                     &other,
+                    project_known,
                     !welcome_shown,
                 )
                 .await?

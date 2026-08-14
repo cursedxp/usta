@@ -184,6 +184,7 @@ pub fn render_welcome_identity(
     dir: &str,
     local: &[String],
     other: &[String],
+    project_known: bool,
     width: u16,
 ) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
@@ -219,8 +220,14 @@ pub fn render_welcome_identity(
             right.push((fit(&format!("In other projects: {}", other.join(", ")), right_w), dim));
         }
     } else {
-        // Spec §3: the first-session message is kept EXACTLY as-is when there are no local topics.
-        right.push((fit("First session — type a topic.", right_w), Style::default()));
+        // Spec §3: the first-session message is kept EXACTLY as-is when there are no local topics,
+        // UNLESS a project is known — then the empty-Enter sentinel can trigger a suggestion.
+        let first_line = if project_known {
+            "PROJECT.md found — press Enter, Usta suggests where to start."
+        } else {
+            "First session — type a topic."
+        };
+        right.push((fit(first_line, right_w), Style::default()));
         // the previous "Registered:" line is REMOVED — replaced by the other-projects info line (if any).
         if !other.is_empty() {
             right.push((String::new(), Style::default()));
@@ -371,7 +378,7 @@ mod tests {
     fn render_identity_with_topics_lists_them_and_equal_width() {
         use unicode_width::UnicodeWidthStr;
         let local = vec!["rust".to_string(), "gtm".to_string()];
-        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], 80);
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], false, 80);
         let lines = plain_lines(&t);
         // Last line is the appended help hint — NOT part of the bordered box.
         let box_lines = &lines[..lines.len() - 1];
@@ -387,7 +394,7 @@ mod tests {
 
     #[test]
     fn render_identity_no_topics_shows_first_session_and_no_name() {
-        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], 80);
+        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80);
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("What do you want to learn?"));
         assert!(joined.contains("Hello!"));       // no name → generic
@@ -399,7 +406,7 @@ mod tests {
     fn identity_welcome_lists_local_topics_with_enter_hint() {
         let local = vec!["brainstorm-ilk-adim".to_string(), "linux-guvenlik".to_string()];
         let other = vec!["rust".to_string()];
-        let t = render_welcome_identity(Some("Anil"), "opus · cli", "~/x", &local, &other, 80);
+        let t = render_welcome_identity(Some("Anil"), "opus · cli", "~/x", &local, &other, false, 80);
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("Enter"));
         assert!(joined.contains("brainstorm-ilk-adim"));
@@ -417,7 +424,7 @@ mod tests {
 
     #[test]
     fn identity_welcome_without_local_topics_keeps_first_run_look() {
-        let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], 80);
+        let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], false, 80);
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("What do you want to learn"));
         assert!(joined.contains("First session"));
@@ -425,10 +432,23 @@ mod tests {
     }
 
     #[test]
+    fn first_session_hint_becomes_suggest_hint_when_project_known() {
+        // Call render_welcome_identity twice with empty `local`, flipping only
+        // project_known.
+        let not_known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80);
+        let known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], true, 80);
+        let joined_not_known = plain_lines(&not_known).join("\n");
+        let joined_known = plain_lines(&known).join("\n");
+        assert!(joined_not_known.contains("First session — type a topic."));
+        assert!(joined_known.contains("PROJECT.md found"));
+        assert!(joined_known.contains("Enter"));
+    }
+
+    #[test]
     fn identity_welcome_other_projects_line_is_dim() {
         let local = vec!["rust".to_string()];
         let other = vec!["gtm".to_string()];
-        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &other, 80);
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &other, false, 80);
         let span = t
             .lines
             .iter()
