@@ -327,7 +327,10 @@ async fn ask_topic(
         let name = profile.and_then(welcome::extract_name);
         let width = current_width(tui);
         page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, project_known, width))?;
-        let prompt_line = if project_known {
+        // The "Enter = suggests" hint is only truthful on a first session with no
+        // resumable topics — when `local` is non-empty, empty Enter resumes
+        // instead (see welcome box above), so the suggest wording must not show.
+        let prompt_line = if project_known && local.is_empty() {
             "What do you want to learn? (Enter = Usta suggests from PROJECT.md; or type a topic)"
         } else {
             "What do you want to learn? (a word, or describe it in a sentence)"
