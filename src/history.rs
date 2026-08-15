@@ -132,6 +132,8 @@ pub fn longest_streak(entries: &[Entry]) -> u32 {
 
 /// Sessions in the trailing 7-day window (today - 6 days, inclusive), grouped by topic
 /// (first-seen order); each topic's from/to is its first/last in-window entry.
+/// Assumes `entries` are in chronological/file order (the append-only writer guarantees
+/// this) — "first/last in-window" is positional, not a re-sort by date.
 pub fn week_summary(entries: &[Entry], today: &str) -> WeekSummary {
     let Ok(today) = NaiveDate::parse_from_str(today, "%Y-%m-%d") else {
         return WeekSummary { sessions: 0, per_topic: Vec::new() };

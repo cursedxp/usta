@@ -172,7 +172,7 @@ async fn main() -> Result<()> {
         (session, recorder, lock)
     };
 
-    if let Err(e) = flush_progress(&mut backend, &session, &project_root).await {
+    if let Err(e) = flush_progress(&mut backend, &session, &project_root, true).await {
         ui::warn(&format!("progress could not be updated: {e} — raw record left on disk: {}", recorder.path().display()));
     } else if session.history().is_empty() {
         // Empty session: no file was ever created, nothing to mark.
@@ -413,6 +413,7 @@ async fn flush_progress(
     backend: &mut Backend,
     session: &Session,
     project_root: &Path,
+    record_history: bool,
 ) -> Result<()> {
     if session.history().is_empty() {
         return Ok(());
@@ -492,12 +493,17 @@ async fn flush_progress(
             }
 
             // Session history line — powers streaks/weekly stats (spec: progress stats).
-            let cur = std::fs::read_to_string(&c_path).ok();
-            let map = cur.as_deref().and_then(crate::tui::welcome::curriculum_percent);
-            let settled = cur.as_deref().and_then(history::settled_count);
-            let line = history::record_line(&today(), &session.topic, map, settled);
-            if let Err(e) = history::append(g, &line) {
-                ui::warn(&format!("history could not be updated: {e}"));
+            // Gated on record_history: maybe_compact's interim checkpoints are NOT
+            // session closes — they must not add a history line, or a session that
+            // compacts K times would count as K+1 sessions (spec: one line per closing flush).
+            if record_history {
+                let cur = std::fs::read_to_string(&c_path).ok();
+                let map = cur.as_deref().and_then(crate::tui::welcome::curriculum_percent);
+                let settled = cur.as_deref().and_then(history::settled_count);
+                let line = history::record_line(&today(), &session.topic, map, settled);
+                if let Err(e) = history::append(g, &line) {
+                    ui::warn(&format!("history could not be updated: {e}"));
+                }
             }
         }
         None => ui::warn("catalog could not be updated: no global root"),
@@ -523,7 +529,7 @@ pub(crate) async fn maybe_compact(
         return;
     }
     ui::notice("context filling up — taking an interim checkpoint…");
-    if let Err(e) = flush_progress(backend, session, project_root).await {
+    if let Err(e) = flush_progress(backend, session, project_root, false).await {
         ui::warn(&format!("interim checkpoint failed, compaction postponed: {e}"));
         return;
     }
@@ -1711,6 +1717,40 @@ mod tests {
 
         let empty = render_stats(&[], "2026-08-15");
         assert!(empty.contains("no sessions recorded yet"));
+    }
+
+    #[test]
+    fn render_stats_omits_missing_settled_segment() {
+        // Entry has a map percentage but no settled count (e.g. curriculum exists
+        // but has no items in "oturdu"/"derinleşildi" state yet) — the "settled X → Y"
+        // segment must be omitted entirely, not rendered as "None" or a dangling arrow,
+        // while the "map X% → Y%" segment still renders normally.
+        let entry = history::Entry {
+            date: "2026-08-15".into(),
+            topic: "rust".into(),
+            map: Some(40),
+            settled: None,
+        };
+        let out = render_stats(&[entry], "2026-08-15");
+        assert!(out.contains("rust"));
+        assert!(out.contains("1 session(s)"));
+        assert!(out.contains("map 40% → 40%"));
+        assert!(!out.contains("settled"));
+        assert!(!out.contains("None"));
+
+        // Both missing (e.g. topic has no curriculum yet at all) — neither segment renders.
+        let both_none = history::Entry {
+            date: "2026-08-15".into(),
+            topic: "gtm".into(),
+            map: None,
+            settled: None,
+        };
+        let out2 = render_stats(&[both_none], "2026-08-15");
+        assert!(out2.contains("gtm"));
+        assert!(!out2.contains("map"));
+        assert!(!out2.contains("settled"));
+        assert!(!out2.contains("None"));
+        assert!(!out2.contains("→"));
     }
 
     #[test]

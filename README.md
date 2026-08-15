@@ -129,6 +129,6 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-Rust 2021 · 225 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md).
+Rust 2021 · 261 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md).
 
 Roadmap ideas: streaming, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
