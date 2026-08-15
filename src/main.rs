@@ -489,6 +489,15 @@ async fn flush_progress(
             if let Err(e) = index::record(g, &session.topic, project_root, &today()) {
                 ui::warn(&format!("catalog could not be updated: {e}"));
             }
+
+            // Session history line — powers streaks/weekly stats (spec: progress stats).
+            let cur = std::fs::read_to_string(&c_path).ok();
+            let map = cur.as_deref().and_then(crate::tui::welcome::curriculum_percent);
+            let settled = cur.as_deref().and_then(history::settled_count);
+            let line = history::record_line(&today(), &session.topic, map, settled);
+            if let Err(e) = history::append(g, &line) {
+                ui::warn(&format!("history could not be updated: {e}"));
+            }
         }
         None => ui::warn("catalog could not be updated: no global root"),
     }
