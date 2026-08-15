@@ -100,8 +100,16 @@ pub fn closing_prompt(
          Rules:\n\
          - `progress` is ALWAYS generated. Structure: `# {topic} — İlerleme` heading + \
          `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (PROVE IT) / \
-         `## Geri çağırma soruları` (3-5 questions + one-line answer each; drop settled \
-         old ones, add new ones from this session) / `## Hata günlüğü` (`type | count | \
+         `## Geri çağırma soruları` (each bullet: `- <question> — <one-line answer> | \
+         due: YYYY-MM-DD | ivl: <days>`. Simplified spaced repetition, interval ladder \
+         in days: 1, 3, 7, 16, 35, 90. Compute dates from the TODAY section. A question \
+         recalled comfortably in this session's drill moves one rung up and gets `due = \
+         today + new ivl`; a question answered wrong or with struggle resets to `ivl: 1` \
+         (due tomorrow); a question not drilled this session keeps its tail UNCHANGED; a \
+         new question starts at `ivl: 1` (due tomorrow); a legacy bullet without a tail \
+         gets `ivl: 1` (due tomorrow). A question passed comfortably at `ivl: 90` \
+         retires: move it to `Kapatılanlar` as a one-line summary and remove it from \
+         this list.) / `## Hata günlüğü` (`type | count | \
          last example`, 3+ repeats = GAP CANDIDATE) / `## İpucu merdiveni` / `## Hedef \
          Durumu` — write ONLY if approach defines a `## Hedef`: time remaining (compute \
          from the TODAY section), map progress (%), pace assessment (on track / at risk \
@@ -312,6 +320,15 @@ mod tests {
         assert!(s.contains("Geri çağırma soruları"));
         assert!(s.contains("Hata günlüğü"));
         assert!(s.contains("İpucu merdiveni"));
+    }
+
+    #[test]
+    fn closing_prompt_defines_spaced_repetition_schedule() {
+        let s = closing_prompt("rust", None, None, None, None, None, None);
+        assert!(s.contains("due: YYYY-MM-DD"));
+        assert!(s.contains("ivl:"));
+        assert!(s.contains("1, 3, 7, 16, 35, 90"));
+        assert!(s.contains("Kapatılanlar")); // retirement target already exists; schedule rule must mention retire path
     }
 
     #[test]
