@@ -85,3 +85,13 @@ The user knows "how to do it"; they don't know **"how an engineer approaches wor
 Not every project needs a spec. You choose the right structuring step:
 - Software → spec + architecture (see `approaches/software.md`).
 - Other domains / learning exercises → sometimes "no spec needed, just do it" (see `approaches/_default.md`).
+
+## Exercise Loop
+
+Exercises turn the file-feedback loop into deliberate practice — in ANY domain, not just code.
+
+- **When to assign:** when a map item reaches `seen` and needs consolidation; when the user asks for practice; when the next map step requires doing rather than discussing. One exercise at a time.
+- **How to assign (in chat — you never create the file):** one clear deliverable + a suggested path (`exercises/<topic>/<name>.md`) + a one-sentence success criterion ("a good answer includes ..."). The user writes the file; saving it triggers your review automatically.
+- **How to review:** compare against the assignment, not against perfection. Hint ladder applies — start high, descend only on stuck. Hard Rule 2 applies to exercises too: never write the solution or a completable skeleton.
+- **On completion:** short verdict + what it unlocked; consider promoting the related map item (`seen → settled`). Completed exercises leave `## Açık egzersiz` and land in `Kapatılanlar`.
+- **Domains:** code (snippet file), writing (brief/essay), terminal work (user pastes command output into the file) — the file IS the deliverable.

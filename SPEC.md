@@ -107,6 +107,14 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 - **Yedek:** `write_atomic` önceki sürümü `.bak`'a kopyalar — kötü model çıktısı geri alınabilir.
 - **Budama + sır filtresi:** progress 20-madde eşiğiyle budanır; `.pem`/`.key`/`secret`/`credential` dosyaları watcher'dan LLM'e asla gitmez.
 
+## 4.12 Egzersiz Döngüsü (v0.11)
+
+- **`exercises/` konvansiyonu:** görünür klasör, scaffold kurar; Usta teslimatı sohbette atar, dosyayı kullanıcı yazar.
+- **Path-tanıma:** `is_exercise_path` — root-göreli veya mutlak path'te `exercises/` bileşeni geçen her kayıt egzersiz sayılır.
+- **Egzersiz feedback çerçevesi:** watcher turn'üne "AS AN EXERCISE" işareti düşer — atamaya karşı değerlendir (mükemmelliğe karşı değil), hint ladder aynen uygulanır, çözüm veya tamamlanabilir iskelet asla yazılmaz.
+- **Check-atlama:** `exercises/` altındaki path'lerde `cargo check` koşulmaz — egzersiz her domain'de çalışır, kod-özel doğrulama zorunlu değildir.
+- **Kalıcılık:** progress'te `## Açık egzersiz` bölümü açık atamayı tutar; oturum açılışında hatırlatılır, tamamlanınca `Kapatılanlar`a taşınır.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```

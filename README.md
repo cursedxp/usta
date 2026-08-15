@@ -28,6 +28,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 📋 **Project context** | Project definition + status live in a visible `mentor/` folder (`PROJECT.md` + `PROGRESS.md`). Usta fills them from the introduction — or you write `PROJECT.md` yourself and Usta starts already knowing your plan. Updated every session; your hand-edits are preserved. |
 | 🚀 **Proactive start** | Don't know where to begin? With a filled `PROJECT.md`, just press Enter at the topic prompt — Usta reads your plan and proposes the starting topic, the why, and a concrete first step you can start today. You confirm, the session opens. |
 | 🎓 **Pedagogy layer** | Opening drill (recall), explain-mode (Feynman), hint ladder (fading), prediction protocol (it won't tell you the `cargo check` result — it makes you predict first). |
+| 🏋️ **Exercise loop** | Usta assigns a deliverable, you write it under `exercises/` — saving triggers the same Socratic review loop, in any domain (a GTM brief, a German essay, a Rust snippet). Open exercises survive sessions and get reminded at opening. |
 | 🔎 **Research** | Searches the web for what it doesn't know (WebSearch) — no making things up. |
 | 🌍 **Any topic** | Not Rust-specific. For a new topic (Linux security, GTM, anything) Usta **derives the approach through an introduction** and builds a web-researched **curriculum map** (`not seen → seen → settled → deepened`). Scope guarding: nothing stays hanging in the air. |
 | 🎨 **Terminal UI** | Claude Code-style inline TUI (ratatui): two-column welcome box on open (learning status + what's next), live four-sided input box, sticky status line (spinner + context gauge). The flow stays in normal scrollback — scroll up, copy. Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
@@ -74,6 +75,8 @@ usta start gtm            # could be rust, gtm, anything
   → on a cargo check error: it won't tell you — "where does this blow up?" — predict first
   → /quit → progress + approach + curriculum updated, catalog refreshed
 ```
+
+Practice: Usta assigns exercises into `exercises/` — write, save, get reviewed. No solutions handed over.
 
 ### Project context: the `mentor/` folder
 
