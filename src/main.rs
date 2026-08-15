@@ -758,6 +758,29 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
     (next, msg)
 }
 
+/// Mock-exam slash command (`/exam`) — same exact-match pattern as `help::is_help_command`.
+/// Not yet called from the loops (`allow(dead_code)` is temporary — wired in a later task).
+#[allow(dead_code)]
+pub(crate) fn is_exam_command(line: &str) -> bool {
+    line.trim() == "/exam"
+}
+
+/// Does this topic have a goal (## Hedef)? Same approach-file priority as
+/// brain.rs GOAL loading: project override wins over global — keep in sync.
+/// Not yet called from the loops (`allow(dead_code)` is temporary — wired in a later task).
+#[allow(dead_code)]
+pub(crate) fn topic_has_goal(project_root: &Path, global: &Path, topic: &str) -> bool {
+    let override_path = progress::approach_path(project_root, topic);
+    let path = if override_path.exists() {
+        override_path
+    } else {
+        global.join("approaches").join(format!("{topic}.md"))
+    };
+    std::fs::read_to_string(path)
+        .map(|c| c.contains("## Hedef"))
+        .unwrap_or(false)
+}
+
 /// System prompt that extracts a topic slug from a sentence — used by both the plain
 /// path (`derive_slug`) and the TUI topic entry.
 pub(crate) const SLUG_SYSTEM: &str = "Reduce what the user wants to learn/do to A SINGLE short \
@@ -1530,6 +1553,42 @@ async fn trigger_auto_visual(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_exam_command_exact_only() {
+        assert!(is_exam_command("/exam"));
+        assert!(is_exam_command("  /exam  "));
+        assert!(!is_exam_command("/exam now"));
+        assert!(!is_exam_command("exam"));
+        assert!(!is_exam_command("/examx"));
+    }
+
+    #[test]
+    fn topic_has_goal_override_priority() {
+        let base = std::env::temp_dir().join(format!("usta_exam_goal_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("proj");
+        let global = base.join("global");
+        std::fs::create_dir_all(project.join(".usta/approaches")).unwrap();
+        std::fs::create_dir_all(global.join("approaches")).unwrap();
+
+        // yalnız global hedefli → true
+        std::fs::write(global.join("approaches/rust.md"), "yaklaşım\n## Hedef\nsınav").unwrap();
+        assert!(topic_has_goal(&project, &global, "rust"));
+
+        // override VAR ama hedefsiz → override kazanır → false
+        std::fs::write(project.join(".usta/approaches/rust.md"), "yaklaşım hedefsiz").unwrap();
+        assert!(!topic_has_goal(&project, &global, "rust"));
+
+        // override hedefli → true
+        std::fs::write(project.join(".usta/approaches/rust.md"), "## Hedef\nCEFR B2").unwrap();
+        assert!(topic_has_goal(&project, &global, "rust"));
+
+        // hiç dosya yok → false
+        assert!(!topic_has_goal(&project, &global, "linux"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn flush_target_maps_profile_to_global_other_three_to_project() {

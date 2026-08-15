@@ -199,6 +199,27 @@ pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -
     )
 }
 
+/// Mock-exam session turn (`/exam`, goal-mode only — gated by `topic_has_goal` in
+/// main.rs before this is injected). Suspends the hint ladder/teaching for the
+/// duration of the exam; scoring + gap recording happens at closing (SPEC §9).
+/// Not yet called from the loops (`allow(dead_code)` is temporary — wired in a later task).
+#[allow(dead_code)]
+pub fn exam_prompt(topic: &str) -> String {
+    format!(
+        "[EXAM MODE — MOCK EXAM]\n\
+         Topic: {topic}. Build a mock exam from your curriculum map, following the exam\n\
+         format defined under `## Hedef` in your approach (format, question style, time\n\
+         budget, passing threshold). Weight questions toward items not yet `oturdu` and\n\
+         known gaps. State the number of questions and the time budget up front. Then:\n\
+         ask ONE question at a time and wait for my answer; during the exam NO hints, NO\n\
+         teaching, NO feedback between questions — the hint ladder is SUSPENDED until\n\
+         the exam ends. After my last answer: score against the goal's threshold, give a\n\
+         short per-map-item breakdown (strong/weak), name the weak items as gap\n\
+         candidates, and remind me the result is recorded at session close. If I say\n\
+         'stop the exam', end it early and score what was answered."
+    )
+}
+
 /// New-topic introduction turn: no approach + curriculum map yet — Usta
 /// derives them through open conversation (TEACHING.md "New Topic Introduction"). Not a fixed
 /// form: it's derived from what the user says, direction stays with the user.
@@ -305,6 +326,17 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn exam_prompt_defines_exam_contract() {
+        let s = exam_prompt("almanca");
+        assert!(s.contains("EXAM MODE"));
+        assert!(s.contains("almanca"));
+        assert!(s.contains("ONE question at a time"));
+        assert!(s.contains("SUSPENDED"));
+        assert!(s.contains("recorded at session close"));
+        assert!(s.contains("stop the exam"));
+    }
 
     #[test]
     fn progress_path_builds_expected_layout() {
