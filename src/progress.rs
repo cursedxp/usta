@@ -328,7 +328,7 @@ mod tests {
         assert!(s.contains("due: YYYY-MM-DD"));
         assert!(s.contains("ivl:"));
         assert!(s.contains("1, 3, 7, 16, 35, 90"));
-        assert!(s.contains("Kapatılanlar")); // retirement target already exists; schedule rule must mention retire path
+        assert!(s.contains("retires: move it to")); // unique to the ivl:90 retirement sentence, unlike "Kapatılanlar" which also appears in unrelated rules
     }
 
     #[test]
