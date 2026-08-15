@@ -182,8 +182,11 @@ pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -
     };
     format!(
         "[SESSION OPENING — RECALL DRILL]\n{meet_block}\
-         Topic: {topic}. Pick 2-3 questions from the 'Recall questions' section of your \
-         progress file and ASK me — don't answer them yourself, don't explain them. Keep \
+         Topic: {topic}. Pick ONLY questions from your progress file whose `due:` date is \
+         today or earlier (TODAY is in your system prompt; a bullet without a `due:` tail \
+         counts as due) — at most 3, oldest due first — and ASK me; don't answer them \
+         yourself. If NO question is due, say exactly one sentence: 'no reviews due \
+         today', skip the drill and move straight to today's work. Keep \
          it short: a 2-minute warm-up, then we move to today's work. If progress has no \
          questions, come up with 2 small recall questions suited to my level. When the \
          drill is done, say one sentence from the map: where we are, what's next (your \
@@ -538,6 +541,14 @@ mod tests {
     fn opening_prompt_reminds_open_exercise() {
         let s = opening_prompt("rust", false, false);
         assert!(s.contains("open exercise"));
+    }
+
+    #[test]
+    fn opening_prompt_drills_only_due_questions() {
+        let s = opening_prompt("rust", false, false);
+        assert!(s.contains("due"));
+        assert!(s.contains("no reviews due today"));
+        assert!(s.contains("oldest due first"));
     }
 
     #[test]
