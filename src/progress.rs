@@ -127,7 +127,10 @@ pub fn closing_prompt(
          - `curriculum` is extracted as the FULL map on the first session (topic/subtopic \
          tree; each item with a `görülmedi/görüldü/oturdu/derinleşildi` status; draw on \
          web research if needed); on later sessions it's generated only if a status \
-         changed. An uncovered critical item must stay visible on the map.\n\
+         changed. An uncovered critical item must stay visible on the map. If the map \
+         was anchored to course material, KEEP the source refs (`— kaynak: <file> \
+         §<section>`) on every item; items added from web research are marked `— \
+         kaynak: web`.\n\
          - Don't let the files bloat: if `Kapatılanlar` exceeds 20 items, collapse the \
          oldest into a one-line period summary; in `Hata günlüğü`, remove resolved \
          entries not seen in a long time; keep curriculum sections that haven't changed \
@@ -554,6 +557,13 @@ mod tests {
     fn opening_prompt_mentions_curriculum_position() {
         let s = opening_prompt("rust", false, false);
         assert!(s.contains("map"));
+    }
+
+    #[test]
+    fn closing_prompt_preserves_material_source_refs() {
+        let s = closing_prompt("rust", None, None, None, None, None, None);
+        assert!(s.contains("kaynak:"));
+        assert!(s.contains("— kaynak: web"));
     }
 
     #[test]

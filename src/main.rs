@@ -1253,6 +1253,20 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
             .with_context(|| format!("could not write: {}", ex_gitkeep.display()))?;
     }
 
+    // Visible course-material dir (spec: material ingest). The user drops
+    // book/course notes here; a new-topic introduction scans it and anchors
+    // the curriculum to its chapters.
+    let materials_dir = cwd.join("materials");
+    let materials_existed = materials_dir.is_dir();
+    std::fs::create_dir_all(&materials_dir)
+        .with_context(|| format!("could not create directory: {}", materials_dir.display()))?;
+    results.push((materials_dir.clone(), !materials_existed));
+    let materials_gitkeep = materials_dir.join(".gitkeep");
+    if config::should_write(&materials_gitkeep) {
+        std::fs::write(&materials_gitkeep, "")
+            .with_context(|| format!("could not write: {}", materials_gitkeep.display()))?;
+    }
+
     let visuals_dir = usta_dir.join("visuals");
     let visuals_existed = visuals_dir.is_dir();
     std::fs::create_dir_all(&visuals_dir)
@@ -1773,7 +1787,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
 
         let results = write_project_scaffold(&base).unwrap();
-        assert_eq!(results.len(), 5);
+        assert_eq!(results.len(), 6);
         assert!(results.iter().all(|(_, wrote)| *wrote));
         assert!(base.join(".usta/learner/progress").is_dir());
         assert!(base.join(".usta/approaches").is_dir());
@@ -1784,6 +1798,20 @@ mod tests {
         let results2 = write_project_scaffold(&base).unwrap();
         assert!(results2.iter().all(|(_, wrote)| !*wrote));
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_project_scaffold_creates_visible_materials_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_materials_scaffold_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        write_project_scaffold(&base).unwrap();
+        assert!(base.join("materials").is_dir());
+        assert!(base.join("materials/.gitkeep").is_file());
         let _ = std::fs::remove_dir_all(&base);
     }
 
