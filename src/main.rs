@@ -11,6 +11,7 @@ mod feedback;
 mod help;
 mod index;
 mod input;
+mod materials;
 mod progress;
 mod session;
 mod transcript;
