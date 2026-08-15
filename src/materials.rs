@@ -263,4 +263,33 @@ mod tests {
         assert!(c.chars().count() <= TOTAL_CAP + 50); // marker payı
         assert!(combined_digests(&[]).is_none());
     }
+
+    #[test]
+    fn convert_pdfs_missing_tool_reports_notice_and_no_txt() {
+        // Deterministic only while pdftotext is absent from PATH (true in CI here).
+        // If a CI image adds poppler-utils, this exercises the real-conversion path instead.
+        let base = std::env::temp_dir().join(format!("usta_materials_pdftotext_missing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
+
+        let notes = convert_pdfs(&base);
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("pdftotext missing"));
+        assert!(!dir.join("kitap.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn convert_pdfs_no_pdfs_returns_empty() {
+        let base = std::env::temp_dir().join(format!("usta_materials_pdftotext_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.md"), "# x").unwrap();
+        assert!(convert_pdfs(&base).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
