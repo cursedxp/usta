@@ -1266,9 +1266,31 @@ pub(crate) fn is_exercise_path(project_root: &Path, path: &Path) -> bool {
     rel.components().any(|c| c.as_os_str() == "exercises")
 }
 
+/// Build the injected user-turn for a watched-file change. Exercise files get
+/// an exercise-review frame (assignment comparison, hint ladder, no solutions);
+/// everything else keeps the original project-feedback wording VERBATIM.
+pub(crate) fn feedback_frame(is_exercise: bool, path_display: &str, body: &str, is_diff: bool) -> String {
+    match (is_exercise, is_diff) {
+        (false, false) => format!(
+            "[File saved: {path_display}]\n{body}\n\nGive project-grounded, Socratic feedback on this change."
+        ),
+        (false, true) => format!(
+            "[File changed: {path_display}]\nChange (unified diff):\n{body}\n\nGive project-grounded, Socratic feedback on this change — focus on what changed."
+        ),
+        (true, false) => format!(
+            "[Exercise submission saved: {path_display}]\n{body}\n\nThis is the user's deliverable for the exercise you assigned. Review it AS AN EXERCISE: compare against the assignment, apply the hint ladder (start high), point at what to reconsider — do NOT rewrite or complete it for them. If no exercise was assigned this session, treat it as spontaneous practice work and review it the same way."
+        ),
+        (true, true) => format!(
+            "[Exercise submission changed: {path_display}]\nChange (unified diff):\n{body}\n\nReview the revision AS AN EXERCISE iteration: did it address your previous feedback? Move one rung down the hint ladder only if they're stuck — never hand over the solution."
+        ),
+    }
+}
+
 /// Runs a saved file through FileMemory; full content on first sight, a diff
 /// afterward, turned into a synthetic user turn → Socratic feedback. For a cargo
 /// project, the check result is appended in an "Usta's eyes only" block (prediction protocol).
+/// Exercise files (see `is_exercise_path`) get the exercise-review frame and skip
+/// `cargo check` entirely — the check doesn't apply to review-only submissions.
 /// Doesn't PRINT anything — both the plain and TUI paths print the returned
 /// `FileFeedback` in their own presentation language (so stdout doesn't get corrupted in raw-mode).
 pub(crate) async fn handle_file_change(
@@ -1280,6 +1302,7 @@ pub(crate) async fn handle_file_change(
     recorder: &transcript::Recorder,
 ) -> Result<FileFeedback> {
     let contents = std::fs::read_to_string(path)?;
+    let exercise = is_exercise_path(project_root, path);
     let mut injected = match files.observe(path, contents) {
         feedback::ChangePayload::Skip => return Ok(FileFeedback::Sessiz),
         feedback::ChangePayload::TooLarge(len) => {
@@ -1288,19 +1311,19 @@ pub(crate) async fn handle_file_change(
                 path.display()
             )));
         }
-        feedback::ChangePayload::FirstSight(full) => format!(
-            "[File saved: {}]\n{full}\n\nGive project-grounded, Socratic feedback on this change.",
-            path.display()
-        ),
-        feedback::ChangePayload::Diff(diff) => format!(
-            "[File changed: {}]\nChange (unified diff):\n{diff}\n\nGive project-grounded, Socratic feedback on this change — focus on what changed.",
-            path.display()
-        ),
+        feedback::ChangePayload::FirstSight(full) => {
+            feedback_frame(exercise, &path.display().to_string(), &full, false)
+        }
+        feedback::ChangePayload::Diff(diff) => {
+            feedback_frame(exercise, &path.display().to_string(), &diff, true)
+        }
     };
-    if let Some(check_result) = check::run_check(project_root).await {
-        injected.push_str(&format!(
-            "\n\n[cargo check result — FOR YOUR EYES ONLY, don't pass this directly to the user; apply the prediction protocol]\n{check_result}"
-        ));
+    if !exercise {
+        if let Some(check_result) = check::run_check(project_root).await {
+            injected.push_str(&format!(
+                "\n\n[cargo check result — FOR YOUR EYES ONLY, don't pass this directly to the user; apply the prediction protocol]\n{check_result}"
+            ));
+        }
     }
     session.push_user(&injected);
     recorder.user(&injected);
@@ -1950,5 +1973,28 @@ mod tests {
         // watcher may hand a path the root-strip doesn't cover — component scan fallback
         assert!(is_exercise_path(root, Path::new("/other/place/exercises/x.md")));
         assert!(!is_exercise_path(root, Path::new("/other/place/src/lib.rs")));
+    }
+
+    #[test]
+    fn feedback_frame_regular_paths_keep_existing_wording() {
+        let s = feedback_frame(false, "src/main.rs", "fn main() {}", false);
+        assert!(s.contains("[File saved: src/main.rs]"));
+        assert!(s.contains("Give project-grounded, Socratic feedback on this change."));
+        let d = feedback_frame(false, "src/main.rs", "-a\n+b", true);
+        assert!(d.contains("[File changed: src/main.rs]"));
+        assert!(d.contains("focus on what changed"));
+    }
+
+    #[test]
+    fn feedback_frame_exercise_paths_review_as_exercise() {
+        let s = feedback_frame(true, "exercises/gtm/brief.md", "draft", false);
+        assert!(s.contains("[Exercise submission saved: exercises/gtm/brief.md]"));
+        assert!(s.contains("AS AN EXERCISE"));
+        assert!(s.contains("hint ladder"));
+        assert!(s.contains("do NOT rewrite"));
+        let d = feedback_frame(true, "exercises/gtm/brief.md", "-a\n+b", true);
+        assert!(d.contains("[Exercise submission changed: exercises/gtm/brief.md]"));
+        assert!(d.contains("previous feedback"));
+        assert!(d.contains("never hand over the solution"));
     }
 }
