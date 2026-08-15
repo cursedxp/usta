@@ -272,6 +272,43 @@ async fn run_claude_cli(
     Ok(parse_cli_output(&String::from_utf8_lossy(&output.stdout)))
 }
 
+/// First-run wizard: what the user typed at the prompt (spec: onboarding-lite).
+#[derive(Debug)]
+pub enum WizardAction {
+    /// Empty line — try `select()` again (they installed Claude Code meanwhile).
+    Recheck,
+    /// `q` / `quit` — leave with a clean message.
+    Quit,
+    /// A pasted API key (`sk-ant-...`), already trimmed. NEVER printed or persisted.
+    Key(String),
+    /// Anything else — re-prompt.
+    Invalid,
+}
+
+pub fn wizard_action(input: &str) -> WizardAction {
+    let t = input.trim();
+    if t.is_empty() {
+        return WizardAction::Recheck;
+    }
+    if t.eq_ignore_ascii_case("q") || t.eq_ignore_ascii_case("quit") {
+        return WizardAction::Quit;
+    }
+    if t.starts_with("sk-ant-") {
+        return WizardAction::Key(t.to_string());
+    }
+    WizardAction::Invalid
+}
+
+pub fn wizard_guidance() -> &'static str {
+    "No LLM backend found. Usta needs one of these:\n\n\
+     \x20 1. Claude Code CLI (recommended — uses your subscription, no API key)\n\
+     \x20    Install: https://claude.com/claude-code   (then just press Enter here)\n\n\
+     \x20 2. Anthropic API key\n\
+     \x20    Paste it below (starts with sk-ant-...), or add to your shell first:\n\
+     \x20    export ANTHROPIC_API_KEY=sk-ant-...\n\n\
+     Press Enter to re-check · paste your API key · or type q to quit"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +396,28 @@ mod tests {
     #[test]
     fn last_user_text_empty_history_is_empty() {
         assert_eq!(last_user_text(&[]), "");
+    }
+
+    #[test]
+    fn wizard_action_interprets_inputs() {
+        assert!(matches!(wizard_action(""), WizardAction::Recheck));
+        assert!(matches!(wizard_action("   "), WizardAction::Recheck));
+        assert!(matches!(wizard_action("q"), WizardAction::Quit));
+        assert!(matches!(wizard_action("Q"), WizardAction::Quit));
+        assert!(matches!(wizard_action(" quit "), WizardAction::Quit));
+        match wizard_action("  sk-ant-abc123  ") {
+            WizardAction::Key(k) => assert_eq!(k, "sk-ant-abc123"),
+            other => panic!("expected Key, got {other:?}"),
+        }
+        assert!(matches!(wizard_action("hello"), WizardAction::Invalid));
+    }
+
+    #[test]
+    fn wizard_guidance_names_both_paths() {
+        let g = wizard_guidance();
+        assert!(g.contains("claude.com/claude-code"));
+        assert!(g.contains("ANTHROPIC_API_KEY"));
+        assert!(g.contains("sk-ant-"));
+        assert!(g.contains("q to quit"));
     }
 }
