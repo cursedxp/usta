@@ -1275,6 +1275,13 @@ pub(crate) enum FileFeedback {
 /// Is this saved file an exercise deliverable? True when a path component is
 /// the `exercises/` dir (project-root-relative when possible; the watcher
 /// hands absolute paths, so we fall back to scanning the path as-is).
+///
+/// The fallback assumes `project_root` and the watched path share canonical
+/// form (both are absolute in normal operation, so `strip_prefix` succeeds).
+/// If a mismatch makes `strip_prefix` fail, the raw absolute path is scanned —
+/// so a project living UNDER an `exercises/` ancestor could misclassify a
+/// normal file. Narrow and accepted (design chose the fallback to keep
+/// watcher-absolute paths detectable); canonicalize the root if it ever bites.
 pub(crate) fn is_exercise_path(project_root: &Path, path: &Path) -> bool {
     let rel = path.strip_prefix(project_root).unwrap_or(path);
     rel.components().any(|c| c.as_os_str() == "exercises")
