@@ -25,6 +25,7 @@ pub fn help_text() -> &'static str {
      \x20\x20usta                    start — asks for the topic\n\
      \x20\x20usta start <topic>      start a specific topic\n\
      \x20\x20usta topics             list what you're learning where\n\
+     \x20\x20usta stats              this week + streaks\n\
      \x20\x20usta reset <topic>      reset a topic's progress in this project\n\
      \x20\x20usta reset --profile    reset only your profile\n\
      \x20\x20usta reset --factory    reset everything"
@@ -55,7 +56,7 @@ mod tests {
     #[test]
     fn help_text_lists_shortcuts_commands_and_cli() {
         let h = help_text();
-        for needle in ["Ctrl+J", "Esc", "↑ / ↓", "/watch on|off", "/show [topic]", "/help", "/quit", "usta reset --factory", "usta topics"] {
+        for needle in ["Ctrl+J", "Esc", "↑ / ↓", "/watch on|off", "/show [topic]", "/help", "/quit", "usta reset --factory", "usta topics", "usta stats"] {
             assert!(h.contains(needle), "help_text missing: {needle}");
         }
     }

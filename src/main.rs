@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
     let topic_arg = match parse_command(&args)? {
         Command::Init => return run_init(),
         Command::Topics => return run_topics(),
+        Command::Stats => return run_stats(),
         Command::Reset(ResetTarget::Topic(t)) => return run_reset_topic(&t),
         Command::Reset(ResetTarget::Factory) => return run_reset_factory(),
         Command::Reset(ResetTarget::Profile) => return run_reset_profile(),
@@ -582,6 +583,8 @@ pub enum Command {
     Init,
     /// `usta topics` — topic list from the global catalog.
     Topics,
+    /// `usta stats` — this week's summary + streaks (ADHD-safe framing).
+    Stats,
     /// `usta reset <topic>` — delete progress (with confirmation) + drop from the catalog.
     Reset(ResetTarget),
     /// `usta` / `usta start [topic]` — learning session.
@@ -596,6 +599,7 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
         Some("start") => Ok(Command::Start(rest.next().cloned())),
         Some("init") => Ok(Command::Init),
         Some("topics") => Ok(Command::Topics),
+        Some("stats") => Ok(Command::Stats),
         Some("reset") => match rest.next().map(String::as_str) {
             Some("--factory") => Ok(Command::Reset(ResetTarget::Factory)),
             Some("--profile") | Some("--profil") => Ok(Command::Reset(ResetTarget::Profile)),
@@ -603,7 +607,7 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
             None => anyhow::bail!("usage: usta reset <topic>  |  --factory  |  --profile"),
         },
         Some(other) => anyhow::bail!(
-            "unknown command: '{other}'. Commands: start [topic], init, topics, reset <topic>|--factory|--profile"
+            "unknown command: '{other}'. Commands: start [topic], init, topics, stats, reset <topic>|--factory|--profile"
         ),
     }
 }
@@ -985,6 +989,56 @@ fn run_topics() -> Result<()> {
         println!("{} | {} | {}", e.topic, e.project.display(), e.date);
     }
     Ok(())
+}
+
+/// `usta stats` — this week's summary + streaks, read from the global session
+/// history. No LLM needed; missing/empty history just renders the empty state.
+fn run_stats() -> Result<()> {
+    let global = config::global_root()?;
+    let content =
+        std::fs::read_to_string(global.join("learner/history.md")).unwrap_or_default();
+    let es = history::entries(&content);
+    println!("{}", render_stats(&es, &today()));
+    Ok(())
+}
+
+/// Render the `usta stats` report from history entries — pure function, no I/O.
+/// ADHD-safe tone: never prints "current streak: 0" anywhere — a broken streak
+/// falls back to the longest-streak framing instead of shaming a zero.
+fn render_stats(entries: &[history::Entry], today: &str) -> String {
+    if entries.is_empty() {
+        return "no sessions recorded yet — streaks start with the first one.".to_string();
+    }
+    let longest = history::longest_streak(entries);
+    let week = history::week_summary(entries, today);
+    if week.sessions == 0 {
+        return format!("quiet week — your longest streak is still {longest} day(s).");
+    }
+    let current = history::current_streak(entries, today);
+    let mut out = String::from("This week (last 7 days)\n\n");
+    for t in &week.per_topic {
+        out.push_str(&format!("  {}   {} session(s)", t.topic, t.sessions));
+        if let (Some(from), Some(to)) = (t.map_from, t.map_to) {
+            out.push_str(&format!("   map {from}% → {to}%"));
+        }
+        if let (Some(from), Some(to)) = (t.settled_from, t.settled_to) {
+            out.push_str(&format!("   settled {from} → {to}"));
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+    if current > 0 {
+        out.push_str(&format!(
+            "total: {} session(s) · current streak: {current} day(s) · longest: {longest} day(s)",
+            week.sessions
+        ));
+    } else {
+        out.push_str(&format!(
+            "total: {} session(s) · longest streak: {longest} day(s)",
+            week.sessions
+        ));
+    }
+    out
 }
 
 /// `usta reset <topic>` — delete the progress for that topic in the current
@@ -1626,6 +1680,37 @@ mod tests {
             parse_command(&["usta".into(), "topics".into()]).unwrap(),
             Command::Topics
         );
+    }
+
+    #[test]
+    fn parse_stats() {
+        assert_eq!(
+            parse_command(&["usta".into(), "stats".into()]).unwrap(),
+            Command::Stats
+        );
+    }
+
+    #[test]
+    fn render_stats_full_quiet_and_empty() {
+        let mk = |d: &str, t: &str| history::Entry {
+            date: d.into(),
+            topic: t.into(),
+            map: Some(40),
+            settled: Some(4),
+        };
+        let full = render_stats(&[mk("2026-08-14", "rust"), mk("2026-08-15", "rust")], "2026-08-15");
+        assert!(full.contains("rust"));
+        assert!(full.contains("2 session(s)"));
+        assert!(full.contains("current streak: 2 day(s)"));
+
+        // kırık seri: current 0 → yazılmaz, longest pozitif çerçeve
+        let broken = render_stats(&[mk("2026-08-01", "rust")], "2026-08-15");
+        assert!(!broken.contains("current streak"));
+        assert!(broken.contains("longest streak"));
+        assert!(broken.contains("quiet week"));
+
+        let empty = render_stats(&[], "2026-08-15");
+        assert!(empty.contains("no sessions recorded yet"));
     }
 
     #[test]
