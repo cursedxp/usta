@@ -1222,6 +1222,20 @@ fn write_project_scaffold(cwd: &Path) -> Result<Vec<(PathBuf, bool)>> {
             .with_context(|| format!("could not write: {}", mentor_gitkeep.display()))?;
     }
 
+    // Visible exercise deliverables dir (spec: exercise loop). The watcher is
+    // extension-agnostic, so anything saved here is already watched — this dir
+    // only gives assignments a conventional, visible home.
+    let exercises_dir = cwd.join("exercises");
+    let exercises_existed = exercises_dir.is_dir();
+    std::fs::create_dir_all(&exercises_dir)
+        .with_context(|| format!("could not create directory: {}", exercises_dir.display()))?;
+    results.push((exercises_dir.clone(), !exercises_existed));
+    let ex_gitkeep = exercises_dir.join(".gitkeep");
+    if config::should_write(&ex_gitkeep) {
+        std::fs::write(&ex_gitkeep, "")
+            .with_context(|| format!("could not write: {}", ex_gitkeep.display()))?;
+    }
+
     let visuals_dir = usta_dir.join("visuals");
     let visuals_existed = visuals_dir.is_dir();
     std::fs::create_dir_all(&visuals_dir)
@@ -1465,6 +1479,22 @@ mod tests {
         write_project_scaffold(&base).unwrap();
         assert!(base.join("mentor").is_dir());
         assert!(base.join("mentor/.gitkeep").is_file());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_project_scaffold_creates_visible_exercises_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_exercises_scaffold_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        write_project_scaffold(&base).unwrap();
+        assert!(base.join("exercises").is_dir());
+        assert!(base.join("exercises/.gitkeep").is_file());
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1719,7 +1749,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
 
         let results = write_project_scaffold(&base).unwrap();
-        assert_eq!(results.len(), 4);
+        assert_eq!(results.len(), 5);
         assert!(results.iter().all(|(_, wrote)| *wrote));
         assert!(base.join(".usta/learner/progress").is_dir());
         assert!(base.join(".usta/approaches").is_dir());
