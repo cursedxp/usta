@@ -34,6 +34,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 📚 **Bring your own material** | Drop your book/course notes (md/txt — PDFs auto-convert if `pdftotext` is installed) into `materials/` — Usta anchors the curriculum to its chapters, assigns reading, and quizzes you on it. You read; it never summarizes the book at you. |
 | 🎨 **Terminal UI** | Claude Code-style inline TUI (ratatui): two-column welcome box on open (learning status + what's next), live four-sided input box, sticky status line (spinner + context gauge). The flow stays in normal scrollback — scroll up, copy. Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
 | 🗂️ **Management** | `usta topics` shows what you're learning where; `reset` clears a topic or everything. |
+| 📈 **Visible progress** | Every session lands in a lightweight history — `usta stats` shows your week (sessions, map %, settled items) and streaks. Broken streak? No guilt: it shows your longest instead. |
 
 ## Install
 
@@ -59,6 +60,7 @@ First run with no backend? Usta walks you through it — install Claude Code or 
 usta                    # start — asks for the topic (shortest path, use this)
 usta start rust         # give the topic upfront — a topic argument requires 'start'
 usta topics             # what am I learning where? (catalog)
+usta stats              # this week's sessions + map/settled deltas + streaks
 usta reset rust         # reset this project's Rust progress (confirmed)
 usta reset --profile    # reset only your profile — Usta starts without knowing you (backup: profile.md.bak)
 usta reset --factory    # reset everything — as if Usta never met you (word-confirmed)

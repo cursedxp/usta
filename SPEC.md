@@ -158,6 +158,17 @@ Roadmap #5: kullanıcı kendi kitabını/kurs notunu getirir, müfredat onun bö
 
 Tasarım detayı: docs/superpowers/specs/2026-08-15-material-ingest-design.md
 
+## 4.16 İlerleme Özeti / Motivasyon (v0.15)
+
+Roadmap #6: görünür ilerleme = ADHD için yakıt, sıfır suçlama. Tamamen kabuk işi — LLM çağrısı yok ("kabuk sayar").
+
+- **Oturum geçmişi:** global `~/.config/usta/learner/history.md`, append-only, başlık `# Oturum Geçmişi`. Kapanış flush'ı katalog güncellemesinin (`index::record`) hemen yanında bir satır düşer: `- YYYY-MM-DD | <konu> | map <P>% | settled <N>` (P = `curriculum_percent`, N = `oturdu`+`derinleşildi` madde sayısı; curriculum dosyası flush SONRASI diskten okunur — curriculum yoksa `map -` / `settled -`). Aynı gün aynı konuda birden çok oturum = birden çok satır. Yazım hatası = warn, oturumu düşürmez (katalogla aynı tolerans).
+- **`usta stats` komutu:** son 7 gün penceresi — konu başına oturum sayısı + map% ilk→son delta + settled ilk→son delta; genel: toplam oturum, güncel streak (ardışık gün, herhangi bir konu — bugünden veya dünden geriye), en uzun streak. LLM gerekmez, saf parser + hesap. `usta help`/`/help` metninde listelenir.
+- **ADHD-safe kurallar:** `current streak: 0` **hiçbir yüzeyde yazılmaz.** Streak kırıksa yalnız `longest streak: N day(s)` pozitif çerçeveyle basılır. Boş hafta (7 gün oturumsuz): `quiet week — your longest streak is still N day(s)`. Hiç kayıt yoksa: `no sessions recorded yet — streaks start with the first one.` Karşılaştırma/utandırma dili hiçbir çıktıda yok.
+- **Welcome satırı:** identity + full-mode kutularının ikisinde de `week_sessions > 0` iken `This week: N session(s) · streak M day(s)` (M=0 ise streak kısmı düşer, hiç satır kaybolmaz). Veri `history.md`'den saf parser ile okunur — ayrı sayaç tutulmaz.
+
+Tasarım detayı: `docs/superpowers/specs/2026-08-15-progress-stats-design.md`.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -252,6 +263,7 @@ usta/
 - **Sağlamlaştırma (v0.9):** transcript/lock hataları warn-and-continue (ana akışı asla kırmaz); batch tavanı 5; yedek tek nesil (`.bak`); yarım oturum otomatik işlenmez, sadece bildirilir (kurtarma kullanıcı kararı — YAGNI).
 - **Konu girişi TUI'de (v0.11):** konusuz `usta` interaktif yolda önce kimlik-welcome (logo + kayıtlı konular) basar, sonra girdi kutusundan konuyu sorar — Claude tarzı "welcome üstte, soru altta". `usta start <konu>` tam-mod welcome (öğrenme durumu) + doğrudan drill. Slug çözümü TUI içinde (≤2 kelime yerel `slugify_topic`, cümle → `SLUG_SYSTEM` LLM + spinner, `finalize_slug`). Konu-bağımlı kurulum `build_session` yardımcısında (system+session+lock+recorder+has_progress) — hem TUI hem plain paylaşır; `run` artefaktları döndürür, kapanış `main`'de ortak. Lock-çakışma onayı TUI'de tek-tuş. Plain yol (`NO_COLOR`/pipe) birebir korundu (rustyline `resolve_topic`). **Gömülü default profil isimsiz** — yeni kullanıcı jenerik karşılanır (kişisel kimlik seed'den çıkarıldı). Detay: `docs/superpowers/specs/2026-08-07-tui-topic-entry-design.md`.
 - **Arayüz — inline TUI (v0.10):** interaktif yol Claude Code tarzı ratatui `Viewport::Inline`'a taşındı — alt bölge (canlı girdi kutusu + durum satırı: spinner + bağlam göstergesi) sürekli çizilir, kalıcı içerik (açılış kutusu, Usta yanıtları, dosya feedback'i) `insert_before` ile normal **scrollback**'e iner. **Alternate screen YOK** — terminal geçmişi korunur (yukarı kaydır/kopyala). Girdi rustyline yerine crossterm `EventStream` + `tui-input`; LLM beklerken iç `select!` spinner döndürür, Enter kilitli (tek turn). v0.5'in `●`/`■`/markdown görsel dili korundu ama artık TUI akışında yaşar. **Plain yol (`ui::is_plain()`: TTY yok / `NO_COLOR`) birebir eski davranış** — rustyline döngüsü aynen; TUI hiç açılmaz (pipe/CI/test güvenli). Kompaksiyon/flush çıktısı TUI'de `TUI_ACTIVE` gate ile izole (raw-mode'da stdout kirletmez; spinner no-op, notice buffer→viewport). Detay tasarım: `docs/superpowers/specs/2026-08-07-tui-interface-design.md`.
+- **İlerleme özeti (v0.15):** `history.md` global ve append-only — proje-lokal değil, çünkü streak "herhangi bir konu"da ardışık gündür (izolasyon ilkesine istisna, çünkü motivasyon sinyali konu-üstü). `current streak: 0` yasağı kod seviyesinde zorlanır (`render_stats` saf fonksiyonu test-kilitli) — ADHD-safe ton bir prompt kuralı değil, kabuk garantisi. Sürüm: `0.15.0`.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
