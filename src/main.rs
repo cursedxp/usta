@@ -1258,6 +1258,14 @@ pub(crate) enum FileFeedback {
     },
 }
 
+/// Is this saved file an exercise deliverable? True when a path component is
+/// the `exercises/` dir (project-root-relative when possible; the watcher
+/// hands absolute paths, so we fall back to scanning the path as-is).
+pub(crate) fn is_exercise_path(project_root: &Path, path: &Path) -> bool {
+    let rel = path.strip_prefix(project_root).unwrap_or(path);
+    rel.components().any(|c| c.as_os_str() == "exercises")
+}
+
 /// Runs a saved file through FileMemory; full content on first sight, a diff
 /// afterward, turned into a synthetic user turn → Socratic feedback. For a cargo
 /// project, the check result is appended in an "Usta's eyes only" block (prediction protocol).
@@ -1930,5 +1938,17 @@ mod tests {
         assert_eq!(apply_watch(WatchCmd::Toggle, false).0, true);
         assert!(apply_watch(WatchCmd::On, false).1.contains("on"));
         assert!(apply_watch(WatchCmd::Off, true).1.contains("off"));
+    }
+
+    #[test]
+    fn is_exercise_path_detects_exercises_dir() {
+        let root = Path::new("/tmp/proj");
+        assert!(is_exercise_path(root, Path::new("/tmp/proj/exercises/a.md")));
+        assert!(is_exercise_path(root, Path::new("/tmp/proj/exercises/gtm/brief.md")));
+        assert!(!is_exercise_path(root, Path::new("/tmp/proj/src/exercises.rs")));
+        assert!(!is_exercise_path(root, Path::new("/tmp/proj/mentor/PROJECT.md")));
+        // watcher may hand a path the root-strip doesn't cover — component scan fallback
+        assert!(is_exercise_path(root, Path::new("/other/place/exercises/x.md")));
+        assert!(!is_exercise_path(root, Path::new("/other/place/src/lib.rs")));
     }
 }
