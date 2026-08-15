@@ -767,10 +767,23 @@ pub async fn run(
                             continue;
                         }
                         if line.eq_ignore_ascii_case("/quit") { break; }
-                        // Push the submitted line to scrollback as a distinct user block.
-                        page_user_echo(&mut tui, &line)?;
-                        session.push_user(&line);
-                        recorder.user(&line);
+                        // /exam: echo the literal command (not the injected prompt), gate on
+                        // goal presence, then swap the outgoing text and fall through to the
+                        // normal ask flow below — no duplicated ask/reply/compact block.
+                        let outgoing = if crate::is_exam_command(&line) {
+                            page_user_echo(&mut tui, "/exam")?;
+                            if !crate::topic_has_goal(project_root, global, &topic) {
+                                page_notice(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
+                                continue;
+                            }
+                            progress::exam_prompt(&topic)
+                        } else {
+                            // Push the submitted line to scrollback as a distinct user block.
+                            page_user_echo(&mut tui, &line)?;
+                            line.clone()
+                        };
+                        session.push_user(&outgoing);
+                        recorder.user(&outgoing);
                         match ask_live(
                             &mut tui, &mut editor, &mut events, backend,
                             &session.system, session.history(), last_tokens,

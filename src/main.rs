@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
             &mut session,
             &recorder,
             &project_root,
+            &global,
             &topic,
             has_progress,
             intro.as_deref(),
@@ -194,6 +195,7 @@ async fn run_plain_loop(
     session: &mut Session,
     recorder: &transcript::Recorder,
     project_root: &Path,
+    global: &Path,
     topic: &str,
     has_progress: bool,
     intro: Option<&str>,
@@ -278,6 +280,19 @@ async fn run_plain_loop(
                     if line.eq_ignore_ascii_case("/quit") {
                         break;
                     }
+                    // /exam: gate on goal presence (never reaches the LLM without one), then
+                    // swap the outgoing text and fall through to the normal ask flow below —
+                    // the typed "/exam" is already echoed by rustyline, no re-echo needed.
+                    let line = if is_exam_command(&line) {
+                        if !topic_has_goal(project_root, global, topic) {
+                            ui::notice("no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction");
+                            let _ = ready_tx.send(());
+                            continue;
+                        }
+                        progress::exam_prompt(topic)
+                    } else {
+                        line
+                    };
                     if !line.is_empty() {
                         session.push_user(&line);
                         recorder.user(&line);
@@ -759,16 +774,12 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
 }
 
 /// Mock-exam slash command (`/exam`) — same exact-match pattern as `help::is_help_command`.
-/// Not yet called from the loops (`allow(dead_code)` is temporary — wired in a later task).
-#[allow(dead_code)]
 pub(crate) fn is_exam_command(line: &str) -> bool {
     line.trim() == "/exam"
 }
 
 /// Does this topic have a goal (## Hedef)? Same approach-file priority as
 /// brain.rs GOAL loading: project override wins over global — keep in sync.
-/// Not yet called from the loops (`allow(dead_code)` is temporary — wired in a later task).
-#[allow(dead_code)]
 pub(crate) fn topic_has_goal(project_root: &Path, global: &Path, topic: &str) -> bool {
     let override_path = progress::approach_path(project_root, topic);
     let path = if override_path.exists() {

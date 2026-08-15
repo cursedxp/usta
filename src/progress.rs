@@ -202,8 +202,6 @@ pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -
 /// Mock-exam session turn (`/exam`, goal-mode only — gated by `topic_has_goal` in
 /// main.rs before this is injected). Suspends the hint ladder/teaching for the
 /// duration of the exam; scoring + gap recording happens at closing (SPEC §9).
-/// Not yet called from the loops (`allow(dead_code)` is temporary — wired in a later task).
-#[allow(dead_code)]
 pub fn exam_prompt(topic: &str) -> String {
     format!(
         "[EXAM MODE — MOCK EXAM]\n\
