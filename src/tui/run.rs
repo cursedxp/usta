@@ -642,6 +642,7 @@ pub async fn run(
             &topic,
             &backend.label(),
             &short_dir(project_root),
+            today,
         );
         let w = current_width(&tui);
         page(&mut tui, welcome::render_welcome(&data, w))?;

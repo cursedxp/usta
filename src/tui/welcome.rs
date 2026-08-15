@@ -28,6 +28,7 @@ pub struct WelcomeData {
     pub map_percent: Option<u8>,
     pub next_item: Option<String>,
     pub drill_count: usize,
+    pub due_count: usize,
     pub first_session: bool,
 }
 
@@ -107,7 +108,7 @@ pub fn due_count(progress: &str, today: &str) -> usize {
 /// Build WelcomeData from file contents — everything is Option, missing = field skipped.
 pub fn gather(
     profile: Option<&str>, progress: Option<&str>, curriculum: Option<&str>,
-    topic: &str, model: &str, dir: &str,
+    topic: &str, model: &str, dir: &str, today: &str,
 ) -> WelcomeData {
     WelcomeData {
         version: env!("CARGO_PKG_VERSION"),
@@ -119,6 +120,7 @@ pub fn gather(
         map_percent: curriculum.and_then(curriculum_percent),
         next_item: curriculum.and_then(next_unseen),
         drill_count: progress.map(drill_count).unwrap_or(0),
+        due_count: progress.map(|p| due_count(p, today)).unwrap_or(0),
         first_session: progress.is_none(),
     }
 }
@@ -179,7 +181,11 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
         right.push(("─".repeat(right_w), Style::default()));
         right.push(("Up next".to_string(), Style::default()));
         if let Some(n) = &d.next_item { right.push((fit(n, right_w), Style::default())); }
-        if d.drill_count > 0 { right.push((format!("Drill: {} question(s) ready", d.drill_count), Style::default())); }
+        if d.due_count > 0 {
+            right.push((format!("Reviews due today: {}", d.due_count), Style::default()));
+        } else if d.drill_count > 0 {
+            right.push(("No reviews due today".to_string(), Style::default()));
+        }
     }
 
     with_help_hint(render_box(d.version, left, right, width))
@@ -372,19 +378,41 @@ mod tests {
 
     #[test]
     fn gather_full_and_first_session() {
-        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/x");
+        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/x", "2026-08-15");
         assert!(!d.first_session);
         assert_eq!(d.name.as_deref(), Some("Ada"));
         assert_eq!(d.map_percent, Some(50));
-        let d2 = gather(None, None, None, "gtm", "opus · cli", "~/x");
+        let d2 = gather(None, None, None, "gtm", "opus · cli", "~/x", "2026-08-15");
         assert!(d2.first_session);
         assert_eq!(d2.drill_count, 0);
     }
 
     #[test]
+    fn welcome_shows_due_line_three_states() {
+        // state 1: due questions exist → "Reviews due today: N"
+        let p_due = "## Geri çağırma soruları\n- q — a | due: 2026-01-01 | ivl: 1\n";
+        let d = gather(None, Some(p_due), None, "rust", "opus · cli", "~/x", "2026-08-15");
+        let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
+        assert!(joined.contains("Reviews due today: 1"));
+
+        // state 2: questions exist, none due → "No reviews due today"
+        let p_future = "## Geri çağırma soruları\n- q — a | due: 2099-01-01 | ivl: 90\n";
+        let d = gather(None, Some(p_future), None, "rust", "opus · cli", "~/x", "2026-08-15");
+        let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
+        assert!(joined.contains("No reviews due today"));
+        assert!(!joined.contains("Reviews due today:"));
+
+        // state 3: no questions at all → neither line
+        let d = gather(None, Some("# bos"), None, "rust", "opus · cli", "~/x", "2026-08-15");
+        let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
+        assert!(!joined.contains("Reviews due"));
+        assert!(!joined.contains("No reviews due"));
+    }
+
+    #[test]
     fn render_welcome_lines_have_equal_display_width() {
         use unicode_width::UnicodeWidthStr;
-        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/proje");
+        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/proje", "2026-08-15");
         let t = render_welcome(&d, 80);
         let lines = plain_lines(&t);
         assert!(lines.len() >= 8);
@@ -399,7 +427,7 @@ mod tests {
 
     #[test]
     fn render_welcome_first_session_shows_intro_message() {
-        let d = gather(None, None, None, "gtm", "opus · cli", "~/p");
+        let d = gather(None, None, None, "gtm", "opus · cli", "~/p", "2026-08-15");
         let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
         assert!(joined.contains("First session"));
         assert!(joined.contains("Welcome back"));
