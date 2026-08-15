@@ -128,6 +128,23 @@ Roadmap #3: geri çağırma sorularına vade (due-date) verilir, vadesi gelmeyen
 
 Kuralların tamamı USTA.md'de yaşar (kapanış/açılış prompt'ları); Rust yalnız `due_count` sayacını ve welcome render'ını taşır. Tasarım detayı: `docs/superpowers/specs/2026-08-15-spaced-repetition-design.md`.
 
+## 4.14 Onboarding-Lite Sihirbazı (v0.13)
+
+Roadmap #4'ün ilk yarısı: `backend::select()` bulamayınca çıplak hatayla ölmek yerine, uygun ortamda yönlendiren hafif ilk-çalıştırma sihirbazı devreye girer — kurulum tamamlanınca **aynı süreçte** devam eder.
+
+- **Tetik koşulu:** `select()` `Err` döner VE stdin+stdout TTY ise (`std::io::IsTerminal`) VE `USTA_BACKEND` set değilse. Koşullardan biri sağlanmazsa (TTY yok — pipe/CI, veya `USTA_BACKEND` set edilmiş) sihirbaz devreye GİRMEZ, mevcut `bail!` korunur. `USTA_BACKEND` geçersiz bir değere sahipse bu konfigürasyon hatasıdır, eksik-backend değildir — sihirbaz burada da devreye girmez.
+- **Akış:** sihirbaz iki seçenek gösterir — Claude Code CLI kurulumu (link + "then just press Enter here") veya Anthropic API key yapıştırma (`sk-ant-...`). Girdi yorumu:
+  - boş satır → **Recheck**: `select()` yeniden denenir; başarılıysa normal akışa devam, değilse aynı prompt tekrar.
+  - `sk-ant-` ile başlayan satır → **Key**: trim'lenir, yalnız süreç env'ine (`std::env::set_var`) yazılır — **DİSKE ASLA YAZILMAZ**, ekrana geri yazdırılmaz; ardından `select()` yeniden denenir (API yolu artık bulunur) + tek satır kalıcılaştırma ipucu ("add to your shell profile to skip this next time").
+  - `q`/`quit` (case-insensitive) → **Quit**: sihirbaz mesajıyla temiz çıkış.
+  - Diğer her girdi → kısa uyarı + aynı prompt tekrar.
+- **Süreç-içi kapsam:** girilen API key yalnızca çalışan process'in ortam değişkeninde yaşar — dosyaya, keychain'e veya profile hiçbir şekilde yazılmaz; süreç kapanınca kaybolur (kalıcılaştırma kullanıcının kendi tercihi, sihirbaz sadece hatırlatır).
+- **Kapsam dışı (bilinçli ertelendi):** prebuilt binary, GitHub Releases, Homebrew tap, CI release workflow, key'in diske/keychain'e kalıcılaştırılması, tam sihirbaz (dil/isim/tanışma akışı), model seçimi sihirbazı.
+
+Tasarım detayı: `docs/superpowers/specs/2026-08-15-onboarding-lite-design.md`.
+
+**Sürümleme politikası:** her tamamlanan roadmap maddesi minor bump ile işaretlenir, tag `vX.Y.Z`.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```

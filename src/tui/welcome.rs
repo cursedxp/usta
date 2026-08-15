@@ -316,6 +316,11 @@ mod tests {
     use super::*;
     use ratatui::text::Text;
 
+    #[test]
+    fn version_aligned_with_spec() {
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.13.0");
+    }
+
     fn plain_lines(t: &Text) -> Vec<String> {
         t.lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
     }

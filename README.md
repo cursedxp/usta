@@ -50,6 +50,8 @@ cargo build --release
 
 Force one with `USTA_BACKEND=cli|api`.
 
+First run with no backend? Usta walks you through it — install Claude Code or paste an API key, no restart needed.
+
 ## Usage
 
 ```bash
