@@ -660,7 +660,12 @@ pub async fn run(
     let opening = if has_progress {
         progress::opening_prompt(&topic, profile_generic, project_known)
     } else {
-        progress::onboarding_prompt(&topic, intro.as_deref(), profile_generic, project_known)
+        for note in crate::materials::convert_pdfs(project_root) {
+            page_notice(&mut tui, &note)?;
+        }
+        let mats = crate::materials::scan(project_root);
+        let material_digest = crate::materials::combined_digests(&mats);
+        progress::onboarding_prompt(&topic, intro.as_deref(), profile_generic, project_known, material_digest.as_deref())
     };
     session.push_user(&opening);
     recorder.user(&opening);

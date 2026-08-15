@@ -204,6 +204,7 @@ pub fn onboarding_prompt(
     intro: Option<&str>,
     profile_generic: bool,
     project_known: bool,
+    materials: Option<&str>,
 ) -> String {
     // The raw text the user typed when opening the topic IS the FIRST ANSWER of the
     // introduction — if it's reduced to a slug and discarded, the model just re-asks
@@ -231,6 +232,19 @@ pub fn onboarding_prompt(
          be asked for a `project` file — the shell writes it; don't write files \
          yourself during the session.\n"
     };
+    let material_block = match materials {
+        Some(d) => format!(
+            "\n[COURSE MATERIAL FOUND]\nThe user has material under materials/ — \
+             outline digests below. ASK whether to anchor this topic's curriculum \
+             to this material (it may belong to another topic). If yes: build the \
+             curriculum map FROM its chapters/sections — each map item carries a \
+             source ref (`— kaynak: <file> §<section>`); assign reading from it \
+             (the USER reads — you don't summarize the material into the chat); \
+             still add critical items the material lacks, from web research \
+             (scope guarding). If no: proceed normally.\n---\n{d}\n---\n"
+        ),
+        None => String::new(),
+    };
     format!(
         "[NEW TOPIC — INTRODUCTION]\n\
          Topic: {topic}. This topic has no approach or curriculum map yet.\n{intro_block}{meet_block}{project_block}\
@@ -248,7 +262,7 @@ pub fn onboarding_prompt(
          be asked for the approach + FULL curriculum map CONTENT; the shell writes the \
          files, don't try to write files yourself during the session (Hard Rule 6) — \
          deepen the introduction accordingly but don't turn it into a lecture, keep it \
-         short."
+         short.{material_block}"
     )
 }
 
@@ -464,10 +478,10 @@ mod tests {
 
     #[test]
     fn onboarding_prompt_asks_project_basics_only_when_unknown() {
-        let s = onboarding_prompt("rust", None, false, false);
+        let s = onboarding_prompt("rust", None, false, false, None);
         assert!(s.contains("mentor/PROJECT.md"));
         assert!(s.contains("what they're building"));
-        let s = onboarding_prompt("rust", None, false, true);
+        let s = onboarding_prompt("rust", None, false, true, None);
         assert!(!s.contains("what they're building"));
     }
 
@@ -478,18 +492,30 @@ mod tests {
             Some("müşterimin hesabına coolify kuracağım, Fedora, temel güvenlik lazım"),
             false,
             false,
+            None,
         );
         assert!(s.contains("coolify kuracağım"));
         assert!(s.contains("FIRST ANSWER"));
         assert!(s.contains("don't ask again"));
         // If there's no intro, the block doesn't appear at all.
-        let bare = onboarding_prompt("hosting", None, false, false);
+        let bare = onboarding_prompt("hosting", None, false, false, None);
         assert!(!bare.contains("FIRST ANSWER"));
     }
 
     #[test]
+    fn onboarding_prompt_injects_material_block() {
+        let s = onboarding_prompt("rust", None, false, false, Some("=== kitap.md ===\n# K"));
+        assert!(s.contains("COURSE MATERIAL FOUND"));
+        assert!(s.contains("=== kitap.md ==="));
+        assert!(s.contains("ASK whether to anchor"));
+        assert!(s.contains("kaynak:"));
+        let s = onboarding_prompt("rust", None, false, false, None);
+        assert!(!s.contains("COURSE MATERIAL FOUND"));
+    }
+
+    #[test]
     fn onboarding_prompt_infers_goal_without_jargon_and_limits_questions() {
-        let s = onboarding_prompt("almanca", None, false, false);
+        let s = onboarding_prompt("almanca", None, false, false, None);
         // Exploration/goal terms are NOT asked to the user — the model infers them itself.
         assert!(!s.contains("keşif mi"));
         assert!(s.contains("infer it YOURSELF"));
@@ -509,7 +535,7 @@ mod tests {
 
     #[test]
     fn onboarding_prompt_embeds_topic_and_open_conversation() {
-        let s = onboarding_prompt("linux-guvenlik", None, false, false);
+        let s = onboarding_prompt("linux-guvenlik", None, false, false, None);
         assert!(s.contains("linux-guvenlik"));
         assert!(s.contains("INTRODUCTION"));
         assert!(s.contains("form"));
@@ -519,7 +545,7 @@ mod tests {
     fn onboarding_prompt_does_not_tell_model_it_writes_files() {
         // Hard Rule 6: the model has no file-writing tool — it produces the closing
         // content, the shell writes the file. The prompt must not push the model to try writing.
-        let s = onboarding_prompt("rust", None, false, false);
+        let s = onboarding_prompt("rust", None, false, false, None);
         assert!(!s.contains("you will write files"));
         assert!(s.contains("shell writes"));
     }
@@ -553,10 +579,10 @@ mod tests {
 
     #[test]
     fn opening_prompts_include_meet_block_only_when_profile_generic() {
-        let on = onboarding_prompt("rust", None, true, false);
+        let on = onboarding_prompt("rust", None, true, false, None);
         assert!(on.contains("[PROFILE EMPTY]"));
         assert!(on.contains("1-2 questions"));
-        assert!(!onboarding_prompt("rust", None, false, false).contains("[PROFILE EMPTY]"));
+        assert!(!onboarding_prompt("rust", None, false, false, None).contains("[PROFILE EMPTY]"));
 
         let op = opening_prompt("rust", true, false);
         assert!(op.contains("[PROFILE EMPTY]"));

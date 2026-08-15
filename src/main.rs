@@ -224,7 +224,12 @@ async fn run_plain_loop(
         }
     } else {
         // New topic: no approach/map yet — introduction turn, Usta speaks first.
-        let onboarding = progress::onboarding_prompt(topic, intro, profile_generic, project_known);
+        for note in crate::materials::convert_pdfs(project_root) {
+            ui::notice(&note);
+        }
+        let mats = crate::materials::scan(project_root);
+        let material_digest = crate::materials::combined_digests(&mats);
+        let onboarding = progress::onboarding_prompt(topic, intro, profile_generic, project_known, material_digest.as_deref());
         session.push_user(&onboarding);
         recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
