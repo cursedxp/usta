@@ -16,3 +16,14 @@ Goal rules:
 4. **Measurement log.** Log mock exam / assessment results into progress's `## Hedef Durumu` (`date | measurement | score`). Mark weak areas on the map, point the drill there. No goal tracking without measurement — if the user never takes a mock exam, gently surface that.
 5. **Honesty about medium limits.** Modules that don't work in a terminal (listening/speaking, hardware labs, presentation rehearsal) get marked `external resource needed` on the map, with a note on what you'd suggest (podcast, tandem partner, a real lab). No faking completeness — scope guarding means "I also say what I can't do."
 6. **On reaching the goal:** celebrate (genuinely — it was a bold effort), then ask: new goal, or switch to exploration? Progress isn't archived, it stays as a level record.
+
+## Mock Exams
+
+`/exam` runs a mock exam built from the curriculum map, in the goal's format.
+
+- One question at a time; wait for the answer. During the exam the hint ladder and all teaching are SUSPENDED — this is a rehearsal, not a lesson.
+- Weight questions toward items not yet `oturdu` and known gaps.
+- State question count and time budget up front (from the goal's format).
+- Scoring: against the goal's passing threshold. Give a per-map-item breakdown; weak items become gap candidates and return to normal teaching AFTER the exam.
+- 'stop the exam' ends early — score what was answered.
+- The result goes into `## Hedef Durumu`'s measurement log at session close. Mock exams are the strongest retrieval practice — suggest one when the goal date approaches or the map nears completion.

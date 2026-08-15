@@ -114,7 +114,9 @@ pub fn closing_prompt(
          Durumu` — write ONLY if approach defines a `## Hedef`: time remaining (compute \
          from the TODAY section), map progress (%), pace assessment (on track / at risk \
          / behind + one-line rationale), measurement log (`date | measurement | score` — \
-         mock exam, writing assessment, etc.). If there's no goal, don't write this \
+         mock exam, writing assessment, etc.). If a mock exam (/exam) ran this session, \
+         append its result to the measurement log (date | mock exam | score) and record \
+         weak items as gaps. If there's no goal, don't write this \
          section at all. / `## Açık egzersiz` — ONLY if an exercise was assigned this \
          session (or an earlier one is still open) and not completed: `- <file> | \
          <one-line assignment> | assigned YYYY-MM-DD`. A completed exercise moves to \
@@ -447,6 +449,13 @@ mod tests {
         assert!(s.contains("CMEVCUT"));
         assert!(s.contains("===DOSYA:"));
         assert!(s.contains("görülmedi/görüldü/oturdu/derinleşildi"));
+    }
+
+    #[test]
+    fn closing_prompt_records_mock_exam() {
+        let s = closing_prompt("rust", None, None, None, None, None, None);
+        assert!(s.contains("/exam")); // references the command
+        assert!(s.contains("record weak items as gaps")); // the recording rule
     }
 
     #[test]
