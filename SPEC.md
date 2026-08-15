@@ -107,7 +107,7 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 - **Yedek:** `write_atomic` önceki sürümü `.bak`'a kopyalar — kötü model çıktısı geri alınabilir.
 - **Budama + sır filtresi:** progress 20-madde eşiğiyle budanır; `.pem`/`.key`/`secret`/`credential` dosyaları watcher'dan LLM'e asla gitmez.
 
-## 4.12 Egzersiz Döngüsü (v0.11)
+## 4.12 Egzersiz Döngüsü (v0.12)
 
 - **`exercises/` konvansiyonu:** görünür klasör, scaffold kurar; Usta teslimatı sohbette atar, dosyayı kullanıcı yazar.
 - **Path-tanıma:** `is_exercise_path` — root-göreli veya mutlak path'te `exercises/` bileşeni geçen her kayıt egzersiz sayılır.
