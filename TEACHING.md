@@ -95,3 +95,12 @@ Exercises turn the file-feedback loop into deliberate practice — in ANY domain
 - **How to review:** compare against the assignment, not against perfection. Hint ladder applies — start high, descend only on stuck. Hard Rule 2 applies to exercises too: never write the solution or a completable skeleton.
 - **On completion:** short verdict + what it unlocked; consider promoting the related map item (`seen → settled`). Completed exercises leave `## Açık egzersiz` and land in `Kapatılanlar`.
 - **Domains:** code (snippet file), writing (brief/essay), terminal work (user pastes command output into the file) — the file IS the deliverable.
+
+## Course Material
+
+When the curriculum is anchored to material under `materials/`:
+
+- The material is the spine, web research the supplement. Map items carry their source ref (`— kaynak: <file> §<section>`).
+- The USER reads. Assign a section, then test it with recall questions and anchor exercises to it (exercise loop: "read §3, then write `exercises/<topic>/ch3-notes.md`").
+- Never summarize the material into the chat — your job is anchoring, questioning, and gap-filling, not replacing the book.
+- Scope guarding still applies: critical items the material lacks enter the map from web research, marked `— kaynak: web`.

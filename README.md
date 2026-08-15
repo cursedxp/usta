@@ -31,6 +31,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 🏋️ **Exercise loop** | Usta assigns a deliverable, you write it under `exercises/` — saving triggers the same Socratic review loop, in any domain (a GTM brief, a German essay, a Rust snippet). Open exercises survive sessions and get reminded at opening. |
 | 🔎 **Research** | Searches the web for what it doesn't know (WebSearch) — no making things up. |
 | 🌍 **Any topic** | Not Rust-specific. For a new topic (Linux security, GTM, anything) Usta **derives the approach through an introduction** and builds a web-researched **curriculum map** (`not seen → seen → settled → deepened`). Scope guarding: nothing stays hanging in the air. |
+| 📚 **Bring your own material** | Drop your book/course notes (md/txt — PDFs auto-convert if `pdftotext` is installed) into `materials/` — Usta anchors the curriculum to its chapters, assigns reading, and quizzes you on it. You read; it never summarizes the book at you. |
 | 🎨 **Terminal UI** | Claude Code-style inline TUI (ratatui): two-column welcome box on open (learning status + what's next), live four-sided input box, sticky status line (spinner + context gauge). The flow stays in normal scrollback — scroll up, copy. Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
 | 🗂️ **Management** | `usta topics` shows what you're learning where; `reset` clears a topic or everything. |
 

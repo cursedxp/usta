@@ -145,6 +145,19 @@ Tasarım detayı: `docs/superpowers/specs/2026-08-15-onboarding-lite-design.md`.
 
 **Sürümleme politikası:** her tamamlanan roadmap maddesi minor bump ile işaretlenir, tag `vX.Y.Z`.
 
+## 4.15 Materyal Yutma (v0.14)
+
+Roadmap #5: kullanıcı kendi kitabını/kurs notunu getirir, müfredat onun bölümlerine demirlenir — web araştırması artık spine değil, tamamlayıcı.
+
+- **`materials/` konvansiyonu:** görünür klasör, diğerleri gibi (`exercises/`, `progress/`) scaffold tarafından kurulur. Kullanıcı md/txt dosyasını buraya koyar; kabuk bunu otomatik keşfeder, model hiçbir şey oluşturmaz.
+- **Digest enjeksiyonu YALNIZ yeni-konu tanışmasında:** `materials/` doluysa ve konu ilk kez açılıyorsa (resume/opening akışında DEĞİL) kabuk deterministik bir digest üretip modele enjekte eder — başlık iskeleti + kısa alıntılar. Devam eden oturumlarda digest tekrar enjekte edilmez; kalıcılık müfredat haritasındaki kaynak referanslarından gelir.
+- **pdftotext opsiyonel:** PATH'te `pdftotext` varsa PDF dosyaları otomatik txt'ye çevrilir. Yoksa PDF atlanır, tek satır bilgi mesajı basılır (`brew install poppler` önerisiyle) — sert hata yok, akış devam eder.
+- **Kaynak-ref demirleme:** müfredat haritası maddeleri `— kaynak: <dosya> §<bölüm>` referanslarıyla materyale bağlanır. Kalıcı olan digest DEĞİL, bu referanslardır — digest tek seferlik enjeksiyon, oturumlar arası taşınmaz.
+- **Cap'ler:** dosya başına 8_000 karakter, toplam 16_000 karakter; kesme UTF-8 güvenli sınırda yapılır ve `[truncated]` ile işaretlenir.
+- **Web araştırma kapsam bekçiliği korunur:** materyalin kapsamadığı kritik bir konu varsa harita web araştırmasıyla doldurulur, ilgili madde `— kaynak: web` ile işaretlenir.
+
+Tasarım detayı: docs/superpowers/specs/2026-08-15-material-ingest-design.md
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
