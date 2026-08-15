@@ -30,6 +30,8 @@ pub struct WelcomeData {
     pub drill_count: usize,
     pub due_count: usize,
     pub first_session: bool,
+    pub week_sessions: u32,
+    pub streak: u32,
 }
 
 /// Body from a `## {header}` heading up to the next `## `.
@@ -106,10 +108,21 @@ pub fn due_count(progress: &str, today: &str) -> usize {
 }
 
 /// Build WelcomeData from file contents — everything is Option, missing = field skipped.
+/// `history`: raw `learner/history.md` content (global, not topic-scoped) — `None`
+/// means no history file exists yet, which renders as 0 sessions / 0 streak
+/// (never a "This week" line — see `week_line`).
+#[allow(clippy::too_many_arguments)]
 pub fn gather(
     profile: Option<&str>, progress: Option<&str>, curriculum: Option<&str>,
-    topic: &str, model: &str, dir: &str, today: &str,
+    topic: &str, model: &str, dir: &str, today: &str, history: Option<&str>,
 ) -> WelcomeData {
+    let (week_sessions, streak) = match history {
+        Some(h) => {
+            let es = crate::history::entries(h);
+            (crate::history::week_summary(&es, today).sessions, crate::history::current_streak(&es, today))
+        }
+        None => (0, 0),
+    };
     WelcomeData {
         version: env!("CARGO_PKG_VERSION"),
         name: profile.and_then(extract_name),
@@ -122,6 +135,8 @@ pub fn gather(
         drill_count: progress.map(drill_count).unwrap_or(0),
         due_count: progress.map(|p| due_count(p, today)).unwrap_or(0),
         first_session: progress.is_none(),
+        week_sessions,
+        streak,
     }
 }
 
@@ -139,6 +154,22 @@ pub fn fit(s: &str, max: usize) -> String {
     }
     out.push('…');
     out
+}
+
+/// `This week: N session(s) · streak M day(s)` — `None` when there were no
+/// sessions this week. A streak of 0 is NEVER rendered (ADHD-safe: a broken
+/// streak reads as demotivating noise, not useful information) — when
+/// `sessions > 0` but `streak == 0` the line drops the " · streak" clause
+/// entirely rather than showing "streak 0".
+fn week_line(sessions: u32, streak: u32) -> Option<String> {
+    if sessions == 0 {
+        return None;
+    }
+    if streak > 0 {
+        Some(format!("This week: {sessions} session(s) · streak {streak} day(s)"))
+    } else {
+        Some(format!("This week: {sessions} session(s)"))
+    }
 }
 
 /// Pad to visible width — adds spaces on the right (per unicode-width).
@@ -187,6 +218,9 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
             right.push(("No reviews due today".to_string(), Style::default()));
         }
     }
+    if let Some(line) = week_line(d.week_sessions, d.streak) {
+        right.push((fit(&line, right_w), Style::default()));
+    }
 
     with_help_hint(render_box(d.version, left, right, width))
 }
@@ -201,6 +235,7 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
 /// `Enter → resume <first>` line and a numbered list (≤6). `other`: topics
 /// recorded in other projects — informational only, not selectable, summarized
 /// in a dim line.
+#[allow(clippy::too_many_arguments)]
 pub fn render_welcome_identity(
     name: Option<&str>,
     model: &str,
@@ -209,6 +244,8 @@ pub fn render_welcome_identity(
     other: &[String],
     project_known: bool,
     width: u16,
+    week_sessions: u32,
+    streak: u32,
 ) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
     let inner = total - 2;
@@ -256,6 +293,9 @@ pub fn render_welcome_identity(
             right.push((String::new(), Style::default()));
             right.push((fit(&format!("In other projects: {}", other.join(", ")), right_w), dim));
         }
+    }
+    if let Some(line) = week_line(week_sessions, streak) {
+        right.push((fit(&line, right_w), Style::default()));
     }
 
     with_help_hint(render_box(env!("CARGO_PKG_VERSION"), left, right, width))
@@ -383,11 +423,11 @@ mod tests {
 
     #[test]
     fn gather_full_and_first_session() {
-        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/x", "2026-08-15");
+        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/x", "2026-08-15", None);
         assert!(!d.first_session);
         assert_eq!(d.name.as_deref(), Some("Ada"));
         assert_eq!(d.map_percent, Some(50));
-        let d2 = gather(None, None, None, "gtm", "opus · cli", "~/x", "2026-08-15");
+        let d2 = gather(None, None, None, "gtm", "opus · cli", "~/x", "2026-08-15", None);
         assert!(d2.first_session);
         assert_eq!(d2.drill_count, 0);
     }
@@ -396,19 +436,19 @@ mod tests {
     fn welcome_shows_due_line_three_states() {
         // state 1: due questions exist → "Reviews due today: N"
         let p_due = "## Geri çağırma soruları\n- q — a | due: 2026-01-01 | ivl: 1\n";
-        let d = gather(None, Some(p_due), None, "rust", "opus · cli", "~/x", "2026-08-15");
+        let d = gather(None, Some(p_due), None, "rust", "opus · cli", "~/x", "2026-08-15", None);
         let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
         assert!(joined.contains("Reviews due today: 1"));
 
         // state 2: questions exist, none due → "No reviews due today"
         let p_future = "## Geri çağırma soruları\n- q — a | due: 2099-01-01 | ivl: 90\n";
-        let d = gather(None, Some(p_future), None, "rust", "opus · cli", "~/x", "2026-08-15");
+        let d = gather(None, Some(p_future), None, "rust", "opus · cli", "~/x", "2026-08-15", None);
         let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
         assert!(joined.contains("No reviews due today"));
         assert!(!joined.contains("Reviews due today:"));
 
         // state 3: no questions at all → neither line
-        let d = gather(None, Some("# bos"), None, "rust", "opus · cli", "~/x", "2026-08-15");
+        let d = gather(None, Some("# bos"), None, "rust", "opus · cli", "~/x", "2026-08-15", None);
         let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
         assert!(!joined.contains("Reviews due"));
         assert!(!joined.contains("No reviews due"));
@@ -417,7 +457,7 @@ mod tests {
     #[test]
     fn render_welcome_lines_have_equal_display_width() {
         use unicode_width::UnicodeWidthStr;
-        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/proje", "2026-08-15");
+        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/proje", "2026-08-15", None);
         let t = render_welcome(&d, 80);
         let lines = plain_lines(&t);
         assert!(lines.len() >= 8);
@@ -432,7 +472,7 @@ mod tests {
 
     #[test]
     fn render_welcome_first_session_shows_intro_message() {
-        let d = gather(None, None, None, "gtm", "opus · cli", "~/p", "2026-08-15");
+        let d = gather(None, None, None, "gtm", "opus · cli", "~/p", "2026-08-15", None);
         let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
         assert!(joined.contains("First session"));
         assert!(joined.contains("Welcome back"));
@@ -448,7 +488,7 @@ mod tests {
     fn render_identity_with_topics_lists_them_and_equal_width() {
         use unicode_width::UnicodeWidthStr;
         let local = vec!["rust".to_string(), "gtm".to_string()];
-        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], false, 80);
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], false, 80, 0, 0);
         let lines = plain_lines(&t);
         // Last line is the appended help hint — NOT part of the bordered box.
         let box_lines = &lines[..lines.len() - 1];
@@ -464,7 +504,7 @@ mod tests {
 
     #[test]
     fn render_identity_no_topics_shows_first_session_and_no_name() {
-        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80);
+        let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80, 0, 0);
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("What do you want to learn?"));
         assert!(joined.contains("Hello!"));       // no name → generic
@@ -476,7 +516,7 @@ mod tests {
     fn identity_welcome_lists_local_topics_with_enter_hint() {
         let local = vec!["brainstorm-ilk-adim".to_string(), "linux-guvenlik".to_string()];
         let other = vec!["rust".to_string()];
-        let t = render_welcome_identity(Some("Anil"), "opus · cli", "~/x", &local, &other, false, 80);
+        let t = render_welcome_identity(Some("Anil"), "opus · cli", "~/x", &local, &other, false, 80, 0, 0);
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("Enter"));
         assert!(joined.contains("brainstorm-ilk-adim"));
@@ -494,7 +534,7 @@ mod tests {
 
     #[test]
     fn identity_welcome_without_local_topics_keeps_first_run_look() {
-        let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], false, 80);
+        let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], false, 80, 0, 0);
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("What do you want to learn"));
         assert!(joined.contains("First session"));
@@ -505,8 +545,8 @@ mod tests {
     fn first_session_hint_becomes_suggest_hint_when_project_known() {
         // Call render_welcome_identity twice with empty `local`, flipping only
         // project_known.
-        let not_known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80);
-        let known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], true, 80);
+        let not_known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80, 0, 0);
+        let known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], true, 80, 0, 0);
         let joined_not_known = plain_lines(&not_known).join("\n");
         let joined_known = plain_lines(&known).join("\n");
         assert!(joined_not_known.contains("First session — type a topic."));
@@ -518,7 +558,7 @@ mod tests {
     fn identity_welcome_other_projects_line_is_dim() {
         let local = vec!["rust".to_string()];
         let other = vec!["gtm".to_string()];
-        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &other, false, 80);
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &other, false, 80, 0, 0);
         let span = t
             .lines
             .iter()
@@ -526,5 +566,45 @@ mod tests {
             .find(|s| s.content.contains("In other projects"))
             .expect("In other projects satırı bulunamalı");
         assert!(span.style.add_modifier.contains(Modifier::DIM), "stil DIM içermiyor: {:?}", span.style);
+    }
+
+    #[test]
+    fn welcome_shows_week_line() {
+        // state 1: sessions this week + an unbroken streak → full line.
+        let h = "# Oturum Geçmişi\n- 2026-08-14 | rust | map 40% | settled 4\n- 2026-08-15 | rust | map 55% | settled 7\n";
+        let d = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", Some(h));
+        assert_eq!(d.week_sessions, 2);
+        assert_eq!(d.streak, 2);
+        let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
+        assert!(joined.contains("This week: 2 session(s) · streak 2 day(s)"));
+
+        // state 2: sessions this week but streak == 0 (entries are 2+ days before
+        // `today`, so `current_streak` sees a broken run — an ADHD-unsafe "streak 0"
+        // must never be rendered, only the sessions count survives).
+        let h0 = "# Oturum Geçmişi\n- 2026-08-10 | rust | map 40% | settled 4\n";
+        let d0 = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", Some(h0));
+        assert_eq!(d0.week_sessions, 1);
+        assert_eq!(d0.streak, 0);
+        let joined0 = plain_lines(&render_welcome(&d0, 80)).join("\n");
+        assert!(joined0.contains("This week: 1 session(s)"));
+        assert!(!joined0.contains("· streak"));
+        assert!(!joined0.contains("streak 0"));
+
+        // state 3: no history at all → no "This week" line.
+        let dn = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", None);
+        assert_eq!(dn.week_sessions, 0);
+        let joinedn = plain_lines(&render_welcome(&dn, 80)).join("\n");
+        assert!(!joinedn.contains("This week"));
+    }
+
+    #[test]
+    fn identity_welcome_shows_week_line_when_sessions_present() {
+        let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &[], &[], false, 80, 3, 1);
+        let joined = plain_lines(&t).join("\n");
+        assert!(joined.contains("This week: 3 session(s) · streak 1 day(s)"));
+
+        let t0 = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &[], &[], false, 80, 0, 0);
+        let joined0 = plain_lines(&t0).join("\n");
+        assert!(!joined0.contains("This week"));
     }
 }

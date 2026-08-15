@@ -1,12 +1,6 @@
 //! Oturum geçmişi: her `usta` kapanışında `learner/history.md`'ye eklenen
 //! tek satırlık kayıt. Streak (art arda gün) ve haftalık özet hesapları
 //! bu kayıtlar üzerinden türetilir. `usta stats` ve welcome kutusu tüketir.
-//!
-//! Bu modülün public API'si henüz hiçbir çağıran tarafından kullanılmıyor —
-//! flush/`usta stats`/welcome entegrasyonu sonraki task'lerde gelecek. O ana
-//! kadar dead_code uyarılarını bilinçli olarak susturuyoruz; entegrasyon
-//! tamamlanınca bu satır kaldırılabilir.
-#![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::path::Path;

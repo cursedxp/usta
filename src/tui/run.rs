@@ -24,7 +24,7 @@ use crate::tui::editor::{Action, InputBox};
 use crate::tui::status::{render_status, Status};
 use crate::tui::term::{Tui, VIEWPORT_H};
 use crate::tui::welcome;
-use crate::{feedback, progress, ui, watcher};
+use crate::{feedback, history, progress, ui, watcher};
 
 /// Push persistent content above the viewport (into scrollback).
 fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
@@ -317,6 +317,8 @@ async fn ask_topic(
     other: &[String],
     project_known: bool,
     show_welcome: bool,
+    week_sessions: u32,
+    streak: u32,
 ) -> Result<Option<String>> {
     // Topic lists (project-local + other projects) are computed by the caller
     // and passed in here — the global catalog is not read here (see `run`).
@@ -326,7 +328,12 @@ async fn ask_topic(
     if show_welcome {
         let name = profile.and_then(welcome::extract_name);
         let width = current_width(tui);
-        page(tui, welcome::render_welcome_identity(name.as_deref(), model, dir, local, other, project_known, width))?;
+        page(
+            tui,
+            welcome::render_welcome_identity(
+                name.as_deref(), model, dir, local, other, project_known, width, week_sessions, streak,
+            ),
+        )?;
         // The "Enter = suggests" hint is only truthful on a first session with no
         // resumable topics — when `local` is non-empty, empty Enter resumes
         // instead (see welcome box above), so the suggest wording must not show.
@@ -443,6 +450,16 @@ pub async fn run(
             let project_known = std::fs::read_to_string(progress::project_md_path(project_root))
                 .map(|s| !s.trim().is_empty())
                 .unwrap_or(false);
+            // Weekly session count + current streak, from the global (not
+            // topic-scoped) history log — shown on the identity welcome's "This
+            // week" line. Computed once; doesn't change across loop iterations.
+            let (week_sessions, streak) = match read(global.join("learner/history.md")) {
+                Some(h) => {
+                    let es = history::entries(&h);
+                    (history::week_summary(&es, today).sessions, history::current_streak(&es, today))
+                }
+                None => (0, 0),
+            };
             // The identity welcome is only printed on the first turn — it's not
             // printed again if the new-topic confirmation is rejected and we go back
             // to the entry question.
@@ -459,6 +476,8 @@ pub async fn run(
                     &other,
                     project_known,
                     !welcome_shown,
+                    week_sessions,
+                    streak,
                 )
                 .await?
                 {
@@ -643,6 +662,7 @@ pub async fn run(
             &backend.label(),
             &short_dir(project_root),
             today,
+            read(global.join("learner/history.md")).as_deref(),
         );
         let w = current_width(&tui);
         page(&mut tui, welcome::render_welcome(&data, w))?;
