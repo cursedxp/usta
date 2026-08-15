@@ -17,12 +17,13 @@ fn cap_str(s: &str, cap: usize) -> String {
 }
 
 /// One-line excerpt: the section body with internal newlines flattened to
-/// spaces. Left uncapped here — the overall `cap_str` pass at the end of
-/// `digest_md` is what enforces the size budget, so a single oversized
-/// section still produces a visibly truncated digest instead of silently
-/// fitting under `cap` via a fixed per-section clip.
-fn excerpt(body: &str) -> String {
-    body.split_whitespace().collect::<Vec<_>>().join(" ")
+/// spaces, capped at `n` chars. The per-section cap keeps a single oversized
+/// section from eating the whole digest budget, so later headings in the
+/// skeleton survive even when an early section is huge (spec: "heading
+/// skeleton, every heading listed, ~200 chars per section").
+fn excerpt(body: &str, n: usize) -> String {
+    let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.chars().take(n).collect()
 }
 
 /// Markdown digest: every heading line kept as-is, followed by a flattened
@@ -32,7 +33,7 @@ pub fn digest_md(content: &str, cap: usize) -> String {
     let mut body = String::new();
     let flush = |out: &mut Vec<String>, body: &mut String| {
         if !body.trim().is_empty() {
-            out.push(format!("  {}", excerpt(body)));
+            out.push(format!("  {}", excerpt(body, 200)));
         }
         body.clear();
     };
@@ -75,10 +76,22 @@ mod tests {
 
     #[test]
     fn digest_md_caps_with_marker_on_char_boundary() {
-        let md = format!("# T\n{}", "çğüşöı ".repeat(3000)); // Türkçe çok-baytlı içerik
+        // Many headings so the joined skeleton exceeds the overall cap and cap_str bites.
+        let mut md = String::from("# Kitap çğüşöı\n");
+        for i in 0..60 {
+            md.push_str(&format!("## Bölüm {i} çğüşöı\nçğüşöı içerik satırı burada uzayıp gider\n"));
+        }
         let d = digest_md(&md, 500);
         assert!(d.chars().count() <= 500 + "\n[truncated]".chars().count());
         assert!(d.ends_with("[truncated]"));
+    }
+
+    #[test]
+    fn digest_md_bounds_each_section_so_later_headings_survive() {
+        // A huge early section must NOT consume the whole budget — later headings survive.
+        let md = format!("# H\n{}\n## H2\nkısa", "a".repeat(5000));
+        let d = digest_md(&md, 300);
+        assert!(d.contains("## H2"));
     }
 
     #[test]
