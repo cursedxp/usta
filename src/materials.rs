@@ -3,6 +3,8 @@
 //! injected into the NEW-TOPIC introduction turn. Usta anchors the curriculum
 //! to the material; the USER does the reading. No LLM here, no persistence.
 
+use std::path::{Path, PathBuf};
+
 pub const PER_FILE_CAP: usize = 8_000;
 pub const TOTAL_CAP: usize = 16_000;
 
@@ -58,6 +60,111 @@ pub fn digest_txt(content: &str, cap: usize) -> String {
     cap_str(&format!("{head}\n[... {lines} lines, {kb} KB total]"), cap)
 }
 
+pub struct Material {
+    pub name: String,   // materials/ altına göreli yol
+    pub digest: String, // PER_FILE_CAP'li digest
+}
+
+/// Recursively collect .md/.txt under `materials/`, digest each. A .pdf with a
+/// sibling .txt is represented by the .txt alone (no double counting).
+/// Deterministic: sorted by relative name.
+pub fn scan(project_root: &Path) -> Vec<Material> {
+    let root = project_root.join("materials");
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_files(&root, &mut files);
+    files.sort();
+    files
+        .iter()
+        .filter_map(|p| {
+            let name = p.strip_prefix(&root).ok()?.to_string_lossy().to_string();
+            let ext = p.extension()?.to_str()?;
+            let content = std::fs::read_to_string(p).ok()?;
+            let digest = match ext {
+                "md" => digest_md(&content, PER_FILE_CAP),
+                "txt" => digest_txt(&content, PER_FILE_CAP),
+                _ => return None,
+            };
+            Some(Material { name, digest })
+        })
+        .collect()
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if p.is_dir() {
+            collect_files(&p, out);
+        } else {
+            out.push(p);
+        }
+    }
+}
+
+/// Join per-file digests under `=== name ===` banners, capped at TOTAL_CAP.
+pub fn combined_digests(mats: &[Material]) -> Option<String> {
+    if mats.is_empty() {
+        return None;
+    }
+    let joined = mats
+        .iter()
+        .map(|m| format!("=== {} ===\n{}", m.name, m.digest))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Some(cap_str(&joined, TOTAL_CAP))
+}
+
+/// Convert each materials/*.pdf to a sibling .txt via pdftotext when available.
+/// Returns user-facing notice lines; never fails the session.
+pub fn convert_pdfs(project_root: &Path) -> Vec<String> {
+    let root = project_root.join("materials");
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_files(&root, &mut files);
+    let pdfs: Vec<&PathBuf> = files.iter().filter(|p| p.extension().is_some_and(|e| e == "pdf")).collect();
+    if pdfs.is_empty() {
+        return Vec::new();
+    }
+    let have_tool = std::process::Command::new("pdftotext")
+        .arg("-v")
+        .output()
+        .is_ok();
+    let mut notes = Vec::new();
+    for pdf in pdfs {
+        let txt = pdf.with_extension("txt");
+        let fresh = match (std::fs::metadata(&txt), std::fs::metadata(pdf)) {
+            (Ok(t), Ok(p)) => t.modified().ok() >= p.modified().ok(),
+            _ => false,
+        };
+        if fresh {
+            continue; // cached conversion is current
+        }
+        if !have_tool {
+            notes.push(format!(
+                "PDF found but pdftotext missing — convert {} to text yourself, or `brew install poppler`",
+                pdf.display()
+            ));
+            continue;
+        }
+        let ok = std::process::Command::new("pdftotext")
+            .arg("-layout")
+            .arg(pdf)
+            .arg(&txt)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        notes.push(if ok {
+            format!("converted: {} → {}", pdf.display(), txt.display())
+        } else {
+            format!("pdftotext failed on {} — convert it to text yourself", pdf.display())
+        });
+    }
+    notes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +208,59 @@ mod tests {
         assert!(d.starts_with("satır içeriği"));
         assert!(d.contains("lines"));
         assert!(d.contains("KB"));
+    }
+
+    #[test]
+    fn scan_finds_md_txt_skips_hidden_sorts() {
+        let base = std::env::temp_dir().join(format!("usta_materials_scan_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(dir.join("alt")).unwrap();
+        std::fs::write(dir.join("b-kitap.md"), "# K\nicerik").unwrap();
+        std::fs::write(dir.join("a-notlar.txt"), "notlar").unwrap();
+        std::fs::write(dir.join(".gitkeep"), "").unwrap();
+        std::fs::write(dir.join("alt/ek.md"), "# Ek\nx").unwrap();
+        std::fs::write(dir.join("resim.png"), "x").unwrap();
+
+        let mats = scan(&base);
+        let names: Vec<&str> = mats.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["a-notlar.txt", "alt/ek.md", "b-kitap.md"]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_without_materials_dir_is_empty() {
+        let base = std::env::temp_dir().join(format!("usta_materials_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        assert!(scan(&base).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_skips_pdf_when_sibling_txt_exists() {
+        let base = std::env::temp_dir().join(format!("usta_materials_pdf_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
+        std::fs::write(dir.join("kitap.txt"), "cevrilmis metin").unwrap();
+        let mats = scan(&base);
+        assert_eq!(mats.len(), 1);
+        assert_eq!(mats[0].name, "kitap.txt");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn combined_digests_caps_total_and_labels_files() {
+        let mats = vec![
+            Material { name: "a.md".into(), digest: "x".repeat(10_000) },
+            Material { name: "b.md".into(), digest: "y".repeat(10_000) },
+        ];
+        let c = combined_digests(&mats).unwrap();
+        assert!(c.contains("=== a.md ==="));
+        assert!(c.chars().count() <= TOTAL_CAP + 50); // marker payı
+        assert!(combined_digests(&[]).is_none());
     }
 }
