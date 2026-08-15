@@ -309,6 +309,49 @@ pub fn wizard_guidance() -> &'static str {
      Press Enter to re-check · paste your API key · or type q to quit"
 }
 
+/// Interactive fallback when `select()` finds no backend and we're on a TTY.
+/// Loops: Enter = re-check, pasted key = set process env + re-check, q = quit.
+/// The key is only written to this process's environment — never to disk, and
+/// never echoed back.
+pub fn run_backend_wizard() -> Result<Backend> {
+    use std::io::{BufRead, Write};
+
+    println!("\n{}", wizard_guidance());
+    let stdin = std::io::stdin();
+    loop {
+        print!("> ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line)? == 0 {
+            bail!("no backend configured (EOF)");
+        }
+        match wizard_action(&line) {
+            WizardAction::Quit => bail!("no backend configured — run usta again once one is set up"),
+            WizardAction::Key(k) => {
+                std::env::set_var("ANTHROPIC_API_KEY", k);
+                match select() {
+                    Ok(b) => {
+                        println!("backend found: {}", b.label());
+                        println!("tip: add `export ANTHROPIC_API_KEY=...` to your shell profile to skip this next time");
+                        return Ok(b);
+                    }
+                    Err(e) => println!("still no backend: {e}"),
+                }
+            }
+            WizardAction::Recheck => match select() {
+                Ok(b) => {
+                    println!("backend found: {}", b.label());
+                    return Ok(b);
+                }
+                Err(e) => println!("still no backend: {e}"),
+            },
+            WizardAction::Invalid => {
+                println!("didn't catch that — Enter to re-check, paste an sk-ant-... key, or q to quit");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

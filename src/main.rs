@@ -57,7 +57,18 @@ async fn main() -> Result<()> {
     };
 
     // Backend selection (CLI default, API optional) — with a clear error message.
-    let mut backend = backend::select()?;
+    let mut backend = match backend::select() {
+        Ok(b) => b,
+        // Config error (bad USTA_BACKEND value) is not "no backend" — surface it.
+        Err(e) if std::env::var_os("USTA_BACKEND").is_some() => return Err(e),
+        Err(e) => {
+            if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+                backend::run_backend_wizard()?
+            } else {
+                return Err(e);
+            }
+        }
+    };
 
     // Set up `.usta/` silently if missing — `usta init` is no longer a mandatory
     // pre-step, `start` bootstraps itself (see ensure_scaffold).
