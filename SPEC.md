@@ -169,6 +169,20 @@ Roadmap #6: görünür ilerleme = ADHD için yakıt, sıfır suçlama. Tamamen k
 
 Tasarım detayı: `docs/superpowers/specs/2026-08-15-progress-stats-design.md`.
 
+## 4.17 Deneme Sınavı / Mock Exam (v0.16)
+
+Roadmap #7: hedefli (GOAL modlu) öğrenmede gerçek prova mekanizması. `/exam` **prompt-enjeksiyon komutu** — statik intercept değil; kabuk hedef kapısını tutar, sınavın kendisi (soru üretimi, değerlendirme) LLM işi.
+
+- **Kapı: hedef şart.** Konunun approach dosyasında (proje override öncelikli, yoksa global — `brain.rs`'teki öncelik sırasıyla aynı) `## Hedef` yoksa kabuk bir kapı bildirimi basar ("no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction") ve **LLM'e hiç gitmez**. Hedefli konuda `exam_prompt(topic)` normal kullanıcı turu gibi oturuma enjekte edilir (`session.push_user` + recorder + ask akışı — açılış drilinin oturum-içi muadili).
+- **Sınav akışı:** model müfredat haritasından bir deneme sınavı kurar, approach'taki `## Hedef` formatını izler (soru stili, süre bütçesi, geçme eşiği), zayıf/`oturdu`-olmayan maddelere ağırlık verir, soru sayısı ve süre bütçesini baştan söyler. Ardından **tek seferde tek soru** sorar ve cevabı bekler; sınav sırasında **ipucu merdiveni ve öğretim ASKIDADIR** — gerçek prova hissi, ara geri bildirim yok. "sınavı durdur" denirse erken biter, o ana kadarki cevaplar puanlanır.
+- **Sonuç:** son cevaptan sonra model hedefin eşiğine göre skor verir, kısa harita-maddesi kırılımı (güçlü/zayıf) sunar, zayıf maddeleri gap adayı olarak adlandırır ve sonucun kapanışta kaydedileceğini hatırlatır.
+- **Zamanlama yumuşak (v1):** kabuk süre tutmaz — sert zamanlayıcı kapsam dışı; süre bütçesi yalnız modelin sözlü taahhüdüdür.
+- **Kapanışta kayıt:** `closing_prompt`'a tek kural cümlesi eklendi — bu oturumda bir deneme sınavı (`/exam`) çalıştıysa sonucu `## Hedef Durumu` ölçüm günlüğüne (`date | mock exam | score`) işlenir, zayıf çıkan maddeler `## Gap'ler`e yazılır.
+- **Kural evi: GOAL.md** — embedded, yalnız hedefli konularda yüklenir. `## Mock Exams` bölümü sınav yürütüm kurallarını (tek soru, askıya alınan ipucu merdiveni, eşiğe göre skor, kırılım, erken bitirme, kayıt hatırlatması) ve pedagojik notu (deneme = en güçlü retrieval practice; sınav sonrası zayıf maddeler normal öğretim moduna döner) taşır.
+- **Kapsam dışı:** sert zamanlayıcı, ayrı sınav geçmişi dosyası (ölçüm günlüğü yeter), soru bankası/tekrar eden kalıplar, hedefsiz konuda genel quiz modu (drill zaten var).
+
+Tasarım detayı: `docs/superpowers/specs/2026-08-15-mock-exam-design.md`.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -264,6 +278,7 @@ usta/
 - **Konu girişi TUI'de (v0.11):** konusuz `usta` interaktif yolda önce kimlik-welcome (logo + kayıtlı konular) basar, sonra girdi kutusundan konuyu sorar — Claude tarzı "welcome üstte, soru altta". `usta start <konu>` tam-mod welcome (öğrenme durumu) + doğrudan drill. Slug çözümü TUI içinde (≤2 kelime yerel `slugify_topic`, cümle → `SLUG_SYSTEM` LLM + spinner, `finalize_slug`). Konu-bağımlı kurulum `build_session` yardımcısında (system+session+lock+recorder+has_progress) — hem TUI hem plain paylaşır; `run` artefaktları döndürür, kapanış `main`'de ortak. Lock-çakışma onayı TUI'de tek-tuş. Plain yol (`NO_COLOR`/pipe) birebir korundu (rustyline `resolve_topic`). **Gömülü default profil isimsiz** — yeni kullanıcı jenerik karşılanır (kişisel kimlik seed'den çıkarıldı). Detay: `docs/superpowers/specs/2026-08-07-tui-topic-entry-design.md`.
 - **Arayüz — inline TUI (v0.10):** interaktif yol Claude Code tarzı ratatui `Viewport::Inline`'a taşındı — alt bölge (canlı girdi kutusu + durum satırı: spinner + bağlam göstergesi) sürekli çizilir, kalıcı içerik (açılış kutusu, Usta yanıtları, dosya feedback'i) `insert_before` ile normal **scrollback**'e iner. **Alternate screen YOK** — terminal geçmişi korunur (yukarı kaydır/kopyala). Girdi rustyline yerine crossterm `EventStream` + `tui-input`; LLM beklerken iç `select!` spinner döndürür, Enter kilitli (tek turn). v0.5'in `●`/`■`/markdown görsel dili korundu ama artık TUI akışında yaşar. **Plain yol (`ui::is_plain()`: TTY yok / `NO_COLOR`) birebir eski davranış** — rustyline döngüsü aynen; TUI hiç açılmaz (pipe/CI/test güvenli). Kompaksiyon/flush çıktısı TUI'de `TUI_ACTIVE` gate ile izole (raw-mode'da stdout kirletmez; spinner no-op, notice buffer→viewport). Detay tasarım: `docs/superpowers/specs/2026-08-07-tui-interface-design.md`.
 - **İlerleme özeti (v0.15):** `history.md` global ve append-only — proje-lokal değil, çünkü streak "herhangi bir konu"da ardışık gündür (izolasyon ilkesine istisna, çünkü motivasyon sinyali konu-üstü). `current streak: 0` yasağı kod seviyesinde zorlanır (`render_stats` saf fonksiyonu test-kilitli) — ADHD-safe ton bir prompt kuralı değil, kabuk garantisi. Sürüm: `0.15.0`.
+- **Deneme sınavı (v0.16):** `/exam` statik intercept değil, prompt-enjeksiyon komutu — kabuk yalnız hedef kapısını tutar (`## Hedef` yoksa LLM'e hiç gitmez), sınavın kendisi (soru üretimi, tek-soru akışı, askıya alınan ipucu merdiveni, skor + kırılım) tamamen `exam_prompt` enjeksiyonu ve GOAL.md `## Mock Exams` kuralları üzerinden LLM'de akar — "ince kabuk" ilkesi korundu. Sürüm: `0.16.0`.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 

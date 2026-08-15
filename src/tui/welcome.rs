@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn version_aligned_with_spec() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.15.0");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.16.0");
     }
 
     fn plain_lines(t: &Text) -> Vec<String> {

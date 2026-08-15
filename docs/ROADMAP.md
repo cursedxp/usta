@@ -11,10 +11,12 @@
 | 4 | **Dağıtım/onboarding** | kısmen ✅ (2026-08-15: onboarding-lite + 0.13.0; dağıtım/brew ertelendi) | Prebuilt binary (brew/release), API key'siz yol, ilk-çalıştırma sihirbazı. "Herkes kullansın" ön koşulu. |
 | 5 | **Materyal yutma** | ✅ tamamlandı (2026-08-15) | Kullanıcı PDF/kitap/kurs verir, müfredat onun etrafına kurulur. |
 | 6 | **İlerleme özeti/motivasyon** | ✅ tamamlandı (2026-08-15) | Haftalık özet: harita % değişimi, oturan maddeler, streak. ADHD: görünür ilerleme = yakıt. |
-| 7 | **Deneme sınavı üretici** | beklemede | GOAL modunda `/exam`: haritadan zamanlı deneme, skor `## Hedef Durumu`na işlenir. |
+| 7 | **Deneme sınavı üretici** | ✅ tamamlandı (2026-08-15) | GOAL modunda `/exam`: haritadan zamanlı deneme, skor `## Hedef Durumu`na işlenir. |
 | 8 | **Gamification modu** | beklemede | `/game on\|off` toggle (kalıcılık USER.md profilinde). Müfredat durumları = XP, süreç-puanı (oturum/tahmin — doğruluk değil), gap kapatma = rozet. ADHD-safe: kırılan seride suçlama yok ("en uzun serin X" çerçevesi), puan performansa değil sürece. Overjustification'a dikkat. Roadmap #7 ile birleşir: sınav = boss fight. Çoğu markdown/prompt işi. |
 
 ## Tamamlananlar
+
+- 2026-08-15: Deneme sınavı üretici — GOAL modunda `/exam`; hedef kapısı (konunun approach dosyasında `## Hedef` yoksa kapı bildirimi, LLM'e hiç gitmez); hedefli konuda `exam_prompt` normal kullanıcı turu gibi enjekte edilir (tek seferde tek soru, sınav sırasında ipucu merdiveni + öğretim ASKIDA, hedefin eşiğine göre skor + harita-maddesi kırılımı, zayıf maddeler gap adayı); kapanışta sonuç `## Hedef Durumu` ölçüm günlüğüne (`date | mock exam | score`) işlenir; kural evi embedded GOAL.md `## Mock Exams` (yalnız hedefli konularda yüklenir); v0.16.0.
 
 - 2026-08-15: İlerleme özeti/motivasyon — global append-only `learner/history.md` (kapanış flush'ı başına bir satır: konu | map% | settled); `usta stats` haftalık özet (konu başına oturum + map/settled delta, güncel + en uzun streak); ADHD-safe ton — "current streak: 0" hiçbir yüzeyde yazılmaz, kırık seride yalnız en uzun streak pozitif çerçeveyle basılır; welcome kutusu "This week: N session(s) · streak M day(s)"; LLM'siz (kabuk sayar); v0.15.0.
 
