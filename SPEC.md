@@ -59,7 +59,7 @@
 
 Öğretim yönü değil, **geri çağırma yönü** optimize edilir — kalıcı öğrenme kullanıcıdan çıkan üretimde olur (testing/generation effect):
 
-1. **Açılış drilli:** oturum başında progress'teki "Geri çağırma soruları"ndan 2-3'ü sorulur (progress varsa shell tetikler, Usta ilk sözü alır). 2 dk ısınma — ADHD için düşük eşikli "suya girme" rampası.
+1. **Açılış drilli (vade-farkında, v0.13):** oturum başında progress'teki "Geri çağırma soruları"ndan yalnız **vadesi gelenler** sorulur (`due:` bugün veya öncesi; kuyruksuz eski madde vadeli sayılır), en fazla 3, en eski vadeli önce (progress varsa shell tetikler, Usta ilk sözü alır). Vadeli soru yoksa tek cümle "no reviews due today" ile drill atlanır, doğrudan işe geçilir. 2 dk ısınma — ADHD için düşük eşikli "suya girme" rampası. Detay: §4.13.
 2. **Anlat-modu (Feynman):** parça kapanışında roller döner — kullanıcı yazdığını açıklar; açıklamadaki boşluk gap sinyalidir (koddan iyi).
 3. **İpucu merdiveni:** soru → kavram adı → pseudocode; kod asla (Sert Kural 1). Seviye yükseldikçe merdiven kısalır (fading); bir basamakta ~2 tur takılınca bir basamak inilir (ADHD dengesi).
 4. **Tahmin protokolü:** kayıtta `cargo check` koşar (60 sn timeout, 4KB kırpma, Rust dışı projede sessiz atlanır); hata varsa Usta sonucu söylemez, önce tahmin ettirir (hypercorrection).
@@ -114,6 +114,19 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 - **Egzersiz feedback çerçevesi:** watcher turn'üne "AS AN EXERCISE" işareti düşer — atamaya karşı değerlendir (mükemmelliğe karşı değil), hint ladder aynen uygulanır, çözüm veya tamamlanabilir iskelet asla yazılmaz.
 - **Check-atlama:** `exercises/` altındaki path'lerde `cargo check` koşulmaz — egzersiz her domain'de çalışır, kod-özel doğrulama zorunlu değildir.
 - **Kalıcılık:** progress'te `## Açık egzersiz` bölümü açık atamayı tutar; oturum açılışında hatırlatılır, tamamlanınca `Kapatılanlar`a taşınır.
+
+## 4.13 Spaced Repetition (v0.13)
+
+Roadmap #3: geri çağırma sorularına vade (due-date) verilir, vadesi gelmeyen sorulmaz, geleni açılışta görünür kılınır — spacing effect'i drill'e taşır.
+
+- **Format (makine-okur kuyruk):** `## Geri çağırma soruları` maddeleri `- <soru> — <tek satır cevap> | due: YYYY-MM-DD | ivl: <gün>`. Kuyruksuz eski madde bugün vadeli sayılır (migrasyon: ilk kapanışta model kuyruk ekler).
+- **Basitleştirilmiş SM-2 (ease factor YOK):** aralık merdiveni gün cinsinden `1 → 3 → 7 → 16 → 35 → 90`. Rahat hatırlandı → bir üst basamak (`due = bugün + yeni ivl`); zorlandı/yanlış veya yeni soru → `ivl: 1` (yarın vadeli); drill'e girmeyen soru → kuyruk değişmez.
+- **Emeklilik:** `ivl: 90` basamağını rahat geçen soru `Kapatılanlar`a tek satır özetle taşınır, soru listesinden düşer — progress şişmez.
+- **Açılış drilli:** yalnız vadesi gelenler (`due` ≤ bugün), en fazla 3, en eski önce; hiçbiri vadeli değilse tek cümle "no reviews due today" ile atlanır.
+- **Welcome göstergesi:** saf fonksiyon `due_count(progress, today)` — `Reviews due today: N` (N>0) / `No reviews due today` (soru var, vadeli yok) / satır yok (hiç soru yok).
+- **Hesap sahibi = model** (aralık seçimi, kuyruk yazımı kapanış flush'ında zaten dosyayı model yazıyor); **kabuk yalnız sayar** (`due_count` — welcome göstergesi). "İnce kabuk" korunur.
+
+Kuralların tamamı USTA.md'de yaşar (kapanış/açılış prompt'ları); Rust yalnız `due_count` sayacını ve welcome render'ını taşır. Tasarım detayı: `docs/superpowers/specs/2026-08-15-spaced-repetition-design.md`.
 
 ## 5. Akış (bir öğrenme oturumu)
 

@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | **Görsel anlatım** (`/show`) | ✅ tamamlandı (2026-08-13) | Gömülü HTML iskelet + model sahne senaryosu üretir → tarayıcıda animasyonlu anlatım. Proaktif öneri: anlaşılmadı sinyalinde Usta `/show` önerir. |
 | 2 | **Egzersiz/artefakt döngüsü** | ✅ tamamlandı (2026-08-15) | Watcher'ı kod dışına genelleme: Usta teslimat atar, kullanıcı `exercises/` altına yazar, aynı feedback döngüsü her domain'de çalışır. |
-| 3 | **Spaced repetition** | 🔨 yapılıyor (2026-08-15) | Geri-çağırma sorularına due-date (basitleştirilmiş SM-2); açılışta "bugün X madde vadesi geldi". |
+| 3 | **Spaced repetition** | ✅ tamamlandı (2026-08-15) | Geri-çağırma sorularına due-date (basitleştirilmiş SM-2); açılışta "bugün X madde vadesi geldi". |
 | 4 | **Dağıtım/onboarding** | beklemede | Prebuilt binary (brew/release), API key'siz yol, ilk-çalıştırma sihirbazı. "Herkes kullansın" ön koşulu. |
 | 5 | **Materyal yutma** | beklemede | Kullanıcı PDF/kitap/kurs verir, müfredat onun etrafına kurulur. |
 | 6 | **İlerleme özeti/motivasyon** | beklemede | Haftalık özet: harita % değişimi, oturan maddeler, streak. ADHD: görünür ilerleme = yakıt. |
@@ -14,6 +14,8 @@
 | 8 | **Gamification modu** | beklemede | `/game on\|off` toggle (kalıcılık USER.md profilinde). Müfredat durumları = XP, süreç-puanı (oturum/tahmin — doğruluk değil), gap kapatma = rozet. ADHD-safe: kırılan seride suçlama yok ("en uzun serin X" çerçevesi), puan performansa değil sürece. Overjustification'a dikkat. Roadmap #7 ile birleşir: sınav = boss fight. Çoğu markdown/prompt işi. |
 
 ## Tamamlananlar
+
+- 2026-08-15: Spaced repetition — geri çağırma soruları `| due: YYYY-MM-DD | ivl: <gün>` kuyruğu taşır; basitleştirilmiş SM-2 merdiveni (`1→3→7→16→35→90` gün, ease factor yok); açılış drilli yalnız vadesi gelenleri sorar (en fazla 3, en eski önce), vadeli yoksa atlanır; welcome kutusu "Reviews due today: N" / "No reviews due today" gösterir; `ivl: 90`'ı rahat geçen soru `Kapatılanlar`a emekli olur.
 
 - 2026-08-15: Egzersiz/artefakt döngüsü — Usta teslimat atar, kullanıcı `exercises/` altına yazar → aynı Socratic feedback döngüsü (atamaya karşı, çözüm verilmez), `cargo check` atlanır; açık egzersiz progress'te yaşar + açılışta hatırlatılır; scaffold `exercises/` kurar; pedagoji TEACHING.md'de.
 
