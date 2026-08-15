@@ -107,7 +107,10 @@ pub fn closing_prompt(
          from the TODAY section), map progress (%), pace assessment (on track / at risk \
          / behind + one-line rationale), measurement log (`date | measurement | score` — \
          mock exam, writing assessment, etc.). If there's no goal, don't write this \
-         section at all.\n\
+         section at all. / `## Açık egzersiz` — ONLY if an exercise was assigned this \
+         session (or an earlier one is still open) and not completed: `- <file> | \
+         <one-line assignment> | assigned YYYY-MM-DD`. A completed exercise moves to \
+         `Kapatılanlar` as a normal item and leaves this section.\n\
          - `approach` is generated only on the first session or if the approach changed \
          this session — a living document that answers the three questions from \
          _default.md (practice / output / feedback). For goal-directed learning, approach \
@@ -176,7 +179,9 @@ pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -
          it short: a 2-minute warm-up, then we move to today's work. If progress has no \
          questions, come up with 2 small recall questions suited to my level. When the \
          drill is done, say one sentence from the map: where we are, what's next (your \
-         curriculum file is in the system prompt).{project_block}"
+         curriculum file is in the system prompt). If your progress file has an `## Açık \
+         egzersiz` section, remind me in ONE sentence after the drill: open exercise: \
+         <file> — continue or discuss it.{project_block}"
     )
 }
 
@@ -503,6 +508,19 @@ mod tests {
     fn opening_prompt_mentions_curriculum_position() {
         let s = opening_prompt("rust", false, false);
         assert!(s.contains("map"));
+    }
+
+    #[test]
+    fn closing_prompt_defines_open_exercise_section() {
+        let s = closing_prompt("rust", None, None, None, None, None, None);
+        assert!(s.contains("## Açık egzersiz"));
+        assert!(s.contains("assigned"));
+    }
+
+    #[test]
+    fn opening_prompt_reminds_open_exercise() {
+        let s = opening_prompt("rust", false, false);
+        assert!(s.contains("open exercise"));
     }
 
     #[test]
