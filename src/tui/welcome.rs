@@ -87,6 +87,23 @@ pub fn drill_count(progress: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Count recall questions due today or earlier. A bullet without a
+/// `| due: YYYY-MM-DD` tail is legacy format and counts as due (it gets its
+/// tail at the next closing flush). ISO date strings compare lexicographically.
+pub fn due_count(progress: &str, today: &str) -> usize {
+    let Some(s) = section(progress, "Geri çağırma soruları") else { return 0 };
+    s.lines()
+        .filter(|l| l.trim().starts_with('-'))
+        .filter(|l| match l.find("due: ") {
+            None => true, // legacy, no schedule tail → due now
+            Some(i) => {
+                let date: String = l[i + 5..].chars().take(10).collect();
+                date.as_str() <= today
+            }
+        })
+        .count()
+}
+
 /// Build WelcomeData from file contents — everything is Option, missing = field skipped.
 pub fn gather(
     profile: Option<&str>, progress: Option<&str>, curriculum: Option<&str>,
@@ -331,6 +348,26 @@ mod tests {
     fn drill_count_counts_section_bullets() {
         assert_eq!(drill_count(PROGRESS), 3);
         assert_eq!(drill_count("# soru yok"), 0);
+    }
+
+    #[test]
+    fn due_count_counts_due_and_untagged_skips_future() {
+        let p = "\
+# rust — İlerleme
+
+## Geri çağırma soruları
+- Borrow checker ne yapar? — sahipliği derlemede doğrular | due: 2026-08-14 | ivl: 3
+- Trait nedir? — davranış sözleşmesi | due: 2026-08-15 | ivl: 1
+- Lifetime nedir? — referans ömrü | due: 2026-09-01 | ivl: 35
+- Eski format soru — cevap
+
+## Hata günlüğü
+- typo | 1 | due: 2026-08-01 gibi görünen ama başka bölümde
+";
+        // past + today + untagged = 3; future (09-01) and other-section lines don't count
+        assert_eq!(due_count(p, "2026-08-15"), 3);
+        assert_eq!(due_count(p, "2026-08-13"), 1); // only untagged counts as due
+        assert_eq!(due_count("# bos", "2026-08-15"), 0);
     }
 
     #[test]
