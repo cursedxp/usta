@@ -9,6 +9,7 @@ mod config;
 mod defaults;
 mod feedback;
 mod help;
+mod history;
 mod index;
 mod input;
 mod materials;
