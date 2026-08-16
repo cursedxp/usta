@@ -651,7 +651,7 @@ pub async fn run(
 
     // Lock-conflict confirmation (TUI single-key) — BEFORE build_session, without
     // writing its own lock. If rejected, no session/lock → Tui drop restores.
-    let lock = crate::lock_path(project_root, &topic);
+    let lock = crate::lifecycle::lock_path(project_root, &topic);
     if lock.exists()
         && !tui_confirm(
             &mut tui,
@@ -667,7 +667,7 @@ pub async fn run(
 
     // build_session writes its own lock; the returned lock = same path.
     let (mut session, recorder, lock, has_progress) =
-        crate::build_session(global, project_root, &topic, today)?;
+        crate::lifecycle::build_session(global, project_root, &topic, today)?;
 
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
@@ -877,7 +877,7 @@ pub async fn run(
                                 page_reply(&mut tui, &clean, w)?;
                                 recorder.assistant(&clean);
                                 session.push_assistant(clean);
-                                crate::maybe_compact(backend, &mut session, project_root, last_tokens).await;
+                                crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
                             Ok(AskOutcome::Cancelled) => {
@@ -895,7 +895,7 @@ pub async fn run(
             Some(path) = watch_rx.recv() => {
                 debouncer.push(path, tokio::time::Instant::now());
             }
-            _ = crate::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
+            _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 let batch = debouncer.flush();
                 if batch.len() > max_feedback_batch {
                     page_notice(&mut tui, &format!(
@@ -924,7 +924,7 @@ pub async fn run(
                                 if let Some(t) = tokens { last_tokens = Some(t); }
                                 let w = current_width(&tui);
                                 page_reply(&mut tui, &reply.text, w)?;
-                                crate::maybe_compact(backend, &mut session, project_root, tokens).await;
+                                crate::lifecycle::maybe_compact(backend, &mut session, project_root, tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
                             // Same silent-skip classes as the plain path (main.rs):
