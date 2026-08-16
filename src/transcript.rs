@@ -55,8 +55,6 @@ pub fn find_unfinished(project_root: &Path) -> Vec<PathBuf> {
 /// and reconstruct it as `Message` history, preserving order. Any line that
 /// fails to parse, or carries a role other than "user"/"assistant", fails
 /// the whole read — a salvage flush must not silently drop turns.
-// Not yet called from main.rs — wired in by the next salvage-flush task.
-#[allow(dead_code)]
 pub fn read_history(path: &Path) -> Result<Vec<Message>> {
     let content = std::fs::read_to_string(path)?;
     let mut out = Vec::new();
@@ -88,8 +86,6 @@ pub fn read_history(path: &Path) -> Result<Vec<Message>> {
 /// `-<YYYYMMDD>-<HHMMSS>` timestamp (see `now_stamp`'s format). The topic
 /// itself may contain hyphens. `None` if the filename doesn't end in the
 /// expected two numeric blocks.
-// Not yet called from main.rs — wired in by the next salvage-flush task.
-#[allow(dead_code)]
 pub fn topic_from_record(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     let parts: Vec<&str> = stem.split('-').collect();

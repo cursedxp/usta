@@ -91,8 +91,43 @@ async fn main() -> Result<()> {
     // the plain path uses rustyline, the TUI path uses crossterm EventStream.
     let mut watch_rx = watcher::spawn(&project_root)?;
 
-    for p in transcript::find_unfinished(&project_root) {
-        ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display()));
+    let stale = transcript::find_unfinished(&project_root);
+    if !stale.is_empty() {
+        let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        if !tty {
+            // pipe/script: EXACT existing behavior — warn only, no LLM calls
+            for p in &stale {
+                ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display()));
+            }
+        } else {
+            for p in &stale {
+                let Some(topic) = transcript::topic_from_record(p) else {
+                    ui::warn(&format!("unrecognized session record name, leaving as-is: {}", p.display()));
+                    continue;
+                };
+                match transcript::read_history(p) {
+                    Err(e) => ui::warn(&format!("could not read session record ({e}) — leaving as-is: {}", p.display())),
+                    Ok(history) if history.iter().filter(|m| m.role == "user").count() == 0 => {
+                        // nothing to recover — mark done silently so the noise stops
+                        let _ = transcript::mark_done(p);
+                    }
+                    Ok(history) => {
+                        ui::notice(&format!("recovering unflushed session: {} — writing files…", p.display()));
+                        let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
+                        match flush_core(&mut backend, &topic, &system, &history, &project_root, true).await {
+                            Ok(()) => {
+                                let _ = transcript::mark_done(p);
+                                ui::notice(&format!("recovered: {topic}"));
+                            }
+                            Err(e) => ui::warn(&format!("recovery failed ({e}) — record kept, will retry next start: {}", p.display())),
+                        }
+                        // Salvage is a standalone conversation — don't let its CLI session_id
+                        // leak into the next salvage or the real session that follows.
+                        backend.reset_session();
+                    }
+                }
+            }
+        }
     }
 
     // Both paths produce `(Session, Recorder, PathBuf)`; closing is shared.
