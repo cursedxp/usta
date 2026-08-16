@@ -1429,6 +1429,18 @@ mod tests {
         assert!(render_for_entry(false, &d, 80).is_none());
     }
 
+    // Regression guard: `had_topic_arg = true` must ALWAYS return `Some`, even
+    // with no data — the full-mode box always carries the logo, so there's no
+    // "empty panel" case to skip on this arm. Pinned with EMPTY data on
+    // purpose: a fully-populated fixture wouldn't catch someone later hoisting
+    // the `rows.is_empty()` check up into `render_for_entry` itself, which
+    // would make `usta start <topic>` go silently frameless on a first-ever
+    // topic — worse than the empty box the no-data fix above just prevented.
+    #[test]
+    fn render_for_entry_with_topic_arg_always_renders_even_with_no_data() {
+        assert!(render_for_entry(true, &empty_resume_data("rust"), 80).is_some());
+    }
+
     // Finding 2 (IMPORTANT): row 1's single-line decision is based on `wrap`'s
     // collapsed-whitespace width, but the single-line row is built from `mixed`,
     // whose spans carry the RAW (uncollapsed) `level` string. A level string
