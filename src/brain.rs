@@ -125,7 +125,7 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     // (`- gamification: on`, shell-managed via `/game on`) — saves the XP/level/badge
     // rules from a session where the player never turned the game on (spec §3
     // conditional line, same pattern as the GOAL block above). Exact-line match, not
-    // a naive `contains`, mirrors `game_pref` in main.rs.
+    // a naive `contains`, mirrors `game_pref` in slash.rs.
     let user_md = std::fs::read_to_string(global.join("USER.md")).unwrap_or_default();
     if user_md.lines().any(|l| l.trim() == "- gamification: on") {
         read_section(&global.join("GAMIFICATION.md"), "GAMIFICATION.md", &mut parts);

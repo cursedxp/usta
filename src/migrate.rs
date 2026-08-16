@@ -254,7 +254,7 @@ mod tests {
     /// (learner/progress/<topic>.md) — proving the multi-file/multi-root count
     /// and cross-tree `.bak` behavior in one pass. File-level substitution
     /// rules are already covered above; this test's added value is the
-    /// end-to-end fan-out that main.rs's wiring actually exercises.
+    /// end-to-end fan-out that setup.rs's wiring actually exercises.
     #[test]
     fn run_sweeps_global_and_project_trees_in_one_call() {
         let (global, project_usta) = temp_pair("multi_root");

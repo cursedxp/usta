@@ -39,7 +39,11 @@ fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
 /// Print Usta's reply in the visual language: orange ● line + markdown + blank line.
 fn page_reply(tui: &mut Tui, reply: &str, width: u16) -> Result<()> {
     let ansi = ui::render_markdown(reply, width as usize);
-    let mut t = ansi_to_text(&format!("\x1b[38;5;{}m{}\x1b[0m\n{ansi}\n", theme::BRAND_IDX, theme::G_BRAND));
+    let mut t = ansi_to_text(&format!(
+        "\x1b[38;5;{}m{}\x1b[0m\n{ansi}\n",
+        theme::BRAND_IDX,
+        theme::G_BRAND
+    ));
     t.lines.push(Line::raw(""));
     page(tui, t)
 }
@@ -54,11 +58,19 @@ fn notice_line(msg: &str) -> Text<'static> {
 }
 /// warning `⚠` amber — something needs noticing.
 fn warn_line(msg: &str) -> Text<'static> {
-    ansi_to_text(&format!("\x1b[38;5;{}m{} {msg}\x1b[0m", theme::WARN_IDX, theme::G_WARN))
+    ansi_to_text(&format!(
+        "\x1b[38;5;{}m{} {msg}\x1b[0m",
+        theme::WARN_IDX,
+        theme::G_WARN
+    ))
 }
 /// error `✗` red — a genuine stop.
 fn error_line(msg: &str) -> Text<'static> {
-    ansi_to_text(&format!("\x1b[38;5;{}m{} {msg}\x1b[0m", theme::ERROR_IDX, theme::G_ERR))
+    ansi_to_text(&format!(
+        "\x1b[38;5;{}m{} {msg}\x1b[0m",
+        theme::ERROR_IDX,
+        theme::G_ERR
+    ))
 }
 
 fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
@@ -208,7 +220,17 @@ async fn ask_live(
     let mut frame = 0usize;
     let mut cancel_armed = false; // true after the first Ctrl-C — the counter doesn't reset (spec B2)
     loop {
-        draw(tui, editor, &Status::Thinking { frame, cancel_hint: cancel_armed }, tokens, window, None)?;
+        draw(
+            tui,
+            editor,
+            &Status::Thinking {
+                frame,
+                cancel_hint: cancel_armed,
+            },
+            tokens,
+            window,
+            None,
+        )?;
         tokio::select! {
             r = &mut fut => return Ok(AskOutcome::Reply(r?)),
             Some(Ok(ev)) = events.next() => {
@@ -242,7 +264,7 @@ async fn ask_live(
     }
 }
 
-/// TUI sibling of main.rs's `run_visual_generation` — same guarantees: isolated
+/// TUI sibling of plain.rs's `run_visual_generation` — same guarantees: isolated
 /// mini-session, `backend.reset_session()` on every exit path (success, cancel,
 /// error, invalid JSON), Esc-cancellable via `ask_live`, same "try /show again"
 /// notice on bad JSON. Shared by the explicit `/show <topic>` command and the
@@ -295,14 +317,21 @@ async fn run_visual_generation(
                                 &format!(
                                     "visual saved: {}{}",
                                     path.display(),
-                                    if opened { "" } else { " (open it in your browser)" }
+                                    if opened {
+                                        ""
+                                    } else {
+                                        " (open it in your browser)"
+                                    }
                                 ),
                             )
                         }
                         Err(e) => page_error(tui, &format!("error: {e}")),
                     }
                 }
-                Err(e) => page_error(tui, &format!("visual generation failed ({e}) — try /show again")),
+                Err(e) => page_error(
+                    tui,
+                    &format!("visual generation failed ({e}) — try /show again"),
+                ),
             }
         }
         Ok(AskOutcome::Cancelled) => page_notice(tui, "visual generation cancelled"),
@@ -329,9 +358,23 @@ async fn trigger_auto_visual(
     last_tokens: Option<u64>,
 ) -> Result<()> {
     let Some(t) = show_topic else { return Ok(()) };
-    if let Some(req) = crate::show_request(Some(t.clone()), crate::last_assistant_text(session).as_deref()) {
+    if let Some(req) = crate::visual::show_request(
+        Some(t.clone()),
+        crate::visual::last_assistant_text(session).as_deref(),
+    ) {
         page_notice(tui, &format!("visualizing: {t}…"))?;
-        run_visual_generation(tui, editor, events, backend, project_root, topic, &t, &req, last_tokens).await?;
+        run_visual_generation(
+            tui,
+            editor,
+            events,
+            backend,
+            project_root,
+            topic,
+            &t,
+            &req,
+            last_tokens,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -367,7 +410,15 @@ async fn ask_topic(
         page(
             tui,
             welcome::render_welcome_identity(
-                name.as_deref(), model, dir, local, other, project_known, width, week_sessions, streak,
+                name.as_deref(),
+                model,
+                dir,
+                local,
+                other,
+                project_known,
+                width,
+                week_sessions,
+                streak,
             ),
         )?;
         // The "Enter = suggests" hint is only truthful on a first session with no
@@ -405,7 +456,7 @@ async fn ask_topic(
             }
             Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
             Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
-            None => return Ok(None), // stream ended — don't spin in a hot loop (spec B4)
+            None => return Ok(None),         // stream ended — don't spin in a hot loop (spec B4)
         }
     }
 }
@@ -422,11 +473,14 @@ async fn tui_confirm(
         draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => match k.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Char('e') | KeyCode::Char('E') => return Ok(true),
+                KeyCode::Char('y')
+                | KeyCode::Char('Y')
+                | KeyCode::Char('e')
+                | KeyCode::Char('E') => return Ok(true),
                 _ => return Ok(false),
             },
             Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
-            None => return Ok(false), // stream ended — don't spin in a hot loop (spec B4)
+            None => return Ok(false),        // stream ended — don't spin in a hot loop (spec B4)
         }
     }
 }
@@ -456,14 +510,14 @@ pub async fn run(
     // welcome + ask via the input box.
     let had_topic_arg = topic_arg.is_some();
     let mut resumed = false; // whether the resume flow was chosen — triggers the identity-free continuation panel
-    // The RAW text from the user's topic entry — carried into the new-topic intro
-    // turn as the "first answer"; reducing it to a slug and discarding it would
-    // force the model to re-ask what was already said. Not used in the resume flow.
+                             // The RAW text from the user's topic entry — carried into the new-topic intro
+                             // turn as the "first answer"; reducing it to a slug and discarding it would
+                             // force the model to re-ask what was already said. Not used in the resume flow.
     let mut intro: Option<String> = None;
     let topic = match topic_arg {
         Some(t) => {
             intro = Some(t.clone());
-            crate::slugify_topic(&t)
+            crate::topic::slugify_topic(&t)
         }
         None => {
             // Topic lists are computed here and passed to ask_topic:
@@ -492,7 +546,10 @@ pub async fn run(
             let (week_sessions, streak) = match read(global.join("learner/history.md")) {
                 Some(h) => {
                     let es = history::entries(&h);
-                    (history::week_summary(&es, today).sessions, history::current_streak(&es, today))
+                    (
+                        history::week_summary(&es, today).sessions,
+                        history::current_streak(&es, today),
+                    )
                 }
                 None => (0, 0),
             };
@@ -535,35 +592,41 @@ pub async fn run(
                     return Ok(None); // quit without giving a topic
                 }
                 if crate::visual::parse_show_command(&raw).is_some()
-                    || crate::parse_watch_command(&raw).is_some()
+                    || crate::slash::parse_watch_command(&raw).is_some()
                 {
-                    page_notice(&mut tui, "that command works inside a session — pick a topic first")?;
+                    page_notice(
+                        &mut tui,
+                        "that command works inside a session — pick a topic first",
+                    )?;
                     continue;
                 }
-                match crate::interpret_topic_input(&raw, &local, project_known) {
+                match crate::topic::interpret_topic_input(&raw, &local, project_known) {
                     // SAFE FALLBACK: interpret only returns None when (input is empty +
                     // local is empty); ask_topic only produces the empty-Enter sentinel
                     // when local is non-empty, so this normally isn't reached. Its natural
                     // counterpart in the loop is "swallow, ask again" — this is the safe fallback.
                     None => {}
-                    Some(crate::TopicChoice::Suggest) => {
+                    Some(crate::topic::TopicChoice::Suggest) => {
                         // One-shot suggestion from mentor/PROJECT.md (spec: project-aware
                         // start). Same mechanics as the slug mini-session: single call,
                         // then ALWAYS reset.
-                        let project_md = read(progress::project_md_path(project_root)).unwrap_or_default();
+                        let project_md =
+                            read(progress::project_md_path(project_root)).unwrap_or_default();
                         let outcome = ask_live(
                             &mut tui,
                             &mut editor,
                             &mut events,
                             backend,
-                            &crate::start_suggest_system(),
+                            &crate::topic::start_suggest_system(),
                             &[Message::user(project_md.as_str())],
                             None,
                         )
                         .await;
                         backend.reset_session(); // suggestion chat must not leak into the session
                         let parsed = match outcome {
-                            Ok(AskOutcome::Reply(reply)) => crate::parse_start_suggestion(&reply.text),
+                            Ok(AskOutcome::Reply(reply)) => {
+                                crate::topic::parse_start_suggestion(&reply.text)
+                            }
                             Ok(AskOutcome::Cancelled) | Err(_) => None,
                         };
                         let Some((slug, text)) = parsed else {
@@ -590,29 +653,33 @@ pub async fn run(
                         }
                         page_notice(&mut tui, "cancelled — type a topic")?;
                     }
-                    Some(crate::TopicChoice::Resume(t)) => {
+                    Some(crate::topic::TopicChoice::Resume(t)) => {
                         page_notice(&mut tui, &format!("resuming: {t}"))?;
                         resumed = true; // for the continuation panel below
                         break t;
                     }
-                    Some(crate::TopicChoice::New(raw)) => {
+                    Some(crate::topic::TopicChoice::New(raw)) => {
                         // New-topic flow: ≤2 words → local slug; a sentence → LLM slug (spinner).
                         let slug = if raw.split_whitespace().count() <= 2 {
-                            crate::slugify_topic(&raw)
+                            crate::topic::slugify_topic(&raw)
                         } else {
                             let slug = match ask_live(
                                 &mut tui,
                                 &mut editor,
                                 &mut events,
                                 backend,
-                                &crate::slug_system(&local),
+                                &crate::topic::slug_system(&local),
                                 &[Message::user(raw.as_str())],
                                 None,
                             )
                             .await
                             {
-                                Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
-                                Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
+                                Ok(AskOutcome::Reply(reply)) => {
+                                    crate::topic::finalize_slug(&raw, &reply.text)
+                                }
+                                Ok(AskOutcome::Cancelled) | Err(_) => {
+                                    crate::topic::slugify_topic(&raw)
+                                }
                             };
                             // The slug mini-session must not carry over into the learning session (spec B1).
                             backend.reset_session();
@@ -633,16 +700,22 @@ pub async fn run(
                                 &mut tui,
                                 &editor,
                                 &mut events,
-                                &crate::new_topic_confirm_msg(&slug),
+                                &crate::topic::new_topic_confirm_msg(&slug),
                             )
                             .await?
                         {
-                            page_notice(&mut tui, &format!("topic: {slug} — tell me the details in chat"))?;
+                            page_notice(
+                                &mut tui,
+                                &format!("topic: {slug} — tell me the details in chat"),
+                            )?;
                             intro = Some(raw);
                             break slug;
                         }
                         // Rejected → go back to the entry question (welcome is not printed again).
-                        page_notice(&mut tui, "cancelled — Enter = resume, or type another topic")?;
+                        page_notice(
+                            &mut tui,
+                            "cancelled — Enter = resume, or type another topic",
+                        )?;
                     }
                 }
             }
@@ -651,7 +724,7 @@ pub async fn run(
 
     // Lock-conflict confirmation (TUI single-key) — BEFORE build_session, without
     // writing its own lock. If rejected, no session/lock → Tui drop restores.
-    let lock = crate::lock_path(project_root, &topic);
+    let lock = crate::lifecycle::lock_path(project_root, &topic);
     if lock.exists()
         && !tui_confirm(
             &mut tui,
@@ -667,13 +740,13 @@ pub async fn run(
 
     // build_session writes its own lock; the returned lock = same path.
     let (mut session, recorder, lock, has_progress) =
-        crate::build_session(global, project_root, &topic, today)?;
+        crate::lifecycle::build_session(global, project_root, &topic, today)?;
 
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
     // Mentor docs are already in the system prompt — baseline them so an
     // unchanged re-save is a Skip, not a redundant full re-send (FIX: first-sight seed).
-    crate::seed_mentor_baseline(&mut files, project_root);
+    crate::file_feedback::seed_mentor_baseline(&mut files, project_root);
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
 
@@ -711,28 +784,42 @@ pub async fn run(
         }
     }
 
-    // Opening drill / intro (the TUI counterpart of main.rs's plain path). If the
+    // Opening drill / intro (the TUI counterpart of plain.rs's plain path). If the
     // profile is still the embedded generic template (or doesn't exist at all),
     // Usta doesn't know the user yet — a short introduction instruction is added
     // to the opening turn (spec Ç3a).
     let profile_generic = read(global.join("USER.md"))
         .as_deref()
-        .map(crate::profile_is_generic)
+        .map(crate::setup::profile_is_generic)
         .unwrap_or(true);
     let project_known = progress::project_md_path(project_root).exists();
     let opening = if has_progress {
-        let gs = crate::game_streak_line(global, today);
-        let progress_content = read(progress::progress_path(project_root, &topic)).unwrap_or_default();
+        let gs = crate::slash::game_streak_line(global, today);
+        let progress_content =
+            read(progress::progress_path(project_root, &topic)).unwrap_or_default();
         let due = welcome::due_questions(&progress_content, today);
         let has_questions = welcome::drill_count(&progress_content) > 0;
-        progress::opening_prompt(&topic, profile_generic, project_known, gs.as_deref(), &due, has_questions)
+        progress::opening_prompt(
+            &topic,
+            profile_generic,
+            project_known,
+            gs.as_deref(),
+            &due,
+            has_questions,
+        )
     } else {
         for note in crate::materials::convert_pdfs(project_root) {
             page_notice(&mut tui, &note)?;
         }
         let mats = crate::materials::scan(project_root);
         let material_digest = crate::materials::combined_digests(&mats);
-        progress::onboarding_prompt(&topic, intro.as_deref(), profile_generic, project_known, material_digest.as_deref())
+        progress::onboarding_prompt(
+            &topic,
+            intro.as_deref(),
+            profile_generic,
+            project_known,
+            material_digest.as_deref(),
+        )
     };
     session.push_user(&opening);
     recorder.user(&opening);
@@ -754,7 +841,18 @@ pub async fn run(
             page_reply(&mut tui, &clean, w)?;
             recorder.assistant(&clean);
             session.push_assistant(clean);
-            trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
+            trigger_auto_visual(
+                &mut tui,
+                &mut editor,
+                &mut events,
+                backend,
+                &session,
+                project_root,
+                &topic,
+                show_topic,
+                last_tokens,
+            )
+            .await?;
         }
         Ok(AskOutcome::Cancelled) => {
             backend.reset_session();
@@ -769,7 +867,14 @@ pub async fn run(
         // accumulate outside maybe_compact, like a transcript write error,
         // should never be lost either.
         flush_notices(&mut tui)?;
-        draw(&mut tui, &editor, &Status::Idle, last_tokens, window, Some(watching))?;
+        draw(
+            &mut tui,
+            &editor,
+            &Status::Idle,
+            last_tokens,
+            window,
+            Some(watching),
+        )?;
         tokio::select! {
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else {
@@ -786,9 +891,9 @@ pub async fn run(
                     Action::None => {}
                     Action::Exit => break,
                     Action::Submit(line) => {
-                        if let Some(cmd) = crate::parse_watch_command(&line) {
+                        if let Some(cmd) = crate::slash::parse_watch_command(&line) {
                             page_user_echo(&mut tui, &line)?;
-                            let (next, msg) = crate::apply_watch(cmd, watching);
+                            let (next, msg) = crate::slash::apply_watch(cmd, watching);
                             watching = next;
                             page_notice(&mut tui, msg)?;
                             continue;
@@ -802,8 +907,8 @@ pub async fn run(
                             page_user_echo(&mut tui, &line)?;
                             let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                             // Borrow care: read the last reply BEFORE any &mut session borrow.
-                            let last = crate::last_assistant_text(&session);
-                            match crate::show_request(arg, last.as_deref()) {
+                            let last = crate::visual::last_assistant_text(&session);
+                            match crate::visual::show_request(arg, last.as_deref()) {
                                 None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
                                 Some(req) => {
                                     run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
@@ -815,21 +920,21 @@ pub async fn run(
                         // /game: toggle persists to USER.md. Status is a local notice (never
                         // reaches the LLM). On/Off flip the pref + inject a mode-switch turn
                         // (swapped below) that flows through the normal ask — same shape as /exam.
-                        let game_cmd = crate::parse_game_command(&line);
+                        let game_cmd = crate::slash::parse_game_command(&line);
                         if let Some(cmd) = &game_cmd {
                             page_user_echo(&mut tui, &line)?;
                             match cmd {
-                                crate::GameCmd::Status => {
-                                    page_notice(&mut tui, if crate::game_pref(global) {
+                                crate::slash::GameCmd::Status => {
+                                    page_notice(&mut tui, if crate::slash::game_pref(global) {
                                         "gamification is on"
                                     } else {
                                         "gamification is off"
                                     })?;
                                     continue;
                                 }
-                                crate::GameCmd::On | crate::GameCmd::Off => {
-                                    let on = matches!(cmd, crate::GameCmd::On);
-                                    if let Err(e) = crate::set_game_pref(global, on) {
+                                crate::slash::GameCmd::On | crate::slash::GameCmd::Off => {
+                                    let on = matches!(cmd, crate::slash::GameCmd::On);
+                                    if let Err(e) = crate::slash::set_game_pref(global, on) {
                                         page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
                                         continue;
                                     }
@@ -843,9 +948,9 @@ pub async fn run(
                         }
                         // /exam: echo the literal command, gate on goal presence, then swap the
                         // outgoing text and fall through to the normal ask flow below.
-                        let outgoing = if crate::is_exam_command(&line) {
+                        let outgoing = if crate::slash::is_exam_command(&line) {
                             page_user_echo(&mut tui, "/exam")?;
-                            if !crate::topic_has_goal(project_root, global, &topic) {
+                            if !crate::slash::topic_has_goal(project_root, global, &topic) {
                                 page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
                                 continue;
                             }
@@ -853,11 +958,11 @@ pub async fn run(
                         } else if let Some(cmd) = game_cmd {
                             // literal command already echoed in the /game block above
                             match cmd {
-                                crate::GameCmd::On => crate::game_on_turn(
+                                crate::slash::GameCmd::On => crate::slash::game_on_turn(
                                     &std::fs::read_to_string(global.join("GAMIFICATION.md")).unwrap_or_default(),
                                 ),
-                                crate::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
-                                crate::GameCmd::Status => line.clone(), // unreachable: Status returns above
+                                crate::slash::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
+                                crate::slash::GameCmd::Status => line.clone(), // unreachable: Status returns above
                             }
                         } else {
                             // Push the submitted line to scrollback as a distinct user block.
@@ -877,7 +982,7 @@ pub async fn run(
                                 page_reply(&mut tui, &clean, w)?;
                                 recorder.assistant(&clean);
                                 session.push_assistant(clean);
-                                crate::maybe_compact(backend, &mut session, project_root, last_tokens).await;
+                                crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
                             Ok(AskOutcome::Cancelled) => {
@@ -895,7 +1000,7 @@ pub async fn run(
             Some(path) = watch_rx.recv() => {
                 debouncer.push(path, tokio::time::Instant::now());
             }
-            _ = crate::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
+            _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 let batch = debouncer.flush();
                 if batch.len() > max_feedback_batch {
                     page_notice(&mut tui, &format!(
@@ -917,20 +1022,20 @@ pub async fn run(
                     }
                 } else {
                     for path in batch {
-                        match crate::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
-                            Ok(crate::FileFeedback::Sessiz) => {}
-                            Ok(crate::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
-                            Ok(crate::FileFeedback::Yanit { tokens, reply, show_topic }) => {
+                        match crate::file_feedback::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
+                            Ok(crate::file_feedback::FileFeedback::Sessiz) => {}
+                            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
+                            Ok(crate::file_feedback::FileFeedback::Yanit { tokens, reply, show_topic }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
                                 let w = current_width(&tui);
                                 page_reply(&mut tui, &reply.text, w)?;
-                                crate::maybe_compact(backend, &mut session, project_root, tokens).await;
+                                crate::lifecycle::maybe_compact(backend, &mut session, project_root, tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
-                            // Same silent-skip classes as the plain path (main.rs):
-                            // vanished temp file (NotFound) or binary content
-                            // (InvalidData) — no noise for either.
-                            Err(e) if crate::is_silent_skip(&e) => {}
+                            // Same silent-skip classes as the plain path (plain.rs) /
+                            // is_silent_skip (file_feedback.rs): vanished temp file
+                            // (NotFound) or binary content (InvalidData) — no noise for either.
+                            Err(e) if crate::file_feedback::is_silent_skip(&e) => {}
                             Err(e) => page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
@@ -982,12 +1087,31 @@ mod tests {
         let t = user_echo_text(&"a".repeat(50), 20);
         let lines: Vec<String> = t.lines.iter().map(line_text).collect();
         assert_eq!(lines[0], "");
-        assert!(lines[1].starts_with("❯ "), "ilk görsel satır ❯: {:?}", lines[1]);
-        assert_eq!(lines[1].chars().filter(|c| *c == 'a').count(), 18, "ilk satır iç genişlik kadar");
-        assert!(lines[2].starts_with("  "), "devam satırı girintili: {:?}", lines[2]);
-        let total: usize = lines.iter().map(|l| l.chars().filter(|c| *c == 'a').count()).sum();
+        assert!(
+            lines[1].starts_with("❯ "),
+            "ilk görsel satır ❯: {:?}",
+            lines[1]
+        );
+        assert_eq!(
+            lines[1].chars().filter(|c| *c == 'a').count(),
+            18,
+            "ilk satır iç genişlik kadar"
+        );
+        assert!(
+            lines[2].starts_with("  "),
+            "devam satırı girintili: {:?}",
+            lines[2]
+        );
+        let total: usize = lines
+            .iter()
+            .map(|l| l.chars().filter(|c| *c == 'a').count())
+            .sum();
         assert_eq!(total, 50, "hiçbir karakter kaybolmaz");
-        assert!(t.lines.len() >= 4, "birden çok görsel satıra bölündü: {}", t.lines.len());
+        assert!(
+            t.lines.len() >= 4,
+            "birden çok görsel satıra bölündü: {}",
+            t.lines.len()
+        );
     }
 
     #[test]
@@ -1016,7 +1140,11 @@ mod tests {
         // No span carries DIM — that was the root of the visibility issue (spec S1).
         for l in &t.lines {
             for s in &l.spans {
-                assert!(!s.style.add_modifier.contains(Modifier::DIM), "DIM span: {:?}", s.content);
+                assert!(
+                    !s.style.add_modifier.contains(Modifier::DIM),
+                    "DIM span: {:?}",
+                    s.content
+                );
             }
         }
     }
@@ -1033,8 +1161,14 @@ mod tests {
     fn classify_locked_key_ctrl_c_and_d_are_cancel_requests() {
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
-        assert!(matches!(classify_locked_key(ctrl_c), LockedKey::CancelRequest));
-        assert!(matches!(classify_locked_key(ctrl_d), LockedKey::CancelRequest));
+        assert!(matches!(
+            classify_locked_key(ctrl_c),
+            LockedKey::CancelRequest
+        ));
+        assert!(matches!(
+            classify_locked_key(ctrl_d),
+            LockedKey::CancelRequest
+        ));
     }
 
     #[test]
