@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-/// Full-line (line-start) header mappings. ORDER MATTERS: longest prefix first.
+/// Full-line (line-start) header mappings. Exact full-line match (see below) — list order is inert.
 const HEADERS: [(&str, &str); 12] = [
     ("## Hedef Durumu", "## Goal Status"),
     ("## Hedef", "## Goal"),

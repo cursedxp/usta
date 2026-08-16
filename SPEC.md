@@ -59,7 +59,7 @@
 
 It's not the teaching direction but the **recall direction** that's optimized — durable learning happens in the production that comes out of the user (testing/generation effect):
 
-1. **Opening drill (due-aware, v0.13):** at session start, from the progress file's "Geri çağırma soruları" (recall questions) only the **due ones** are asked (`due:` today or earlier; an old item with no queue counts as due), at most 3, oldest-due first (if progress exists the shell triggers it, Usta gets the first word). If no question is due, the drill is skipped with a single sentence "no reviews due today" and work begins directly. A 2-min warm-up — a low-threshold "get in the water" ramp for ADHD. Detail: §4.13.
+1. **Opening drill (due-aware, v0.13):** at session start, from the progress file's "Recall questions" only the **due ones** are asked (`due:` today or earlier; an old item with no queue counts as due), at most 3, oldest-due first (if progress exists the shell triggers it, Usta gets the first word). If no question is due, the drill is skipped with a single sentence "no reviews due today" and work begins directly. A 2-min warm-up — a low-threshold "get in the water" ramp for ADHD. Detail: §4.13.
 2. **Explain-mode (Feynman):** at a slice's close the roles flip — the user explains what they wrote; a gap in the explanation is a gap signal (better than the code).
 3. **Hint ladder:** question → concept name → pseudocode; never code (Hard Rule 1). As the level rises the ladder shortens (fading); after ~2 rounds stuck on one rung, drop one rung (ADHD balance).
 4. **Prediction protocol:** on save it runs `cargo check` (60s timeout, 4KB truncation, silently skipped in non-Rust projects); if there's an error Usta doesn't state the result, it makes you predict first (hypercorrection).
@@ -119,7 +119,7 @@ Two modes of learning in one system: **exploration** (open-ended curiosity) and 
 
 Roadmap #3: recall questions are given a due-date, one that isn't due isn't asked, and one that is becomes visible at open — bringing the spacing effect to the drill.
 
-- **Format (machine-readable queue):** `## Geri çağırma soruları` (Recall questions) items are `- <question> — <one-line answer> | due: YYYY-MM-DD | ivl: <days>`. An old item with no queue counts as due today (migration: the model adds the queue on the first close).
+- **Format (machine-readable queue):** `## Recall questions` items are `- <question> — <one-line answer> | due: YYYY-MM-DD | ivl: <days>`. An old item with no queue counts as due today (migration: the model adds the queue on the first close).
 - **Simplified SM-2 (NO ease factor):** the interval ladder in days is `1 → 3 → 7 → 16 → 35 → 90`. Recalled comfortably → one rung up (`due = today + new ivl`); struggled/wrong or a new question → `ivl: 1` (due tomorrow); a question not in the drill → the queue stays unchanged.
 - **Retirement:** a question that comfortably passes the `ivl: 90` rung is moved to `Retired` as a one-line summary and drops off the question list — progress doesn't bloat.
 - **Opening drill:** only the due ones (`due` ≤ today), at most 3, oldest first; if none is due it's skipped with the single sentence "no reviews due today".

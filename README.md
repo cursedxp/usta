@@ -138,6 +138,6 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-v0.19 · Rust 2021 · 319 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+v0.20 · Rust 2021 · 331 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Next up: prebuilt binaries + Homebrew tap (deliberately deferred until "everyone can use it" matters). Further ideas: streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.

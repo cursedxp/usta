@@ -39,7 +39,6 @@ pub const H_PREFERENCES: &str = "## Preferences";
 pub const FILE_DIVIDER: &str = "===FILE:";
 pub const CHECKPOINT: &str = "[CHECKPOINT]";
 pub const SOURCE_DASH: &str = "— source:";
-pub const SOURCE_HYPHEN: &str = "- source:";
 pub const HISTORY_HEADER: &str = "# Session History\n\n";
 /// Progress file heading suffix: `# <topic> — Progress`.
 pub const PROGRESS_HEADING_SUFFIX: &str = "— Progress";

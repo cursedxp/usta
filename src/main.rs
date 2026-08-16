@@ -1288,6 +1288,9 @@ fn ensure_scaffold(cwd: &Path) -> Result<PathBuf> {
 /// The write logic is shared with `ensure_scaffold` (`write_global_defaults` /
 /// `write_project_scaffold`) — the only difference here is per-file status printing.
 fn run_init() -> Result<()> {
+    // Migration intentionally NOT wired here — init only scaffolds (writes
+    // defaults) and parses no migration-scoped tokens; the next real command
+    // (e.g. `usta topics`, `usta start`) runs the migration.
     let global = config::global_root()?;
     for (path, wrote) in write_global_defaults(&global)? {
         print_scaffold_status(&path, wrote);
