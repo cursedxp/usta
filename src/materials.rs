@@ -90,7 +90,9 @@ pub fn scan(project_root: &Path) -> Vec<Material> {
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().to_string();
@@ -113,9 +115,12 @@ pub fn materials_present(project_root: &Path) -> bool {
     let root = project_root.join("materials");
     let mut files: Vec<PathBuf> = Vec::new();
     collect_files(&root, &mut files);
-    files
-        .iter()
-        .any(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("md" | "txt" | "pdf")))
+    files.iter().any(|p| {
+        matches!(
+            p.extension().and_then(|e| e.to_str()),
+            Some("md" | "txt" | "pdf")
+        )
+    })
 }
 
 /// Join per-file digests under `=== name ===` banners, capped at TOTAL_CAP.
@@ -137,7 +142,10 @@ pub fn convert_pdfs(project_root: &Path) -> Vec<String> {
     let root = project_root.join("materials");
     let mut files: Vec<PathBuf> = Vec::new();
     collect_files(&root, &mut files);
-    let pdfs: Vec<&PathBuf> = files.iter().filter(|p| p.extension().is_some_and(|e| e == "pdf")).collect();
+    let pdfs: Vec<&PathBuf> = files
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "pdf"))
+        .collect();
     if pdfs.is_empty() {
         return Vec::new();
     }
@@ -172,7 +180,10 @@ pub fn convert_pdfs(project_root: &Path) -> Vec<String> {
         notes.push(if ok {
             format!("converted: {} → {}", pdf.display(), txt.display())
         } else {
-            format!("pdftotext failed on {} — convert it to text yourself", pdf.display())
+            format!(
+                "pdftotext failed on {} — convert it to text yourself",
+                pdf.display()
+            )
         });
     }
     notes
@@ -199,7 +210,9 @@ mod tests {
         // Many headings so the joined skeleton exceeds the overall cap and cap_str bites.
         let mut md = String::from("# Kitap çğüşöı\n");
         for i in 0..60 {
-            md.push_str(&format!("## Bölüm {i} çğüşöı\nçğüşöı içerik satırı burada uzayıp gider\n"));
+            md.push_str(&format!(
+                "## Bölüm {i} çğüşöı\nçğüşöı içerik satırı burada uzayıp gider\n"
+            ));
         }
         let d = digest_md(&md, 500);
         assert!(d.chars().count() <= 500 + "\n[truncated]".chars().count());
@@ -268,8 +281,14 @@ mod tests {
     #[test]
     fn combined_digests_caps_total_and_labels_files() {
         let mats = vec![
-            Material { name: "a.md".into(), digest: "x".repeat(10_000) },
-            Material { name: "b.md".into(), digest: "y".repeat(10_000) },
+            Material {
+                name: "a.md".into(),
+                digest: "x".repeat(10_000),
+            },
+            Material {
+                name: "b.md".into(),
+                digest: "y".repeat(10_000),
+            },
         ];
         let c = combined_digests(&mats).unwrap();
         assert!(c.contains("=== a.md ==="));
@@ -281,7 +300,10 @@ mod tests {
     fn convert_pdfs_missing_tool_reports_notice_and_no_txt() {
         // Deterministic only while pdftotext is absent from PATH (true in CI here).
         // If a CI image adds poppler-utils, this exercises the real-conversion path instead.
-        let base = std::env::temp_dir().join(format!("usta_materials_pdftotext_missing_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(
+            "usta_materials_pdftotext_missing_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();
@@ -297,7 +319,10 @@ mod tests {
 
     #[test]
     fn convert_pdfs_no_pdfs_returns_empty() {
-        let base = std::env::temp_dir().join(format!("usta_materials_pdftotext_none_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(
+            "usta_materials_pdftotext_none_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();
@@ -308,7 +333,8 @@ mod tests {
 
     #[test]
     fn materials_present_true_for_md() {
-        let base = std::env::temp_dir().join(format!("usta_materials_present_md_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("usta_materials_present_md_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();
@@ -319,7 +345,8 @@ mod tests {
 
     #[test]
     fn materials_present_true_for_txt() {
-        let base = std::env::temp_dir().join(format!("usta_materials_present_txt_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("usta_materials_present_txt_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();
@@ -330,7 +357,8 @@ mod tests {
 
     #[test]
     fn materials_present_true_for_pdf() {
-        let base = std::env::temp_dir().join(format!("usta_materials_present_pdf_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("usta_materials_present_pdf_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();
@@ -341,7 +369,10 @@ mod tests {
 
     #[test]
     fn materials_present_false_for_empty_dir() {
-        let base = std::env::temp_dir().join(format!("usta_materials_present_empty_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(
+            "usta_materials_present_empty_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();
@@ -351,7 +382,10 @@ mod tests {
 
     #[test]
     fn materials_present_false_for_only_gitkeep() {
-        let base = std::env::temp_dir().join(format!("usta_materials_present_gitkeep_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(
+            "usta_materials_present_gitkeep_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();
@@ -362,7 +396,10 @@ mod tests {
 
     #[test]
     fn materials_present_false_without_materials_dir() {
-        let base = std::env::temp_dir().join(format!("usta_materials_present_none_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!(
+            "usta_materials_present_none_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         assert!(!materials_present(&base));
@@ -371,7 +408,8 @@ mod tests {
 
     #[test]
     fn materials_present_false_for_other_extension_only() {
-        let base = std::env::temp_dir().join(format!("usta_materials_present_png_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("usta_materials_present_png_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("materials");
         std::fs::create_dir_all(&dir).unwrap();

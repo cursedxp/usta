@@ -22,10 +22,16 @@ pub struct Message {
 
 impl Message {
     pub fn user(text: impl Into<String>) -> Self {
-        Message { role: "user".into(), content: Value::String(text.into()) }
+        Message {
+            role: "user".into(),
+            content: Value::String(text.into()),
+        }
     }
     pub fn assistant_raw(content: Value) -> Self {
-        Message { role: "assistant".into(), content }
+        Message {
+            role: "assistant".into(),
+            content,
+        }
     }
 }
 
@@ -68,7 +74,10 @@ impl MessageRequest {
             messages,
             thinking: Thinking { kind: "adaptive" },
             output_config: OutputConfig { effort: "high" },
-            tools: vec![Tool { kind: "web_search_20260209", name: "web_search" }],
+            tools: vec![Tool {
+                kind: "web_search_20260209",
+                name: "web_search",
+            }],
         }
     }
 }
@@ -118,7 +127,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(api_key: String) -> Self {
-        Client { http: reqwest::Client::new(), api_key }
+        Client {
+            http: reqwest::Client::new(),
+            api_key,
+        }
     }
 
     /// Complete the request. The request body is built from model/system/history.
@@ -204,7 +216,9 @@ mod tests {
 
     #[test]
     fn used_web_search_detects_tool_blocks() {
-        assert!(used_web_search(&[json!({"type": "web_search_tool_result"})]));
+        assert!(used_web_search(&[
+            json!({"type": "web_search_tool_result"})
+        ]));
         assert!(!used_web_search(&[json!({"type": "text", "text": "x"})]));
     }
 

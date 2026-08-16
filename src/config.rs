@@ -29,8 +29,9 @@ pub fn global_root() -> Result<PathBuf> {
             return Ok(p.join("usta"));
         }
     }
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("home directory not found (dirs::home_dir() returned None)"))?;
+    let home = dirs::home_dir().ok_or_else(|| {
+        anyhow::anyhow!("home directory not found (dirs::home_dir() returned None)")
+    })?;
     Ok(home.join(".config").join("usta"))
 }
 
@@ -117,10 +118,8 @@ mod tests {
 
     #[test]
     fn needs_sync_true_for_missing_or_stale_false_for_current() {
-        let base = std::env::temp_dir().join(format!(
-            "usta_config_test_needssync_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("usta_config_test_needssync_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         let stale = base.join("eski.md");

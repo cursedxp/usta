@@ -58,7 +58,20 @@ mod tests {
     #[test]
     fn help_text_lists_shortcuts_commands_and_cli() {
         let h = help_text();
-        for needle in ["Ctrl+J", "Esc", "↑ / ↓", "/watch on|off", "/show [topic]", "/exam", "/game on|off", "/help", "/quit", "usta reset --factory", "usta topics", "usta stats"] {
+        for needle in [
+            "Ctrl+J",
+            "Esc",
+            "↑ / ↓",
+            "/watch on|off",
+            "/show [topic]",
+            "/exam",
+            "/game on|off",
+            "/help",
+            "/quit",
+            "usta reset --factory",
+            "usta topics",
+            "usta stats",
+        ] {
             assert!(h.contains(needle), "help_text missing: {needle}");
         }
     }

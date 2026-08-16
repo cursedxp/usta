@@ -95,7 +95,13 @@ mod tests {
         assert_eq!(ERROR, Color::Indexed(210));
         // Every status glyph is non-empty AND its style actually sets a color
         // (not a vacuous default) — glyph+color pairing is real.
-        for (g, s) in [(G_OK, success()), (G_WARN, warn()), (G_ERR, error()), (G_GAME, game()), (G_BRAND, brand())] {
+        for (g, s) in [
+            (G_OK, success()),
+            (G_WARN, warn()),
+            (G_ERR, error()),
+            (G_GAME, game()),
+            (G_BRAND, brand()),
+        ] {
             assert!(!g.is_empty());
             assert!(s.fg.is_some());
         }

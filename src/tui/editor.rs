@@ -33,14 +33,23 @@ pub struct InputBox {
 
 impl InputBox {
     pub fn new() -> Self {
-        Self { input: Input::default(), history: Vec::new(), cursor: None, stash: String::new() }
+        Self {
+            input: Input::default(),
+            history: Vec::new(),
+            cursor: None,
+            stash: String::new(),
+        }
     }
 
     // Editor's public API — the loop gets the line from Action::Submit, and the
     // editor draws the cursor itself, so these aren't called right now (value() is used in tests).
-    pub fn value(&self) -> &str { self.input.value() }
+    pub fn value(&self) -> &str {
+        self.input.value()
+    }
     #[allow(dead_code)]
-    pub fn visual_cursor(&self) -> usize { self.input.visual_cursor() }
+    pub fn visual_cursor(&self) -> usize {
+        self.input.visual_cursor()
+    }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -52,7 +61,9 @@ impl InputBox {
         // kitty keyboard protocol) or Ctrl+J (LF — universal fallback, works everywhere).
         // Bare Enter still submits.
         let newline = (matches!(key.code, KeyCode::Enter)
-                && key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT))
+            && key
+                .modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT))
             || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('j'));
         if newline {
             self.cursor = None;
@@ -62,14 +73,22 @@ impl InputBox {
         match key.code {
             KeyCode::Enter => {
                 let line = self.input.value().trim().to_string();
-                if line.is_empty() { return Action::None; }
+                if line.is_empty() {
+                    return Action::None;
+                }
                 self.history.push(line.clone());
                 self.input.reset();
                 self.cursor = None;
                 Action::Submit(line)
             }
-            KeyCode::Up => { self.recall_prev(); Action::None }
-            KeyCode::Down => { self.recall_next(); Action::None }
+            KeyCode::Up => {
+                self.recall_prev();
+                Action::None
+            }
+            KeyCode::Down => {
+                self.recall_next();
+                Action::None
+            }
             _ => {
                 self.cursor = None;
                 if let Some(req) = to_input_request(&Event::Key(key)) {
@@ -92,9 +111,14 @@ impl InputBox {
     }
 
     fn recall_prev(&mut self) {
-        if self.history.is_empty() { return; }
+        if self.history.is_empty() {
+            return;
+        }
         let next = match self.cursor {
-            None => { self.stash = self.input.value().to_string(); self.history.len() - 1 }
+            None => {
+                self.stash = self.input.value().to_string();
+                self.history.len() - 1
+            }
             Some(0) => 0,
             Some(i) => i - 1,
         };
@@ -122,7 +146,8 @@ impl InputBox {
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let inner_w = area.width.saturating_sub(4) as usize; // borders + "> " prefix
         let visible = area.height.saturating_sub(2).max(1) as usize; // inner lines
-        let (rows, cur_row, cur_col) = wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
+        let (rows, cur_row, cur_col) =
+            wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
         // Vertical window: last `visible` lines so the cursor stays visible.
         let start = (cur_row + 1).saturating_sub(visible);
         let lines: Vec<Line> = rows
@@ -147,7 +172,10 @@ impl InputBox {
         f.render_widget(para, area);
         let x = area.x + 3 + cur_col as u16;
         let y = area.y + 1 + (cur_row - start) as u16;
-        f.set_cursor_position((x.min(area.x + area.width - 2), y.min(area.y + area.height - 2)));
+        f.set_cursor_position((
+            x.min(area.x + area.width - 2),
+            y.min(area.y + area.height - 2),
+        ));
     }
 }
 
@@ -194,11 +222,17 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    fn key(c: char) -> KeyEvent { KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE) }
-    fn code(k: KeyCode) -> KeyEvent { KeyEvent::new(k, KeyModifiers::NONE) }
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+    fn code(k: KeyCode) -> KeyEvent {
+        KeyEvent::new(k, KeyModifiers::NONE)
+    }
 
     fn type_str(b: &mut InputBox, s: &str) {
-        for c in s.chars() { assert!(matches!(b.handle_key(key(c)), Action::None)); }
+        for c in s.chars() {
+            assert!(matches!(b.handle_key(key(c)), Action::None));
+        }
     }
 
     #[test]

@@ -22,10 +22,7 @@ pub enum InputEvent {
 /// line and sends it to the channel; it doesn't read again until the main
 /// loop processes it and sends a new `ready`.
 /// If `ready_tx` is dropped (main loop ended), the thread closes silently.
-pub fn spawn(
-    prompt: &'static str,
-    ready_rx: ReadyReceiver<()>,
-) -> UnboundedReceiver<InputEvent> {
+pub fn spawn(prompt: &'static str, ready_rx: ReadyReceiver<()>) -> UnboundedReceiver<InputEvent> {
     let (tx, rx) = unbounded_channel();
     thread::spawn(move || {
         let mut rl = match DefaultEditor::new() {

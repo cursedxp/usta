@@ -5,7 +5,9 @@
 use std::io::Stdout;
 
 use anyhow::Result;
-use crossterm::event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
@@ -26,7 +28,10 @@ pub fn setup() -> Result<Tui> {
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
     // Kitty keyboard protocol: lets modern terminals disambiguate Shift+Enter / Alt+Enter
     // from bare Enter. Unsupported terminals are skipped silently (Ctrl+J still works).
-    if matches!(crossterm::terminal::supports_keyboard_enhancement(), Ok(true)) {
+    if matches!(
+        crossterm::terminal::supports_keyboard_enhancement(),
+        Ok(true)
+    ) {
         let _ = crossterm::execute!(
             std::io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -39,7 +44,9 @@ pub fn setup() -> Result<Tui> {
     }));
     let terminal = Terminal::with_options(
         CrosstermBackend::new(std::io::stdout()),
-        TerminalOptions { viewport: Viewport::Inline(VIEWPORT_H) },
+        TerminalOptions {
+            viewport: Viewport::Inline(VIEWPORT_H),
+        },
     )?;
     Ok(Tui { terminal })
 }

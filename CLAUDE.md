@@ -36,7 +36,7 @@ When editing existing code:
 - Match existing style, even if you'd do it differently.
 - If you notice unrelated dead code, mention it - don't delete it.
 - Before adding to a file, check its current size. Over the 600-line production budget (SPEC.md §11), split first, then add.
-- `cargo fmt --check` is not yet crate-wide clean (21 pre-existing files fail it, unrelated to any current branch). Don't run a blanket `cargo fmt` — it will reformat those files and turn an unrelated diff into a 21-file PR. Scope formatting to the files you actually edited.
+- `cargo fmt --check` is crate-wide clean. Run `cargo fmt` scoped to the files you edited.
 
 When your changes create orphans:
 - Remove imports/variables/functions that YOUR changes made unused.

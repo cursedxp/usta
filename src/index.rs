@@ -34,7 +34,11 @@ pub fn entries(content: &str) -> Vec<IndexEntry> {
             let topic = parts.next()?.to_string();
             let project = PathBuf::from(parts.next()?);
             let date = parts.next()?.to_string();
-            Some(IndexEntry { topic, project, date })
+            Some(IndexEntry {
+                topic,
+                project,
+                date,
+            })
         })
         .collect()
 }
@@ -69,7 +73,12 @@ fn render(content: &str, list: &[IndexEntry]) -> String {
     out.push_str(SECTION);
     out.push('\n');
     for e in list {
-        out.push_str(&format!("- {} | {} | {}\n", e.topic, e.project.display(), e.date));
+        out.push_str(&format!(
+            "- {} | {} | {}\n",
+            e.topic,
+            e.project.display(),
+            e.date
+        ));
     }
     out
 }
@@ -98,7 +107,9 @@ pub fn record(global: &Path, topic: &str, project: &Path, date: &str) -> Result<
 /// The identity welcome box (numbered list) + resume selection logic reads this.
 pub fn local_topics(project_root: &Path, index_content: &str) -> Vec<String> {
     let dir = project_root.join(".usta/learner/progress");
-    let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
     let idx = entries(index_content);
     let date_of = |topic: &str| -> Option<String> {
         idx.iter()
@@ -109,14 +120,19 @@ pub fn local_topics(project_root: &Path, index_content: &str) -> Vec<String> {
         .flatten()
         .filter_map(|f| {
             let p = f.path();
-            if p.extension().and_then(|e| e.to_str()) != Some("md") { return None; }
+            if p.extension().and_then(|e| e.to_str()) != Some("md") {
+                return None;
+            }
             let stem = p.file_stem()?.to_str()?.to_string();
             let content = std::fs::read_to_string(&p).ok()?;
-            if content.trim().is_empty() { return None; }
+            if content.trim().is_empty() {
+                return None;
+            }
             // Sort key: index date (YYYY-MM-DD is sortable);
             // otherwise a coarse key derived from mtime (epoch seconds, fixed width).
             let key = date_of(&stem).unwrap_or_else(|| {
-                let secs = f.metadata()
+                let secs = f
+                    .metadata()
                     .and_then(|m| m.modified())
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -143,7 +159,12 @@ mod tests {
 
     #[test]
     fn upsert_creates_section_preserving_prose() {
-        let out = upsert("# Katalog\naçıklama satırı", "rust", Path::new("/p/a"), "2026-08-07");
+        let out = upsert(
+            "# Katalog\naçıklama satırı",
+            "rust",
+            Path::new("/p/a"),
+            "2026-08-07",
+        );
         assert!(out.contains("açıklama satırı"));
         assert!(out.contains("## Records"));
         assert!(out.contains("- rust | /p/a | 2026-08-07"));
@@ -240,7 +261,8 @@ mod tests {
 
     #[test]
     fn local_topics_without_index_entry_still_lists_by_mtime() {
-        let base = std::env::temp_dir().join(format!("usta_localtopics_mtime_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("usta_localtopics_mtime_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let pdir = base.join(".usta/learner/progress");
         std::fs::create_dir_all(&pdir).unwrap();

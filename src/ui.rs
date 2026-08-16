@@ -138,7 +138,11 @@ pub fn context_gauge(tokens: Option<u64>, window: u64) {
     let filled = ((ratio * 8.0).round() as usize).min(8);
     let bar = format!("{}{}", "▓".repeat(filled), "░".repeat(8 - filled));
     let color = if ratio >= 0.7 { AMBER } else { DIM };
-    println!("{color}  {bar} context {}k/{}k{RESET}", t / 1000, window / 1000);
+    println!(
+        "{color}  {bar} context {}k/{}k{RESET}",
+        t / 1000,
+        window / 1000
+    );
 }
 
 /// One-line animation while waiting for the LLM. Draws nothing in plain mode.
@@ -153,7 +157,10 @@ impl Spinner {
         // Also a no-op while the TUI is active: it has its own spinner (Status::Thinking),
         // if this one started too, the background print! task would clobber the viewport.
         if is_plain() || tui_active() {
-            return Spinner { stop_tx: None, handle: None };
+            return Spinner {
+                stop_tx: None,
+                handle: None,
+            };
         }
         let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
@@ -172,7 +179,10 @@ impl Spinner {
             print!("\r\x1b[2K");
             let _ = std::io::Write::flush(&mut std::io::stdout());
         });
-        Spinner { stop_tx: Some(tx), handle: Some(handle) }
+        Spinner {
+            stop_tx: Some(tx),
+            handle: Some(handle),
+        }
     }
 
     pub async fn stop(mut self) {

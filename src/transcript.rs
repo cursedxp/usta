@@ -124,7 +124,10 @@ pub struct Recorder {
 
 impl Recorder {
     pub fn new(path: PathBuf) -> Recorder {
-        Recorder { path, warned: AtomicBool::new(false) }
+        Recorder {
+            path,
+            warned: AtomicBool::new(false),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -173,15 +176,16 @@ mod tests {
     #[test]
     fn session_path_builds_expected_layout() {
         let p = session_path(Path::new("/proje"), "rust", "20260807-1030");
-        assert_eq!(p, Path::new("/proje/.usta/sessions/rust-20260807-1030.jsonl"));
+        assert_eq!(
+            p,
+            Path::new("/proje/.usta/sessions/rust-20260807-1030.jsonl")
+        );
     }
 
     #[test]
     fn find_unfinished_skips_done_files() {
-        let base = std::env::temp_dir().join(format!(
-            "usta_transcript_test_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("usta_transcript_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let sdir = base.join(".usta/sessions");
         std::fs::create_dir_all(&sdir).unwrap();
@@ -195,10 +199,8 @@ mod tests {
 
     #[test]
     fn mark_done_renames_jsonl() {
-        let base = std::env::temp_dir().join(format!(
-            "usta_transcript_done_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("usta_transcript_done_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let p = base.join("rust-1.jsonl");
@@ -211,10 +213,8 @@ mod tests {
 
     #[test]
     fn read_history_roundtrips_recorder_output() {
-        let base = std::env::temp_dir().join(format!(
-            "usta_transcript_history_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("usta_transcript_history_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let p = base.join("rust-1.jsonl");
@@ -227,11 +227,20 @@ mod tests {
         let history = read_history(&p).unwrap();
         assert_eq!(history.len(), 3);
         assert_eq!(history[0].role, "user");
-        assert_eq!(history[0].content, serde_json::Value::String("merhaba".into()));
+        assert_eq!(
+            history[0].content,
+            serde_json::Value::String("merhaba".into())
+        );
         assert_eq!(history[1].role, "assistant");
-        assert_eq!(history[1].content, serde_json::Value::String("selam".into()));
+        assert_eq!(
+            history[1].content,
+            serde_json::Value::String("selam".into())
+        );
         assert_eq!(history[2].role, "user");
-        assert_eq!(history[2].content, serde_json::Value::String("nasılsın".into()));
+        assert_eq!(
+            history[2].content,
+            serde_json::Value::String("nasılsın".into())
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -251,10 +260,8 @@ mod tests {
 
     #[test]
     fn mark_done_renames_and_unflushed_no_longer_finds_it() {
-        let base = std::env::temp_dir().join(format!(
-            "usta_transcript_markdone2_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("usta_transcript_markdone2_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let sdir = base.join(".usta/sessions");
         std::fs::create_dir_all(&sdir).unwrap();
@@ -279,7 +286,11 @@ mod tests {
         std::fs::write(sdir.join("b-2.jsonl"), "x").unwrap();
         std::fs::write(sdir.join("c-3.done.jsonl"), "x").unwrap();
 
-        let files = vec![sdir.join("a-1.jsonl"), sdir.join("b-2.jsonl"), sdir.join("yok.jsonl")];
+        let files = vec![
+            sdir.join("a-1.jsonl"),
+            sdir.join("b-2.jsonl"),
+            sdir.join("yok.jsonl"),
+        ];
         let (deleted, errors) = delete_unflushed(&files);
         assert_eq!(deleted, 2);
         assert_eq!(errors.len(), 1);
