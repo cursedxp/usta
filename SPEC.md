@@ -101,7 +101,7 @@ Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
 
 ## 4.11 Sağlamlaştırma (v0.9)
 
-- **Ham oturum kaydı:** her turn anında `.usta/sessions/<konu>-<zaman>.jsonl`'e iner; başarılı kapanışta `.done.jsonl`. Flush ölse/terminal çökse oturum diskte — açılışta yarım oturum bildirilir.
+- **Ham oturum kaydı + otomatik kurtarma:** her turn anında `.usta/sessions/<konu>-<zaman>.jsonl`'e iner; başarılı kapanışta `.done.jsonl`. Flush ölse/terminal çökse oturum diskte kalır — açılışta (yalnız TTY'de) yarım kayıt sorulmadan kurtarılır: transcript parse edilir, kapanış flush'ı o history ile koşar (progress/approach/curriculum yazılır), kayıt `.done.jsonl`'a taşınır. Hata açılışı engellemez — kayıt yerinde kalır, sonraki açılışta tekrar denenir. Pipe/script modunda salvage koşmaz, yalnız uyarı basılır.
 - **Olay seli tavanı:** 5+ dosyalık debounce batch'i (git checkout, format-all) LLM'siz geçer; `FileMemory` sessizce senkronlanır.
 - **Konu kilidi:** `.usta/.lock-<konu>` — eşzamanlı ikinci oturum onayla açılır, progress sessizce ezilmez. Pipe modunda uyarı + devam.
 - **Yedek:** `write_atomic` önceki sürümü `.bak`'a kopyalar — kötü model çıktısı geri alınabilir.
