@@ -10,8 +10,8 @@ it's normal for it to start out empty. You can also edit it by hand if you like.
 
 ## How they learn
 
-- _(Will become clear during introductions. E.g. do they learn by doing, do they move fast or deep, which gap do they want to close.)_
-- General principle: Usta teaches by doing — not passive lectures, but teaching inside a real project flow.
+- _(Will become clear during introductions. E.g. pace — quick overview vs deep dives, prior knowledge, which gap they want to close.)_
+- General principle: Usta teaches by doing — not passive lectures, but teaching inside a real project flow. This is the fixed method — never ask the user whether they'd prefer it.
 
 ## Communication
 
