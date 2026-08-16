@@ -146,7 +146,8 @@ pub fn closing_prompt(
          concept X' is progress's job; 'likes to learn from examples' goes in profile. \
          KEEP the valid information already in the current profile (the user may have \
          hand-edited it), ~1 page cap, merge duplicates. If nothing changed, don't \
-         generate this file at all.\n\
+         generate this file at all. KEEP the '## Tercihler' section (e.g. '- \
+         gamification: on') exactly as-is — it is shell-managed.\n\
          - `project` is the USER-FACING project definition, written to `mentor/PROJECT.md` \
          at the project root. Generate it ONLY when (a) the file doesn't exist yet and a \
          concrete project was discussed this session, or (b) the project definition \
@@ -175,7 +176,12 @@ pub fn closing_prompt(
 /// Opening-drill turn: if progress exists, Usta speaks first at the start of the
 /// session and asks a recall question (testing effect — TEACHING.md "Opening Drill" rule).
 /// Where it hooks into main.rs: Task 3 (opening-drill trigger).
-pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -> String {
+pub fn opening_prompt(
+    topic: &str,
+    profile_generic: bool,
+    project_known: bool,
+    game_streak: Option<&str>,
+) -> String {
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     let project_block = if project_known {
         "\nThe project files mentor/PROJECT.md and mentor/PROGRESS.md are in your \
@@ -185,7 +191,7 @@ pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -
     } else {
         ""
     };
-    format!(
+    let base = format!(
         "[SESSION OPENING — RECALL DRILL]\n{meet_block}\
          Topic: {topic}. Pick ONLY questions from your progress file whose `due:` date is \
          today or earlier (TODAY is in your system prompt; a bullet without a `due:` tail \
@@ -198,7 +204,11 @@ pub fn opening_prompt(topic: &str, profile_generic: bool, project_known: bool) -
          curriculum file is in the system prompt). If your progress file has an `## Açık \
          egzersiz` section, remind me in ONE sentence after the drill: open exercise: \
          <file> — continue or discuss it.{project_block}"
-    )
+    );
+    match game_streak {
+        Some(s) => format!("{base}\n[GAME] {s}\n"),
+        None => base,
+    }
 }
 
 /// Mock-exam session turn (`/exam`, goal-mode only — gated by `topic_has_goal` in
@@ -511,10 +521,10 @@ mod tests {
 
     #[test]
     fn opening_prompt_mentions_project_pointer_when_known() {
-        let s = opening_prompt("rust", false, true);
+        let s = opening_prompt("rust", false, true, None);
         assert!(s.contains("mentor/PROGRESS.md"));
         assert!(s.contains("Sırada"));
-        let s = opening_prompt("rust", false, false);
+        let s = opening_prompt("rust", false, false, None);
         assert!(!s.contains("mentor/PROGRESS.md"));
     }
 
@@ -569,7 +579,7 @@ mod tests {
 
     #[test]
     fn opening_prompt_embeds_topic_and_asks_to_quiz() {
-        let s = opening_prompt("rust", false, false);
+        let s = opening_prompt("rust", false, false, None);
         assert!(s.contains("rust"));
         assert!(s.contains("RECALL DRILL"));
         assert!(s.contains("ASK"));
@@ -594,7 +604,7 @@ mod tests {
 
     #[test]
     fn opening_prompt_mentions_curriculum_position() {
-        let s = opening_prompt("rust", false, false);
+        let s = opening_prompt("rust", false, false, None);
         assert!(s.contains("map"));
     }
 
@@ -614,13 +624,13 @@ mod tests {
 
     #[test]
     fn opening_prompt_reminds_open_exercise() {
-        let s = opening_prompt("rust", false, false);
+        let s = opening_prompt("rust", false, false, None);
         assert!(s.contains("open exercise"));
     }
 
     #[test]
     fn opening_prompt_drills_only_due_questions() {
-        let s = opening_prompt("rust", false, false);
+        let s = opening_prompt("rust", false, false, None);
         assert!(s.contains("due"));
         assert!(s.contains("no reviews due today"));
         assert!(s.contains("oldest due first"));
@@ -633,9 +643,24 @@ mod tests {
         assert!(on.contains("1-2 questions"));
         assert!(!onboarding_prompt("rust", None, false, false, None).contains("[PROFILE EMPTY]"));
 
-        let op = opening_prompt("rust", true, false);
+        let op = opening_prompt("rust", true, false, None);
         assert!(op.contains("[PROFILE EMPTY]"));
-        assert!(!opening_prompt("rust", false, false).contains("[PROFILE EMPTY]"));
+        assert!(!opening_prompt("rust", false, false, None).contains("[PROFILE EMPTY]"));
+    }
+
+    #[test]
+    fn opening_prompt_carries_game_streak_block() {
+        let s = opening_prompt("rust", false, false, Some("streak: 3 day(s) (longest 6)"));
+        assert!(s.contains("[GAME] streak: 3 day(s) (longest 6)"));
+        let s = opening_prompt("rust", false, false, None);
+        assert!(!s.contains("[GAME]"));
+    }
+
+    #[test]
+    fn closing_prompt_protects_tercihler_section() {
+        let s = closing_prompt("rust", None, None, None, None, None, None);
+        assert!(s.contains("## Tercihler"));
+        assert!(s.contains("shell-managed"));
     }
 
     #[test]

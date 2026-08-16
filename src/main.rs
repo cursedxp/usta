@@ -212,7 +212,8 @@ async fn run_plain_loop(
     // warming up with 2-3 recall questions (testing effect — USTA.md rule).
     let project_known = progress::project_md_path(project_root).exists();
     if has_progress {
-        let opening = progress::opening_prompt(topic, profile_generic, project_known);
+        let gs = game_streak_line(global, &today());
+        let opening = progress::opening_prompt(topic, profile_generic, project_known, gs.as_deref());
         session.push_user(&opening);
         recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
@@ -833,6 +834,29 @@ pub(crate) fn game_pref(global: &Path) -> bool {
     std::fs::read_to_string(global.join("USER.md"))
         .map(|c| c.lines().any(|l| l.trim() == "- gamification: on"))
         .unwrap_or(false)
+}
+
+/// Opening `[GAME]` streak line, shell-computed from the global history log — only
+/// when gamification is on. ADHD-safe: a broken streak (current 0) shows the LONGEST,
+/// never `streak: 0`; no history at all yields None (no game line).
+pub(crate) fn game_streak_line(global: &Path, today: &str) -> Option<String> {
+    if !game_pref(global) {
+        return None;
+    }
+    let content = std::fs::read_to_string(global.join("learner/history.md")).ok()?;
+    let es = history::entries(&content);
+    if es.is_empty() {
+        return None;
+    }
+    let cur = history::current_streak(&es, today);
+    let longest = history::longest_streak(&es);
+    if cur > 0 {
+        Some(format!("streak: {cur} day(s) (longest {longest})"))
+    } else if longest > 0 {
+        Some(format!("longest streak: {longest} day(s)"))
+    } else {
+        None
+    }
 }
 
 pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
@@ -2365,6 +2389,42 @@ mod tests {
         assert!(!game_pref(&base));
         let c2 = std::fs::read_to_string(base.join("USER.md")).unwrap();
         assert!(c2.ends_with('\n')); // ikinci toggle'da da korunur
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn game_streak_line_never_shows_streak_zero() {
+        let base = std::env::temp_dir().join(format!("usta_game_streak_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("learner")).unwrap();
+
+        // game OFF (no USER.md at all) → None regardless of history.
+        let hist = format!(
+            "{}\n{}\n{}\n",
+            history::record_line("2026-08-14", "rust", None, None),
+            history::record_line("2026-08-15", "rust", None, None),
+            history::record_line("2026-08-16", "rust", None, None),
+        );
+        std::fs::write(base.join("learner/history.md"), &hist).unwrap();
+        assert_eq!(game_streak_line(&base, "2026-08-16"), None);
+
+        // game ON, but no history file (or empty) → None.
+        std::fs::write(base.join("USER.md"), "# Öğrenci Profili\n\n## Tercihler\n- gamification: on\n").unwrap();
+        std::fs::remove_file(base.join("learner/history.md")).unwrap();
+        assert_eq!(game_streak_line(&base, "2026-08-16"), None);
+
+        // game ON + current streak > 0 → Some("streak: N day(s) (longest M)"), never "streak: 0".
+        std::fs::write(base.join("learner/history.md"), &hist).unwrap();
+        let s = game_streak_line(&base, "2026-08-16").unwrap();
+        assert_eq!(s, "streak: 3 day(s) (longest 3)");
+        assert!(!s.contains("streak: 0"));
+
+        // game ON + broken streak (gap before today, longest > 0) → Some("longest streak: M day(s)").
+        let broken = game_streak_line(&base, "2026-08-19").unwrap();
+        assert_eq!(broken, "longest streak: 3 day(s)");
+        assert!(!broken.contains("streak: 0"));
+        assert!(broken.starts_with("longest"));
 
         let _ = std::fs::remove_dir_all(&base);
     }
