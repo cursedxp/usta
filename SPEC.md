@@ -1,347 +1,347 @@
-# Usta — Tasarım Spec'i
+# Usta — Design Spec
 
-> Terminal'de çalışan, Claude (Opus) destekli, Rust ile yazılmış, domain-agnostik **Socratic öğrenim mentoru**. Yaparak-öğrenmeyi yürütür. Asla kullanıcının yerine iş yapmaz. Uydurmaz — bilmezse araştırır.
+> A terminal-native, Claude (Opus)-powered, Rust-written, domain-agnostic **Socratic learning mentor**. It runs learning-by-doing. It never does the user's work for them. It doesn't make things up — if it doesn't know, it researches.
 
-- **Durum:** taslak (v0.1) — 2026-08-06
-- **Sahip:** Anil (cursedxp)
-- **İlk kullanıcı:** Anil (Rust öğrenmek). İleride: herhangi bir dil/domain, herkes.
-- **Repo:** `cursedxp/usta` (public), headspace içinde ayrı proje — kendi git'i, headspace `.gitignore`'da.
+- **Status:** draft (v0.1) — 2026-08-06
+- **Owner:** Anil (cursedxp)
+- **First user:** Anil (learning Rust). Later: any language/domain, anyone.
+- **Repo:** `cursedxp/usta` (public), a separate project inside headspace — its own git, headspace keeps it in `.gitignore`.
 
 ---
 
-## 1. Amaç ve Felsefe
+## 1. Purpose and Philosophy
 
-**Tek cümle:** Yanında oturan, sen gerçek işi yaparken seni yetiştiren usta.
+**In one sentence:** The master who sits beside you and trains you while you do the real work.
 
-**Çekirdek felsefe:** Öğrenerek-yaparak (learning by doing). Pasif ders yok. Gerçek projeyi inşa ederken, o akışın içinde öğrenirsin. Proje = öğrenme aracı.
+**Core philosophy:** Learning by doing. No passive lessons. You learn inside the flow while building the real project. The project = the learning vehicle.
 
-**Kapatılacak gap:** Kullanıcı "nasıl yapılır"ı biliyor; "bir mühendisin işe nasıl yaklaştığı"nı değil — iyi spek, iyi mimari, ölçek okuma, teknoloji seçimi. Usta bu meta-beceriyi öğretir.
+**The gap it closes:** The user knows "how to do it"; not "how an engineer approaches the work" — good spec, good architecture, reading scale, technology choice. Usta teaches this meta-skill.
 
-**İlk amaç:** Anil'in kendi kullanımı + kullandıkça feedback verip Usta'yı birlikte geliştirmek. Çift döngü: Usta Anil'e öğretir, Anil Usta'yı iyileştirir.
+**Initial purpose:** Anil's own use + giving feedback as he uses it, to develop Usta together. A double loop: Usta teaches Anil, Anil improves Usta.
 
-## 2. Sert Kurallar (ihlal edilemez)
+## 2. Hard Rules (non-negotiable)
 
-1. **Sıfır otonom aksiyon.** Usta kod yazmaz, dosya düzeltmez, kullanıcının işini yapmaz.
-   - **Gösterebilir:** neyin hatalı olduğunu · nasıl yapılması gerektiğini (yaklaşım, mantık, yön) · kavramı gösteren minik illüstrasyon/pseudocode.
-   - **Yazamaz:** kullanıcının projesine çalışan/kopyala-yapıştır çözüm. Düzelten hep kullanıcı.
-2. **Uydurmaz.** Bilmediği konuda fikir yürütmez → **araştırır** (web/kaynak), sonra öğretir.
-3. **Felç önler.** Spek/plan mükemmelleştirmek işe başlamayı öldürmemeli. Usta "yeter, suya gir" bekçisidir (ADHD-aware).
-4. **Proje-temelli.** Feedback havada teori değil — kullanıcının gerçek projesine demirli, gerekçeli.
-5. **Kendi sağlığını denetler.** Kırık wiki-link, eskimiş/tutarsız dosya → otonom yakalar, onarır/uyarır.
+1. **Zero autonomous action.** Usta doesn't write code, doesn't fix files, doesn't do the user's work.
+   - **It may show:** what's wrong · how it should be done (approach, logic, direction) · a tiny illustration/pseudocode that shows the concept.
+   - **It may not write:** a working/copy-paste solution into the user's project. The one who fixes is always the user.
+2. **No making things up.** On a topic it doesn't know it doesn't speculate → it **researches** (web/sources), then teaches.
+3. **Prevents paralysis.** Perfecting the spec/plan mustn't kill getting started. Usta is the "enough, get in the water" guardian (ADHD-aware).
+4. **Project-based.** Feedback isn't theory in the air — it's anchored to the user's real project, with rationale.
+5. **Audits its own health.** Broken wiki-links, stale/inconsistent files → catches them autonomously, repairs/warns.
 
 ## 3. Persona
 
-- **Senior / domain uzmanı.** O konuya hakim biri gibi davranır.
-- **Kod kalitesinden sorumlu** (kod domainlerinde) — "çalışıyor mu" değil "iyi mi" standardını tutar.
-- **Nazik ama iten.** Mükemmeliyetçiliği keser, ADHD-aware (headspace `mentorship-mode` ruhu): yargı yok, eşik düşür, parçaya böl.
-- Kullanıcıyı tanır (ADHD, "suya gir" mantrası, kişilik, iletişim tarzı) → doğru desteği ona göre verir.
+- **Senior / domain expert.** Behaves like someone who has mastered the subject.
+- **Responsible for code quality** (in code domains) — holds the "is it good" standard, not "does it run".
+- **Kind but pushing.** Cuts perfectionism, ADHD-aware (headspace `mentorship-mode` spirit): no judgment, lower the threshold, break it into pieces.
+- Knows the user (ADHD, the "get in the water" mantra, personality, communication style) → gives the right support accordingly.
 
-## 4. Yetenekler
+## 4. Capabilities
 
-1. **Öğretim (akış-içi):** proje inşa edilirken, o an, o adımda öğretir — sıradaki adım + dil/konu püf noktası.
-2. **Meta-beceri öğretimi:** iyi spek nasıl yazılır, mühendis nasıl düşünür, iş planlama.
-3. **Ölçeğe duyarlı mimari:** projenin ölçeğini okumayı öğretir (1 kişilik vs 1000 kişilik). Over/under-engineering'i önler. Ezber pattern değil — "bu bağlamda ne yeter, neden".
-4. **Teknoloji seçimi:** göreve uygun teknolojileri önerir/açıklar, kullanıcının bilmediklerini yüzeye çıkarır, neden-o-teknoloji gerekçesini öğretir. Güncellik → canlı araştırmadan gelir (ayrı "kendini güncelleyen sistem" YOK — YAGNI).
-5. **Proaktif feedback:** yazılan kodu izler, sorun görürse söyler ("burası şöyle olmamalı, çünkü...") — sen sormadan.
-6. **Eksik teşhisi:** kullanıcının işini izleyerek zayıf noktaları yakalar (kanıta dayalı: hangi kodda görüldü).
-7. **Eğitim planlama:** tespit edilen gap'lere göre hedefli mini-dersler/alıştırmalar kurgular. Planlar ve önerir — yaptırmaz.
-8. **Domaine göre yaklaşım seçimi:** her proje speklik değil. Yazılım → spek+mimari; marketing → brief/hipotez/ölçüm; git öğrenme → "spek gereksiz, direkt yap". Usta doğru yapılandırma-adımını seçer.
+1. **Teaching (in-flow):** teaches at the moment, at that step, while the project is being built — the next step + a language/topic tip.
+2. **Meta-skill teaching:** how to write a good spec, how an engineer thinks, work planning.
+3. **Scale-aware architecture:** teaches reading the project's scale (1-person vs 1000-person). Prevents over/under-engineering. Not a memorized pattern — "what's enough in this context, and why".
+4. **Technology choice:** recommends/explains technologies fit for the task, surfaces what the user doesn't know, teaches the why-this-technology rationale. Currency → comes from live research (there is NO separate "self-updating system" — YAGNI).
+5. **Proactive feedback:** watches the code being written, speaks up if it sees a problem ("this shouldn't be like this, because...") — without you asking.
+6. **Gap diagnosis:** catches weak points by watching the user's work (evidence-based: which code it was seen in).
+7. **Curriculum planning:** designs targeted mini-lessons/exercises for the detected gaps. Plans and suggests — doesn't do it for you.
+8. **Approach selection by domain:** not every project is spec-worthy. Software → spec+architecture; marketing → brief/hypothesis/measurement; learning git → "spec unnecessary, just do it". Usta picks the right structuring step.
 
-## 4.5 Başlatma / Kullanım
+## 4.5 Launch / Usage
 
-- **`usta`** (argsız) → eksikse global + proje `.usta/` **otomatik kurulur** (bootstrap), sonra konuyu sorar (TTY'de) veya `genel`'e düşer (piped).
-- **`usta start <konu>`** → konu açıkça verilir (slug'lanır: `"JavaScript Basics"` → `javascript`). Kısayol.
-- **`usta init`** → opsiyonel; sadece kurar (başlatmadan), per-dosya durum yazar. Artık zorunlu değil.
-- Konu = öğrenme başlığı/dosyalama anahtarı (`progress/<konu>.md`). **Ne inşa ettiğin** `mentor/PROJECT.md`'de yaşar (Usta tanışmadan yazar, kullanıcı elle düzenleyebilir); Usta önce oraya bakar, orada yoksa sorar. Projenin durumu `mentor/PROGRESS.md`'de (Bitti/Yapılıyor/Sırada + append-only Kararlar).
-- **Proje-farkında başlangıç:** ilk oturumda (`local` boş) `mentor/PROJECT.md` doluysa konu girişinde **boş Enter = başlangıç önerisi** — Usta PROJECT.md'den konu + gerekçe + somut ilk adım önerir (tek mini-çağrı, sonrası koşulsuz session reset — slug mini-oturum paritesi), kullanıcı onaylarsa oturum o konuyla açılır; öneri metni `intro` olarak onboarding'e taşınır (Usta kendi önerisini tekrar anlatmaz, ilk adımdan devam eder). Welcome/prompt satırı bu durumda "PROJECT.md found — press Enter, Usta suggests where to start." ipucunu gösterir. `local` doluysa boş Enter = **resume** (öncelikli, değişmedi). Plain/pipe yolunda öneri yok.
+- **`usta`** (no args) → if missing, the global + project `.usta/` is **set up automatically** (bootstrap), then it asks for the topic (in a TTY) or falls back to `genel` ("general", piped).
+- **`usta start <topic>`** → the topic is given explicitly (slugified: `"JavaScript Basics"` → `javascript`). A shortcut.
+- **`usta init`** → optional; only sets up (without starting), writes per-file state. No longer required.
+- Topic = the learning title / filing key (`progress/<topic>.md`). **What you build** lives in `mentor/PROJECT.md` (Usta writes it before the introduction, the user can hand-edit it); Usta looks there first, and asks if it isn't there. The project's status is in `mentor/PROGRESS.md` (Done/In Progress/Next + append-only Decisions).
+- **Project-aware start:** in the first session (`local` empty), if `mentor/PROJECT.md` is filled, at the topic entry **an empty Enter = a starting suggestion** — Usta suggests a topic + rationale + a concrete first step from PROJECT.md (a single mini-call, followed by an unconditional session reset — slug mini-session parity); if the user confirms, the session opens on that topic; the suggestion text is carried into onboarding as `intro` (Usta doesn't re-explain its own suggestion, it continues from the first step). In this case the welcome/prompt line shows the hint "PROJECT.md found — press Enter, Usta suggests where to start." If `local` is filled, an empty Enter = **resume** (takes priority, unchanged). No suggestion on the plain/pipe path.
 
-## 4.6 Pedagoji Katmanı (v0.3)
+## 4.6 Pedagogy Layer (v0.3)
 
-Öğretim yönü değil, **geri çağırma yönü** optimize edilir — kalıcı öğrenme kullanıcıdan çıkan üretimde olur (testing/generation effect):
+It's not the teaching direction but the **recall direction** that's optimized — durable learning happens in the production that comes out of the user (testing/generation effect):
 
-1. **Açılış drilli (vade-farkında, v0.13):** oturum başında progress'teki "Geri çağırma soruları"ndan yalnız **vadesi gelenler** sorulur (`due:` bugün veya öncesi; kuyruksuz eski madde vadeli sayılır), en fazla 3, en eski vadeli önce (progress varsa shell tetikler, Usta ilk sözü alır). Vadeli soru yoksa tek cümle "no reviews due today" ile drill atlanır, doğrudan işe geçilir. 2 dk ısınma — ADHD için düşük eşikli "suya girme" rampası. Detay: §4.13.
-2. **Anlat-modu (Feynman):** parça kapanışında roller döner — kullanıcı yazdığını açıklar; açıklamadaki boşluk gap sinyalidir (koddan iyi).
-3. **İpucu merdiveni:** soru → kavram adı → pseudocode; kod asla (Sert Kural 1). Seviye yükseldikçe merdiven kısalır (fading); bir basamakta ~2 tur takılınca bir basamak inilir (ADHD dengesi).
-4. **Tahmin protokolü:** kayıtta `cargo check` koşar (60 sn timeout, 4KB kırpma, Rust dışı projede sessiz atlanır); hata varsa Usta sonucu söylemez, önce tahmin ettirir (hypercorrection).
-5. **Hata günlüğü:** progress'te `hata tipi | sayaç | son örnek`; 3+ tekrar = `GAP ADAYI` → curriculum'a mini-alıştırma önerisi.
+1. **Opening drill (due-aware, v0.13):** at session start, from the progress file's "Geri çağırma soruları" (recall questions) only the **due ones** are asked (`due:` today or earlier; an old item with no queue counts as due), at most 3, oldest-due first (if progress exists the shell triggers it, Usta gets the first word). If no question is due, the drill is skipped with a single sentence "no reviews due today" and work begins directly. A 2-min warm-up — a low-threshold "get in the water" ramp for ADHD. Detail: §4.13.
+2. **Explain-mode (Feynman):** at a slice's close the roles flip — the user explains what they wrote; a gap in the explanation is a gap signal (better than the code).
+3. **Hint ladder:** question → concept name → pseudocode; never code (Hard Rule 1). As the level rises the ladder shortens (fading); after ~2 rounds stuck on one rung, drop one rung (ADHD balance).
+4. **Prediction protocol:** on save it runs `cargo check` (60s timeout, 4KB truncation, silently skipped in non-Rust projects); if there's an error Usta doesn't state the result, it makes you predict first (hypercorrection).
+5. **Error log:** in progress `error type | counter | last example`; 3+ repeats = `GAP CANDIDATE` → a mini-exercise suggestion into the curriculum.
 
-Kuralların tamamı USTA.md'de yaşar; Rust sadece tetikler (açılış turn'ü, check koşucusu, progress formatı).
+All the rules live in USTA.md; Rust only triggers (opening turn, check runner, progress format).
 
-## 4.7 Yönetim Komutları (v0.4)
+## 4.7 Management Commands (v0.4)
 
-- **`usta topics`** — global katalog listelenir: `konu | proje | son oturum`. LLM gerekmez.
-- **`usta reset <konu>`** — bulunduğun projenin o konudaki progress'i silinir (`[e/H]` onaylı), katalogdan düşülür. "Bu konuyu baştan öğreneyim" senaryosu.
-- **`usta reset --factory`** — katalogdaki TÜM projelerin `.usta/`'sı + **içinde bulunulan projenin `.usta`'sı (katalogda olmasa bile)** + global brain silinir; liste önce gösterilir, onay için "yes" veya "evet" yazılır. Reset zaten kelime onaylı olduğundan artıklar için ek soru yoktur — sonraki açılış temiz başlar. Diğer katalog-dışı eski projeler kapsam dışı (uyarı + `find` ipucu basılır).
-- **Katalog otomatik güncellenir:** hem oturum **açılışı** hem kapanış flush'ı `learner/index.md` sonundaki `## Kayıtlar` bölümüne `- konu | proje-yolu | YYYY-MM-DD` upsert eder (aynı satır, `(konu, proje)` anahtarıyla tekilleştirilir — açılış+kapanış tek satır). Açılış-upsert'i sayesinde bir kez bile açılan her proje — flush hiç koşmasa, oturum iptal edilse bile — katalogda olur; böylece `reset --factory` iptal edilmiş oturumların artıklarını da temizleyebilir. Yan etki (kabul): katalogda progress'siz (açılıp iptal edilmiş) konu görünebilir — `usta topics` bunu zaten tolere eder. Ayrıca index system prompt'ta olduğundan Usta tüm başlıklardan haberdardır — izolasyon bozulmaz (progress yalnız aktif konudan yüklenir).
+- **`usta topics`** — the global catalog is listed: `topic | project | last session`. No LLM needed.
+- **`usta reset <topic>`** — the current project's progress for that topic is deleted (`[e/H]`-confirmed), removed from the catalog. The "let me relearn this topic" scenario.
+- **`usta reset --factory`** — the `.usta/` of ALL projects in the catalog + **the current project's `.usta` (even if it isn't in the catalog)** + the global brain are deleted; the list is shown first, and "yes" or "evet" is typed to confirm. Since reset is already word-confirmed, there's no extra question for leftovers — the next launch starts clean. Other non-catalog old projects are out of scope (a warning + a `find` hint is printed).
+- **The catalog auto-updates:** both session **open** and the closing flush upsert `- topic | project-path | YYYY-MM-DD` into the `## Kayıtlar` ("Records") section at the end of `learner/index.md` (same line, deduplicated by the `(topic, project)` key — open+close a single line). Thanks to the open-upsert, every project that has been opened even once — even if the flush never runs, even if the session is cancelled — ends up in the catalog; so `reset --factory` can also clean the leftovers of cancelled sessions. Side effect (accepted): a progress-less topic (opened and cancelled) may show up in the catalog — `usta topics` already tolerates this. Also, since the index is in the system prompt, Usta is aware of all titles — isolation isn't broken (progress is loaded only from the active topic).
 
-## 4.8 Her-Konu Öğrenimi (v0.6)
+## 4.8 Every-Topic Learning (v0.6)
 
-Domain listesi elle genişletilmez — sistem kendi kendini genişletir:
+The domain list isn't expanded by hand — the system expands itself:
 
-- **Yaklaşım üretimi:** yaklaşımı olmayan konuda ilk oturum `[YENİ KONU — TANIŞMA]` ile açılır (açık sohbet, form değil; yön kullanıcıda). Usta domain doğasını `_default.md`'nin üç sorusuyla türetir (pratik / çıktı / feedback), kapanışta `.usta/approaches/<konu>.md` yazılır. **Canlı belge:** oturum içinde revize edilir, elle düzenlenebilir.
-- **Müfredat haritası:** ilk oturumda web araştırmalı TAM harita `.usta/learner/curriculum/<konu>.md`'ye çıkarılır; her madde `görülmedi/görüldü/oturdu/derinleşildi`. Kapanışta güncellenir. Kapsam bekçiliği ("haritada X hâlâ açık"), drill beslemesi (oturdu-ama-eskidi bölgesi) ve derinlik ayarı (sığlaşma yasağı) buradan çalışır.
-- **Brain yüklemesi genel:** `approaches/` altındaki TÜM dosyalar (global ∪ proje, override proje lehine, alfabetik) + aktif konunun curriculum + progress'i system prompt'a girer. Yaklaşım seçimini kod değil USTA.md kuralı yapar.
-- **Kapanış çok-dosya:** tek çağrı `===DOSYA: <ad>===` bölücülü `progress`(her zaman) / `approach` / `curriculum`(değiştiğinde) üretir; bölücüsüz yanıt geriye-uyumlu progress sayılır; bilinmeyen ad uyarıyla atlanır.
+- **Approach generation:** on a topic with no approach, the first session opens with `[YENİ KONU — TANIŞMA]` (NEW TOPIC — INTRODUCTION) — an open conversation, not a form; the user holds the direction. Usta derives the domain's nature from `_default.md`'s three questions (practice / output / feedback), and at close `.usta/approaches/<topic>.md` is written. **Living document:** revised during the session, hand-editable.
+- **Curriculum map:** in the first session a FULL web-researched map is extracted to `.usta/learner/curriculum/<topic>.md`; each item is `not seen/seen/settled/deepened`. Updated at close. Scope guarding ("X is still open on the map"), drill feeding (the settled-but-stale zone) and depth tuning (no going shallow) all work from here.
+- **Brain loading is general:** ALL files under `approaches/` (global ∪ project, override in the project's favor, alphabetical) + the active topic's curriculum + progress enter the system prompt. The approach choice is made by a USTA.md rule, not by code.
+- **Multi-file close:** a single call produces `progress`(always) / `approach` / `curriculum`(when changed) with `===DOSYA: <name>===` dividers (DOSYA = FILE); a divider-less response is treated as backward-compatible progress; an unknown name is skipped with a warning.
 
-## 4.9 Bağlam Yönetimi (v0.7)
+## 4.9 Context Management (v0.7)
 
-- **Gösterge:** her yanıt altında `▓▓░░░░░░ bağlam 41k/1000k` (son çağrının input+cache toplamı / **modele göre pencere**); ≥%70 sarı. Düz modda ve token bilgisi yoksa çizilmez.
-- **Otomatik ara-kayıt + kompaksiyon:** %70 eşiğinde flush çalışır (progress/approach/curriculum diske iner), system prompt taze dosyalarla yeniden yüklenir, history `[ARA KAYIT]` notu + son 4 turn'e kırpılır, CLI `session_id` sıfırlanır. Kullanıcı akışı kesilmez. Flush başarısızsa kompaksiyon iptal — veri yazılmadan history atılmaz. Kayıp minimal: önemli olan zaten dosyalarda (progress = damıtılmış oturum).
-- **Görsel:** banner model etiketi taşır (`opus · cli`), kullanıcı promptu `❯`, Usta bloğu 2 boşluk padding + genişliğe sarma.
+- **Indicator:** under each response `▓▓░░░░░░ context 41k/1000k` (the last call's input+cache total / **window per model**); ≥70% yellow. Not drawn in plain mode or when token info is unavailable.
+- **Automatic interim-save + compaction:** at the 70% threshold a flush runs (progress/approach/curriculum land on disk), the system prompt is reloaded with the fresh files, history is trimmed to a `[ARA KAYIT]` ("INTERIM SAVE") note + the last 4 turns, and the CLI `session_id` is reset. The user's flow isn't interrupted. If the flush fails, compaction is cancelled — history is never dropped before data is written. The loss is minimal: what matters is already in the files (progress = the distilled session).
+- **Visual:** the banner carries the model label (`opus · cli`), the user prompt is `❯`, the Usta block has 2-space padding + width-wrapping.
 
-## 4.10 Hedefli Öğrenme (v0.8)
+## 4.10 Goal-Directed Learning (v0.8)
 
-Öğrenmenin iki modu tek sistemde: **keşif** (açık uçlu merak) ve **hedef** (sertifika/seviye/teslim — tarih + eşik). Tanışma hangisi olduğunu netleştirir.
+Two modes of learning in one system: **exploration** (open-ended curiosity) and **goal** (certificate/level/deliverable — date + threshold). The introduction clarifies which one it is.
 
-- **Hedef kaydı jenerik:** approach `## Hedef` (ne / tarih / eşik / format), progress `## Hedef Durumu` (kalan süre / harita % / tempo / ölçüm logu). AWS SAA da Goethe B1 de aynı kalıp.
-- **Harita resmi çerçeveden:** sınav müfredatı / exam guide / CEFR — web araştırmalı, tahmin değil.
-- **Tempo bekçiliği:** system prompt'un `===== TODAY =====` bölümü sayesinde kalan süre hesaplanır; her açılışta tek satır durum, riskliyse plan revizesi.
-- **Format-uyumlu drill:** senaryo çoktan-seçmeli / yazma görevi / prova — hedefin gerçek sınav formatı.
-- **Medium sınırı:** terminalde çalışmayan modüller haritada `dış kaynak gerekli` olarak işaretlenir — sahte tamlık yok.
+- **Generic goal record:** approach `## Hedef` (Goal) (what / date / threshold / format), progress `## Hedef Durumu` (Goal Status) (time remaining / map % / pace / measurement log). AWS SAA and Goethe B1 both use the same pattern.
+- **Map from the official frame:** exam syllabus / exam guide / CEFR — web-researched, not guessed.
+- **Pace guarding:** thanks to the system prompt's `===== TODAY =====` section the time remaining is computed; a one-line status at each open, a plan revision if it's at risk.
+- **Format-matched drill:** the scenario is multiple-choice / a writing task / a rehearsal — the goal's real exam format.
+- **Medium limit:** modules that don't work in a terminal are marked `external resource required` on the map — no fake completeness.
 
-## 4.11 Sağlamlaştırma (v0.9)
+## 4.11 Hardening (v0.9)
 
-- **Ham oturum kaydı + onaylı kurtarma:** her turn anında `.usta/sessions/<konu>-<zaman>.jsonl`'e iner; başarılı kapanışta `.done.jsonl`. Flush ölse/terminal çökse oturum diskte kalır — açılışta (yalnız TTY'de) işaretsiz kayıtlar dim listelenir + tek batch soru `recover N unflushed session(s)? [Y/n]` (default EVET, kayıpsız taraf). **Kurtar** (Enter/`y`/`e`/`yes`/`evet` veya tanınmayan girdi): her kayıt için transcript parse edilir, kapanış flush'ı o history ile koşar (progress/approach/curriculum geriye dönük yazılır), kayıt `.done.jsonl`'a taşınır; boş transcript (hiç user turn) LLM'siz sessizce `.done`; kayıtlar arası backend session sıfırlanır; parse/LLM/yazım hatası → warn + kayıt yerinde (sonraki açılışta tekrar sorulur). **Sil** (`n`/`no`/`h`/`hayır`/`hayir` — büyük harf dahil; Rust lowercase 'I'→'i' verdiğinden ASCII form da kabul edilir): tüm işaretsiz kayıtlar silinir + tek bilgi satırı (`cleaned N stale session record(s)`). Hata açılışı hiçbir durumda engellemez. Pipe/script modunda kurtarma/silme yok — yalnız uyarı basılır (birebir eski davranış).
-- **Olay seli tavanı:** 5+ dosyalık debounce batch'i (git checkout, format-all) LLM'siz geçer; `FileMemory` sessizce senkronlanır.
-- **Konu kilidi:** `.usta/.lock-<konu>` — eşzamanlı ikinci oturum onayla açılır, progress sessizce ezilmez. Pipe modunda uyarı + devam.
-- **Yedek:** `write_atomic` önceki sürümü `.bak`'a kopyalar — kötü model çıktısı geri alınabilir.
-- **Budama + sır filtresi:** progress 20-madde eşiğiyle budanır; `.pem`/`.key`/`secret`/`credential` dosyaları watcher'dan LLM'e asla gitmez.
+- **Raw session recording + confirmed recovery:** every turn lands immediately in `.usta/sessions/<topic>-<time>.jsonl`; on a successful close, `.done.jsonl`. If the flush dies or the terminal crashes the session stays on disk — at open (TTY only) unmarked records are listed dim + a single batch question `recover N unflushed session(s)? [Y/n]` (default YES, the lossless side). **Recover** (Enter/`y`/`e`/`yes`/`evet` or an unrecognized input): for each record the transcript is parsed, the closing flush runs with that history (progress/approach/curriculum written retroactively), the record is moved to `.done.jsonl`; an empty transcript (no user turn) is silently `.done`d without an LLM; the backend session is reset between records; a parse/LLM/write error → warn + record left in place (asked again at the next open). **Delete** (`n`/`no`/`h`/`hayır`/`hayir` — uppercase included; since Rust gives lowercase 'I'→'i', the ASCII form is also accepted): all unmarked records are deleted + a single info line (`cleaned N stale session record(s)`). An error never blocks the open in any case. In pipe/script mode there's no recovery/deletion — only a warning is printed (exactly the old behavior).
+- **Event-flood ceiling:** a 5+-file debounce batch (git checkout, format-all) passes without an LLM; `FileMemory` syncs silently.
+- **Topic lock:** `.usta/.lock-<topic>` — a concurrent second session is opened with confirmation, progress isn't silently overwritten. In pipe mode: warn + continue.
+- **Backup:** `write_atomic` copies the previous version to `.bak` — a bad model output can be rolled back.
+- **Pruning + secret filter:** progress is pruned at a 20-item threshold; `.pem`/`.key`/`secret`/`credential` files never go from the watcher to the LLM.
 
-## 4.12 Egzersiz Döngüsü (v0.12)
+## 4.12 Exercise Loop (v0.12)
 
-- **`exercises/` konvansiyonu:** görünür klasör, scaffold kurar; Usta teslimatı sohbette atar, dosyayı kullanıcı yazar.
-- **Path-tanıma:** `is_exercise_path` — root-göreli veya mutlak path'te `exercises/` bileşeni geçen her kayıt egzersiz sayılır.
-- **Egzersiz feedback çerçevesi:** watcher turn'üne "AS AN EXERCISE" işareti düşer — atamaya karşı değerlendir (mükemmelliğe karşı değil), hint ladder aynen uygulanır, çözüm veya tamamlanabilir iskelet asla yazılmaz.
-- **Check-atlama:** `exercises/` altındaki path'lerde `cargo check` koşulmaz — egzersiz her domain'de çalışır, kod-özel doğrulama zorunlu değildir.
-- **Kalıcılık:** progress'te `## Açık egzersiz` bölümü açık atamayı tutar; oturum açılışında hatırlatılır, tamamlanınca `Kapatılanlar`a taşınır.
+- **`exercises/` convention:** a visible folder, set up by the scaffold; Usta drops the deliverable in the chat, the user writes the file.
+- **Path recognition:** `is_exercise_path` — any record whose root-relative or absolute path contains an `exercises/` component counts as an exercise.
+- **Exercise feedback frame:** an "AS AN EXERCISE" mark is added to the watcher turn — evaluate against the assignment (not against perfection), the hint ladder applies as usual, a solution or a completable skeleton is never written.
+- **Check-skip:** `cargo check` isn't run on paths under `exercises/` — an exercise works in every domain, code-specific verification isn't mandatory.
+- **Persistence:** the `## Açık egzersiz` (Open exercise) section in progress holds the open assignment; it's reminded at session open, and once completed it's moved to `Kapatılanlar` ("Closed").
 
 ## 4.13 Spaced Repetition (v0.13)
 
-Roadmap #3: geri çağırma sorularına vade (due-date) verilir, vadesi gelmeyen sorulmaz, geleni açılışta görünür kılınır — spacing effect'i drill'e taşır.
+Roadmap #3: recall questions are given a due-date, one that isn't due isn't asked, and one that is becomes visible at open — bringing the spacing effect to the drill.
 
-- **Format (makine-okur kuyruk):** `## Geri çağırma soruları` maddeleri `- <soru> — <tek satır cevap> | due: YYYY-MM-DD | ivl: <gün>`. Kuyruksuz eski madde bugün vadeli sayılır (migrasyon: ilk kapanışta model kuyruk ekler).
-- **Basitleştirilmiş SM-2 (ease factor YOK):** aralık merdiveni gün cinsinden `1 → 3 → 7 → 16 → 35 → 90`. Rahat hatırlandı → bir üst basamak (`due = bugün + yeni ivl`); zorlandı/yanlış veya yeni soru → `ivl: 1` (yarın vadeli); drill'e girmeyen soru → kuyruk değişmez.
-- **Emeklilik:** `ivl: 90` basamağını rahat geçen soru `Kapatılanlar`a tek satır özetle taşınır, soru listesinden düşer — progress şişmez.
-- **Açılış drilli:** yalnız vadesi gelenler (`due` ≤ bugün), en fazla 3, en eski önce; hiçbiri vadeli değilse tek cümle "no reviews due today" ile atlanır.
-- **Welcome göstergesi:** saf fonksiyon `due_count(progress, today)` — `Reviews due today: N` (N>0) / `No reviews due today` (soru var, vadeli yok) / satır yok (hiç soru yok).
-- **Hesap sahibi = model** (aralık seçimi, kuyruk yazımı kapanış flush'ında zaten dosyayı model yazıyor); **kabuk yalnız sayar** (`due_count` — welcome göstergesi). "İnce kabuk" korunur.
+- **Format (machine-readable queue):** `## Geri çağırma soruları` (Recall questions) items are `- <question> — <one-line answer> | due: YYYY-MM-DD | ivl: <days>`. An old item with no queue counts as due today (migration: the model adds the queue on the first close).
+- **Simplified SM-2 (NO ease factor):** the interval ladder in days is `1 → 3 → 7 → 16 → 35 → 90`. Recalled comfortably → one rung up (`due = today + new ivl`); struggled/wrong or a new question → `ivl: 1` (due tomorrow); a question not in the drill → the queue stays unchanged.
+- **Retirement:** a question that comfortably passes the `ivl: 90` rung is moved to `Kapatılanlar` as a one-line summary and drops off the question list — progress doesn't bloat.
+- **Opening drill:** only the due ones (`due` ≤ today), at most 3, oldest first; if none is due it's skipped with the single sentence "no reviews due today".
+- **Welcome indicator:** the pure function `due_count(progress, today)` — `Reviews due today: N` (N>0) / `No reviews due today` (questions exist, none due) / no line (no questions at all).
+- **The owner of the arithmetic = the model** (interval choice, queue writing — at the closing flush the model already writes the file); **the shell only counts** (`due_count` — the welcome indicator). The "thin shell" is preserved.
 
-Kuralların tamamı USTA.md'de yaşar (kapanış/açılış prompt'ları); Rust yalnız `due_count` sayacını ve welcome render'ını taşır. Tasarım detayı: `docs/superpowers/specs/2026-08-15-spaced-repetition-design.md`.
+All the rules live in USTA.md (the closing/opening prompts); Rust carries only the `due_count` counter and the welcome render. Design detail: `docs/superpowers/specs/2026-08-15-spaced-repetition-design.md`.
 
-## 4.14 Onboarding-Lite Sihirbazı (v0.13)
+## 4.14 Onboarding-Lite Wizard (v0.13)
 
-Roadmap #4'ün ilk yarısı: `backend::select()` bulamayınca çıplak hatayla ölmek yerine, uygun ortamda yönlendiren hafif ilk-çalıştırma sihirbazı devreye girer — kurulum tamamlanınca **aynı süreçte** devam eder.
+The first half of Roadmap #4: instead of dying with a bare error when `backend::select()` finds nothing, a lightweight first-run wizard that guides you in a suitable environment kicks in — once setup is complete it continues **in the same process**.
 
-- **Tetik koşulu:** `select()` `Err` döner VE stdin+stdout TTY ise (`std::io::IsTerminal`) VE `USTA_BACKEND` set değilse. Koşullardan biri sağlanmazsa (TTY yok — pipe/CI, veya `USTA_BACKEND` set edilmiş) sihirbaz devreye GİRMEZ, mevcut `bail!` korunur. `USTA_BACKEND` geçersiz bir değere sahipse bu konfigürasyon hatasıdır, eksik-backend değildir — sihirbaz burada da devreye girmez.
-- **Akış:** sihirbaz iki seçenek gösterir — Claude Code CLI kurulumu (link + "then just press Enter here") veya Anthropic API key yapıştırma (`sk-ant-...`). Girdi yorumu:
-  - boş satır → **Recheck**: `select()` yeniden denenir; başarılıysa normal akışa devam, değilse aynı prompt tekrar.
-  - `sk-ant-` ile başlayan satır → **Key**: trim'lenir, yalnız süreç env'ine (`std::env::set_var`) yazılır — **DİSKE ASLA YAZILMAZ**, ekrana geri yazdırılmaz; ardından `select()` yeniden denenir (API yolu artık bulunur) + tek satır kalıcılaştırma ipucu ("add to your shell profile to skip this next time").
-  - `q`/`quit` (case-insensitive) → **Quit**: sihirbaz mesajıyla temiz çıkış.
-  - Diğer her girdi → kısa uyarı + aynı prompt tekrar.
-- **Süreç-içi kapsam:** girilen API key yalnızca çalışan process'in ortam değişkeninde yaşar — dosyaya, keychain'e veya profile hiçbir şekilde yazılmaz; süreç kapanınca kaybolur (kalıcılaştırma kullanıcının kendi tercihi, sihirbaz sadece hatırlatır).
-- **Kapsam dışı (bilinçli ertelendi):** prebuilt binary, GitHub Releases, Homebrew tap, CI release workflow, key'in diske/keychain'e kalıcılaştırılması, tam sihirbaz (dil/isim/tanışma akışı), model seçimi sihirbazı.
+- **Trigger condition:** `select()` returns `Err` AND stdin+stdout are a TTY (`std::io::IsTerminal`) AND `USTA_BACKEND` is not set. If any of these isn't met (no TTY — pipe/CI, or `USTA_BACKEND` is set), the wizard does NOT kick in, the existing `bail!` is preserved. If `USTA_BACKEND` has an invalid value that's a configuration error, not a missing-backend one — the wizard doesn't kick in here either.
+- **Flow:** the wizard shows two options — a Claude Code CLI install (link + "then just press Enter here") or pasting an Anthropic API key (`sk-ant-...`). Input interpretation:
+  - empty line → **Recheck**: `select()` is retried; if it succeeds, continue to the normal flow, otherwise the same prompt again.
+  - a line starting with `sk-ant-` → **Key**: trimmed, written only to the process env (`std::env::set_var`) — **NEVER WRITTEN TO DISK**, not echoed back; then `select()` is retried (the API path is now found) + a one-line persistence hint ("add to your shell profile to skip this next time").
+  - `q`/`quit` (case-insensitive) → **Quit**: a clean exit with the wizard's message.
+  - any other input → a short warning + the same prompt again.
+- **In-process scope:** the entered API key lives only in the running process's environment variable — it's not written to a file, keychain, or profile in any way; it's lost when the process closes (persistence is the user's own choice, the wizard only reminds).
+- **Out of scope (deliberately deferred):** prebuilt binary, GitHub Releases, Homebrew tap, CI release workflow, persisting the key to disk/keychain, the full wizard (language/name/introduction flow), the model-selection wizard.
 
-Tasarım detayı: `docs/superpowers/specs/2026-08-15-onboarding-lite-design.md`.
+Design detail: `docs/superpowers/specs/2026-08-15-onboarding-lite-design.md`.
 
-**Sürümleme politikası:** her tamamlanan roadmap maddesi minor bump ile işaretlenir, tag `vX.Y.Z`.
+**Versioning policy:** each completed roadmap item is marked with a minor bump, tag `vX.Y.Z`.
 
-## 4.15 Materyal Yutma (v0.14)
+## 4.15 Material Ingest (v0.14)
 
-Roadmap #5: kullanıcı kendi kitabını/kurs notunu getirir, müfredat onun bölümlerine demirlenir — web araştırması artık spine değil, tamamlayıcı.
+Roadmap #5: the user brings their own book/course notes, the curriculum is anchored to its chapters — web research is now complementary, not the spine.
 
-- **`materials/` konvansiyonu:** görünür klasör, diğerleri gibi (`exercises/`, `progress/`) scaffold tarafından kurulur. Kullanıcı md/txt dosyasını buraya koyar; kabuk bunu otomatik keşfeder, model hiçbir şey oluşturmaz.
-- **Digest enjeksiyonu YALNIZ yeni-konu tanışmasında:** `materials/` doluysa ve konu ilk kez açılıyorsa (resume/opening akışında DEĞİL) kabuk deterministik bir digest üretip modele enjekte eder — başlık iskeleti + kısa alıntılar. Devam eden oturumlarda digest tekrar enjekte edilmez; kalıcılık müfredat haritasındaki kaynak referanslarından gelir.
-- **pdftotext opsiyonel:** PATH'te `pdftotext` varsa PDF dosyaları otomatik txt'ye çevrilir. Yoksa PDF atlanır, tek satır bilgi mesajı basılır (`brew install poppler` önerisiyle) — sert hata yok, akış devam eder.
-- **Kaynak-ref demirleme:** müfredat haritası maddeleri `— kaynak: <dosya> §<bölüm>` referanslarıyla materyale bağlanır. Kalıcı olan digest DEĞİL, bu referanslardır — digest tek seferlik enjeksiyon, oturumlar arası taşınmaz.
-- **Cap'ler:** dosya başına 8_000 karakter, toplam 16_000 karakter; kesme UTF-8 güvenli sınırda yapılır ve `[truncated]` ile işaretlenir.
-- **Web araştırma kapsam bekçiliği korunur:** materyalin kapsamadığı kritik bir konu varsa harita web araştırmasıyla doldurulur, ilgili madde `— kaynak: web` ile işaretlenir.
+- **`materials/` convention:** a visible folder, like the others (`exercises/`, `progress/`), set up by the scaffold. The user puts an md/txt file here; the shell discovers it automatically, the model creates nothing.
+- **Digest injection ONLY at a new-topic introduction:** if `materials/` is non-empty and the topic is being opened for the first time (NOT in the resume/opening flow), the shell produces a deterministic digest and injects it into the model — a heading skeleton + short excerpts. In continuing sessions the digest is not re-injected; persistence comes from the source references in the curriculum map.
+- **pdftotext optional:** if `pdftotext` is on PATH, PDF files are auto-converted to txt. Otherwise the PDF is skipped, a single info line is printed (with a `brew install poppler` suggestion) — no hard error, the flow continues.
+- **Source-ref anchoring:** curriculum map items are bound to the material with `— kaynak: <file> §<section>` references (kaynak = source). What's persistent is NOT the digest but these references — the digest is a one-time injection, not carried across sessions.
+- **Caps:** 8_000 characters per file, 16_000 characters total; the cut is made at a UTF-8-safe boundary and marked with `[truncated]`.
+- **Web-research scope guarding is preserved:** if there's a critical topic the material doesn't cover, the map is filled with web research and the relevant item is marked `— kaynak: web`.
 
-Tasarım detayı: docs/superpowers/specs/2026-08-15-material-ingest-design.md
+Design detail: docs/superpowers/specs/2026-08-15-material-ingest-design.md
 
-## 4.16 İlerleme Özeti / Motivasyon (v0.15)
+## 4.16 Progress Summary / Motivation (v0.15)
 
-Roadmap #6: görünür ilerleme = ADHD için yakıt, sıfır suçlama. Tamamen kabuk işi — LLM çağrısı yok ("kabuk sayar").
+Roadmap #6: visible progress = fuel for ADHD, zero blame. Entirely shell work — no LLM call ("the shell counts").
 
-- **Oturum geçmişi:** global `~/.config/usta/learner/history.md`, append-only, başlık `# Oturum Geçmişi`. Kapanış flush'ı katalog güncellemesinin (`index::record`) hemen yanında bir satır düşer: `- YYYY-MM-DD | <konu> | map <P>% | settled <N>` (P = `curriculum_percent`, N = `oturdu`+`derinleşildi` madde sayısı; curriculum dosyası flush SONRASI diskten okunur — curriculum yoksa `map -` / `settled -`). Aynı gün aynı konuda birden çok oturum = birden çok satır. Yazım hatası = warn, oturumu düşürmez (katalogla aynı tolerans).
-- **`usta stats` komutu:** son 7 gün penceresi — konu başına oturum sayısı + map% ilk→son delta + settled ilk→son delta; genel: toplam oturum, güncel streak (ardışık gün, herhangi bir konu — bugünden veya dünden geriye), en uzun streak. LLM gerekmez, saf parser + hesap. `usta help`/`/help` metninde listelenir.
-- **ADHD-safe kurallar:** `current streak: 0` **hiçbir yüzeyde yazılmaz.** Streak kırıksa yalnız `longest streak: N day(s)` pozitif çerçeveyle basılır. Boş hafta (7 gün oturumsuz): `quiet week — your longest streak is still N day(s)`. Hiç kayıt yoksa: `no sessions recorded yet — streaks start with the first one.` Karşılaştırma/utandırma dili hiçbir çıktıda yok.
-- **Welcome satırı:** identity + full-mode kutularının ikisinde de `week_sessions > 0` iken `This week: N session(s) · streak M day(s)` (M=0 ise streak kısmı düşer, hiç satır kaybolmaz). Veri `history.md`'den saf parser ile okunur — ayrı sayaç tutulmaz.
+- **Session history:** global `~/.config/usta/learner/history.md`, append-only, heading `# Oturum Geçmişi` (Session History). The closing flush drops a line right next to the catalog update (`index::record`): `- YYYY-MM-DD | <topic> | map <P>% | settled <N>` (P = `curriculum_percent`, N = the count of `settled`+`deepened` items; the curriculum file is read from disk AFTER the flush — if there's no curriculum, `map -` / `settled -`). Multiple sessions on the same topic on the same day = multiple lines. A write error = warn, doesn't drop the session (same tolerance as the catalog).
+- **`usta stats` command:** a last-7-days window — per topic, session count + map% first→last delta + settled first→last delta; overall: total sessions, current streak (consecutive days, any topic — counting back from today or yesterday), longest streak. No LLM needed, a pure parser + arithmetic. Listed in the `usta help`/`/help` text.
+- **ADHD-safe rules:** `current streak: 0` is **never written on any surface.** If the streak is broken only `longest streak: N day(s)` is printed with a positive frame. An empty week (7 days with no session): `quiet week — your longest streak is still N day(s)`. If there's no record at all: `no sessions recorded yet — streaks start with the first one.` No comparison/shaming language in any output.
+- **Welcome line:** in both the identity and full-mode boxes, when `week_sessions > 0`, `This week: N session(s) · streak M day(s)` (if M=0 the streak part drops, no line is lost). The data is read from `history.md` with a pure parser — no separate counter is kept.
 
-Tasarım detayı: `docs/superpowers/specs/2026-08-15-progress-stats-design.md`.
+Design detail: `docs/superpowers/specs/2026-08-15-progress-stats-design.md`.
 
-## 4.17 Deneme Sınavı / Mock Exam (v0.16)
+## 4.17 Mock Exam (v0.16)
 
-Roadmap #7: hedefli (GOAL modlu) öğrenmede gerçek prova mekanizması. `/exam` **prompt-enjeksiyon komutu** — statik intercept değil; kabuk hedef kapısını tutar, sınavın kendisi (soru üretimi, değerlendirme) LLM işi.
+Roadmap #7: a real rehearsal mechanism in goal-directed (GOAL-mode) learning. `/exam` is a **prompt-injection command** — not a static intercept; the shell holds the goal gate, the exam itself (question generation, evaluation) is the LLM's work.
 
-- **Kapı: hedef şart.** Konunun approach dosyasında (proje override öncelikli, yoksa global — `brain.rs`'teki öncelik sırasıyla aynı) `## Hedef` yoksa kabuk bir kapı bildirimi basar ("no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction") ve **LLM'e hiç gitmez**. Hedefli konuda `exam_prompt(topic)` normal kullanıcı turu gibi oturuma enjekte edilir (`session.push_user` + recorder + ask akışı — açılış drilinin oturum-içi muadili).
-- **Sınav akışı:** model müfredat haritasından bir deneme sınavı kurar, approach'taki `## Hedef` formatını izler (soru stili, süre bütçesi, geçme eşiği), zayıf/`oturdu`-olmayan maddelere ağırlık verir, soru sayısı ve süre bütçesini baştan söyler. Ardından **tek seferde tek soru** sorar ve cevabı bekler; sınav sırasında **ipucu merdiveni ve öğretim ASKIDADIR** — gerçek prova hissi, ara geri bildirim yok. "sınavı durdur" denirse erken biter, o ana kadarki cevaplar puanlanır.
-- **Sonuç:** son cevaptan sonra model hedefin eşiğine göre skor verir, kısa harita-maddesi kırılımı (güçlü/zayıf) sunar, zayıf maddeleri gap adayı olarak adlandırır ve sonucun kapanışta kaydedileceğini hatırlatır.
-- **Zamanlama yumuşak (v1):** kabuk süre tutmaz — sert zamanlayıcı kapsam dışı; süre bütçesi yalnız modelin sözlü taahhüdüdür.
-- **Kapanışta kayıt:** `closing_prompt`'a tek kural cümlesi eklendi — bu oturumda bir deneme sınavı (`/exam`) çalıştıysa sonucu `## Hedef Durumu` ölçüm günlüğüne (`date | mock exam | score`) işlenir, zayıf çıkan maddeler `## Gap'ler`e yazılır.
-- **Kural evi: GOAL.md** — embedded, yalnız hedefli konularda yüklenir. `## Mock Exams` bölümü sınav yürütüm kurallarını (tek soru, askıya alınan ipucu merdiveni, eşiğe göre skor, kırılım, erken bitirme, kayıt hatırlatması) ve pedagojik notu (deneme = en güçlü retrieval practice; sınav sonrası zayıf maddeler normal öğretim moduna döner) taşır.
-- **Kapsam dışı:** sert zamanlayıcı, ayrı sınav geçmişi dosyası (ölçüm günlüğü yeter), soru bankası/tekrar eden kalıplar, hedefsiz konuda genel quiz modu (drill zaten var).
+- **Gate: goal required.** If the topic's approach file (project override takes priority, otherwise global — same priority order as in `brain.rs`) has no `## Hedef`, the shell prints a gate notice ("no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction") and it **never goes to the LLM**. On a goal-directed topic, `exam_prompt(topic)` is injected into the session like a normal user turn (`session.push_user` + recorder + ask flow — the in-session counterpart of the opening drill).
+- **Exam flow:** the model builds a mock exam from the curriculum map, follows the `## Hedef` format from the approach (question style, time budget, passing threshold), weights toward weak/not-`settled` items, and states the question count and time budget up front. Then it asks **one question at a time** and waits for the answer; during the exam the **hint ladder and teaching are SUSPENDED** — a real rehearsal feel, no intermediate feedback. If you say "stop the exam" it ends early, and the answers up to that point are scored.
+- **Result:** after the last answer the model scores against the goal's threshold, presents a short map-item breakdown (strong/weak), names the weak items as gap candidates, and reminds you that the result will be saved at close.
+- **Timing soft (v1):** the shell keeps no time — a hard timer is out of scope; the time budget is only the model's verbal commitment.
+- **Saved at close:** a single rule sentence was added to `closing_prompt` — if a mock exam (`/exam`) ran in this session, the result is written into the `## Hedef Durumu` measurement log (`date | mock exam | score`), and the items that came out weak are written to `## Gap'ler` (Gaps).
+- **Rule home: GOAL.md** — embedded, loaded only on goal-directed topics. The `## Mock Exams` section carries the exam execution rules (one question, suspended hint ladder, score against threshold, breakdown, early finish, save reminder) and the pedagogical note (a mock = the strongest retrieval practice; after the exam the weak items return to normal teaching mode).
+- **Out of scope:** a hard timer, a separate exam-history file (the measurement log is enough), a question bank/recurring patterns, a general quiz mode on goal-less topics (the drill already exists).
 
-Tasarım detayı: `docs/superpowers/specs/2026-08-15-mock-exam-design.md`.
+Design detail: `docs/superpowers/specs/2026-08-15-mock-exam-design.md`.
 
-## 4.18 Gamification Modu (v0.17)
+## 4.18 Gamification Mode (v0.17)
 
-Roadmap #8: opt-in oyunlaştırma — ADHD beyni için görünür dopamin döngüsü. Anlatı tamamen prompt/TEACHING katmanında; kabuk yalnız toggle kalıcılığı + açılış streak beslemesi yapar ("ince kabuk").
+Roadmap #8: opt-in gamification — a visible dopamine loop for the ADHD brain. The narrative is entirely in the prompt/TEACHING layer; the shell only does toggle persistence + opening streak feeding ("thin shell").
 
-- **Toggle + kalıcılık:** `/game on|off` USER.md `## Tercihler` bölümüne `- gamification: on|off` satırını yazar (kabuk-yönetimli `set_game_pref` — idempotent, dosyanın diğer içeriğini bozmaz). `/game` (argümansız) = durum bildirimi, **LLM'e gitmez**. On/Off `/exam` ile aynı enjeksiyon desenini kullanır: satır `[GAME MODE ON/OFF]` bilgi turuyla değiştirilip normal ask akışına bırakılır → model TEACHING.md kurallarını o noktadan itibaren uygular.
-- **Anlatıyı model yapar, kabuk saymaz:** XP müfredat durumlarından (görüldü 10 · oturdu 25 · derinleşildi 50) + süreç puanlarından (oturum +5, tahmin +2, egzersiz teslimi +10 — doğruluktan bağımsız) türetilir; seviye eşikleri 0/100/250/500/1000/2000 (Çırak → Usta); rozetler gap kapanışı / ilk egzersiz / 7-gün streak / ilk boss; `/exam` = boss fight.
-- **Açılış [GAME] beslemesi:** oyun açıkken kabuk açılış turuna `history.md`'den tek satır ekler (`game_streak_line`): streak>0 → `streak: N day(s) (longest M)`; kırık seri → yalnız `longest streak: M day(s)`. **ADHD-safe kod garantisi:** `streak: 0` yapısal olarak üretilemez (test-kilitli) — bir prompt kuralı değil, kabuk garantisi.
-- **Kapanış koruması:** prompt'taki KEEP-cümlesi (`## Tercihler` bölümünü koru talimatı) v0.19'da kaldırıldı — tek güvence artık kabuk restore garantisi (bkz. §4.20). **Kabuk restore garantisi:** kapanış flush'ında kabuk `- gamification:` satırının disk durumunu yazımdan ÖNCE yakalar, profil yazıldıktan SONRA model satırı düşürmüş veya değerini çevirmişse (`restore_game_pref`) tercihi geri yazar; kullanıcı hiç toggle etmemişse (satır yok) dokunmaz.
-- **Kural evi: GAMIFICATION.md** (embedded, koşullu yüklenen dosya — v0.19'dan beri TEACHING.md'nin içinde değil; yalnız `- gamification: on` iken kabukça yüklenir, kapalıyken tek oyun kelimesi prompt'ta yok — bkz. §4.20). DOZ: kilometre taşında tek satır, her mesajda skor YOK. Overjustification bekçisi: puan süreçte, ceza mekaniği yok.
-- **Kapsam dışı:** kabuğun XP hesabı/persist'i, lider tablosu, görsel rozet, ayrı oyun-veri dosyası (seviye müfredattan türetilir — idempotent).
+- **Toggle + persistence:** `/game on|off` writes a `- gamification: on|off` line into USER.md's `## Tercihler` ("Preferences") section (shell-managed `set_game_pref` — idempotent, doesn't break the rest of the file). `/game` (no argument) = a status notice, **doesn't go to the LLM**. On/Off uses the same injection pattern as `/exam`: the line is turned into a `[GAME MODE ON/OFF]` info turn and left to the normal ask flow → the model applies the TEACHING.md rules from that point on.
+- **The model does the narrative, the shell doesn't count:** XP is derived from the curriculum states (seen 10 · settled 25 · deepened 50) + process points (session +5, prediction +2, exercise submission +10 — independent of correctness); level thresholds 0/100/250/500/1000/2000 (Çırak → Usta); badges for a gap close / first exercise / 7-day streak / first boss; `/exam` = a boss fight.
+- **Opening [GAME] feed:** when the game is on, the shell adds a single line to the opening turn from `history.md` (`game_streak_line`): streak>0 → `streak: N day(s) (longest M)`; broken streak → only `longest streak: M day(s)`. **ADHD-safe code guarantee:** `streak: 0` is structurally impossible to produce (test-locked) — not a prompt rule but a shell guarantee.
+- **Closing protection:** the KEEP sentence in the prompt (the instruction to preserve the `## Tercihler` section) was removed in v0.19 — the only assurance now is the shell restore guarantee (see §4.20). **Shell restore guarantee:** at the closing flush the shell captures the disk state of the `- gamification:` line BEFORE the write, and if after the profile is written the model dropped the line or flipped its value (`restore_game_pref`) it writes the preference back; if the user never toggled (no line) it doesn't touch it.
+- **Rule home: GAMIFICATION.md** (embedded, conditionally loaded file — since v0.19 it's not inside TEACHING.md; loaded by the shell only when `- gamification: on`, and when off not a single game word is in the prompt — see §4.20). DOSE: one line at a milestone, NO score in every message. Overjustification guard: points are in the process, no penalty mechanic.
+- **Out of scope:** the shell computing/persisting XP, a leaderboard, a visual badge, a separate game-data file (the level is derived from the curriculum — idempotent).
 
-Tasarım detayı: `docs/superpowers/specs/2026-08-15-gamification-design.md`.
+Design detail: `docs/superpowers/specs/2026-08-15-gamification-design.md`.
 
-## 4.19 TUI Tasarım Sistemi (v0.18)
+## 4.19 TUI Design System (v0.18)
 
-Onaylı tasarım sistemi (Claude Design projesi) koda uygulandı — davranış değişmez, yalnız sunum. Amaç: sakin ekran (ADHD), renk semantiği, renk-körü güvenliği, monokrom dayanıklılığı.
+The approved design system (Claude Design project) was applied to the code — behavior doesn't change, only presentation. Goal: a calm screen (ADHD), color semantics, color-blind safety, monochrome resilience.
 
-- **Tek kaynak `src/tui/theme.rs`:** tüm TUI modülleri (+ `ui.rs` plain-ANSI, termimad skin) renk/glifi buradan alır — dağınık `Color::` literal'leri temizlendi. Renkler `Color::Indexed` (truecolor terminalde de doğru).
-- **Semantik palet + glif çiftleri** (renk körlüğü/monokrom — renk yalnız glifi pekiştirir, tek başına anlam taşımaz):
+- **Single source `src/tui/theme.rs`:** all TUI modules (+ `ui.rs` plain-ANSI, termimad skin) take colors/glyphs from here — scattered `Color::` literals were cleaned up. Colors are `Color::Indexed` (correct on truecolor terminals too).
+- **Semantic palette + glyph pairs** (color-blindness/monochrome — color only reinforces the glyph, it doesn't carry meaning on its own):
 
-  | Rol | Renk | Glif |
+  | Role | Color | Glyph |
   |---|---|---|
-  | Marka / kimlik | turuncu 208 | `●` bullet · `❯` prompt |
-  | Bilgi / ortam | dim 244 | `·` |
-  | Başarı | yeşil 149 | `✓` |
-  | Uyarı | amber 179 (eski `Color::Yellow` öldü) | `⚠` |
-  | Hata | kırmızı 210 | `✗` |
-  | Oyun / XP | mor 141 | `▸` |
-  | Kod (inline) | yeşil 114 | — |
+  | Brand / identity | orange 208 | `●` bullet · `❯` prompt |
+  | Info / ambient | dim 244 | `·` |
+  | Success | green 149 | `✓` |
+  | Warning | amber 179 (the old `Color::Yellow` retired) | `⚠` |
+  | Error | red 210 | `✗` |
+  | Game / XP | purple 141 | `▸` |
+  | Code (inline) | green 114 | — |
 
-- **Turuncu disiplini:** durağan ekranda ≤2 turuncu öğe (logo bloğu = 1) — test-kilitli (`welcome_orange_discipline`). Turuncu = kimlik, asla statü.
-- **Kutu/gösterge dili:** canlı çerçeveler yuvarlak `╭╮╰╯`; tablo başlığı altı ince `─` çizgi; gauge `▓░`, ≥%70'te amber; spinner `⠋⠙⠸⠴` ~120ms; exam ilerleme `●○`.
-- **Notice katmanları:** `page_notice` `·` dim · `page_warn` `⚠` amber · `page_error` `✗` kırmızı — mevcut metinler aynen, yalnız ön-ek + stil. `ui::warn` buffer'ı flush'ta amber katmana yönlenir.
-- **Exam kartı kabukta DEĞİL:** GOAL.md `## Mock Exams`'a format kuralı eklendi (`── Question N/M ──` başlık, `●○` ilerleme, kırılım tablosu) — model çizer, kabuk parse etmez ("ince kabuk"). Game satırı glif notu TEACHING.md DOZ kuralına (`▸`).
+- **Orange discipline:** ≤2 orange elements on a static screen (the logo block = 1) — test-locked (`welcome_orange_discipline`). Orange = identity, never status.
+- **Box/indicator language:** live frames are rounded `╭╮╰╯`; the table header underline is a thin `─` line; the gauge is `▓░`, amber at ≥70%; the spinner is `⠋⠙⠸⠴` ~120ms; exam progress is `●○`.
+- **Notice layers:** `page_notice` `·` dim · `page_warn` `⚠` amber · `page_error` `✗` red — the existing texts unchanged, only prefix + style. The `ui::warn` buffer is routed to the amber layer at flush.
+- **The exam card is NOT in the shell:** a format rule was added to GOAL.md `## Mock Exams` (`── Question N/M ──` header, `●○` progress, breakdown table) — the model draws it, the shell doesn't parse ("thin shell"). The game-line glyph note goes to TEACHING.md's DOSE rule (`▸`).
 
-Tasarım detayı: `docs/superpowers/specs/2026-08-16-tui-design-apply-design.md`.
+Design detail: `docs/superpowers/specs/2026-08-16-tui-design-apply-design.md`.
 
-## 4.20 Prompt Diyeti (v0.19)
+## 4.20 Prompt Diet (v0.19)
 
-Bağlayıcı ilke: kabukla deterministik çözülebilen hiçbir şey prompt'a yazılmaz; koşulu kabuk bilen bir bölüm koşulsuz yüklenmez.
+Binding principle: nothing that can be resolved deterministically by the shell is written into the prompt; a section whose condition the shell knows isn't loaded unconditionally.
 
-- **Koşullu brain tablosu:**
+- **Conditional brain table:**
 
-  | Dosya | Koşul |
+  | File | Condition |
   |---|---|
-  | GOAL.md | konu approach'ında `## Hedef` var |
-  | GAMIFICATION.md | USER.md'de `- gamification: on` |
-  | MATERIAL.md | `materials/` altında ≥1 `.md`/`.txt`/`.pdf` |
-  | PREDICTION.md | proje kökünde `Cargo.toml` |
+  | GOAL.md | the topic's approach has `## Hedef` |
+  | GAMIFICATION.md | `- gamification: on` in USER.md |
+  | MATERIAL.md | ≥1 `.md`/`.txt`/`.pdf` under `materials/` |
+  | PREDICTION.md | `Cargo.toml` at the project root |
 
-  GAMIFICATION.md, MATERIAL.md, PREDICTION.md TEACHING.md'den **birebir** taşındı (içerik değişmedi) — tek fark yükleme koşulu artık kabukta (`brain::load_system_prompt`). Koşul false iken dosyanın içeriği prompt'ta hiç yok (önceden TEACHING.md'nin parçası olarak her oturumda gidiyordu).
-- **Due-seçimi kabukta:** vadeli geri çağırma sorularının seçimi model işi değil — `welcome::due_questions(progress, today)` seçer (vade ≤ bugün veya etiketsiz-legacy; en eski önce, legacy önce; en fazla 3). `due_count` aynı taramanın kapaksız (uncapped) uzunluğu — tek kaynak. `opening_prompt` artık filtreleme talimatı taşımıyor, kabuğun seçtiği maddeleri gömer (veya soru varken hiçbiri vadeli değilse "bugün tekrar yok" atlaması; "2 küçük geri çağırma sorusu üret" kuralı yalnız progress'te hiç soru yokken hayatta kalır). Kapanıştaki due:/ivl: üretim kuralları değişmedi — aritmetik bilinçli olarak modelde kalıyor (ayrı iş; roadmap #10 spaced-rep aritmetiği ile karışmaz).
-- **Mid-session boşluk:** `/game on` bilgi turu artık kabuğun global dizinden okuduğu GAMIFICATION.md kural metnini gömer (`game_on_turn`; dosya okunamazsa kısa fallback metin) — model açılıştan sonra da kuralları öğrenmiş olur. `/game off` değişmedi.
-- **Ölü cümle temizliği:** `closing_prompt`'taki "KEEP the '## Tercihler' section... shell-managed" cümlesi kaldırıldı — kabuğun `restore_game_pref` garantisi zaten yeterli, prompt'ta tekrar söylemeye gerek yok.
-- **Global brain sync:** üç yeni dosya Code-owned → mevcut `write_global_defaults` senkronizasyonu bunları otomatik dağıtır.
+  GAMIFICATION.md, MATERIAL.md, PREDICTION.md were moved **verbatim** out of TEACHING.md (content unchanged) — the only difference is that the loading condition now lives in the shell (`brain::load_system_prompt`). When the condition is false the file's content isn't in the prompt at all (previously it went out every session as part of TEACHING.md).
+- **Due-selection in the shell:** the selection of due recall questions is not the model's work — `welcome::due_questions(progress, today)` selects them (due ≤ today or untagged-legacy; oldest first, legacy first; at most 3). `due_count` is the uncapped length of the same scan — a single source. `opening_prompt` no longer carries a filtering instruction, it embeds the items the shell selected (or, when questions exist but none is due, the "no reviews today" skip; the "generate 2 small recall questions" rule survives only when there are no questions at all in progress). The due:/ivl: generation rules at close are unchanged — the arithmetic deliberately stays in the model (a separate job; not to be conflated with roadmap #10, spaced-rep arithmetic).
+- **Mid-session gap:** the `/game on` info turn now embeds the GAMIFICATION.md rule text the shell reads from the global directory (`game_on_turn`; if the file can't be read, a short fallback text) — so the model learns the rules even after opening. `/game off` is unchanged.
+- **Dead-sentence cleanup:** the "KEEP the '## Tercihler' section... shell-managed" sentence in `closing_prompt` was removed — the shell's `restore_game_pref` guarantee is already enough, no need to repeat it in the prompt.
+- **Global brain sync:** the three new files are Code-owned → the existing `write_global_defaults` synchronization distributes them automatically.
 
-Tasarım detayı: `docs/superpowers/specs/2026-08-16-prompt-diet-design.md`.
+Design detail: `docs/superpowers/specs/2026-08-16-prompt-diet-design.md`.
 
-## 5. Akış (bir öğrenme oturumu)
+## 5. Flow (one learning session)
 
 ```
 usta start rust-takvim
-  → domain algıla → yaklaşım seç (spek gerekli mi? değil mi?)
-  → PARÇA başı: SORAR ("bu parça için spek'in ne?")
-      → sen mini-spek yazarsın
-      → birlikte yorumlarsınız
-      → sen kod yazarsın
-  → dosya kaydını izler → proaktif, proje-temelli feedback
-  → bilmezse → araştırır → sonra öğretir
-  → parça biter → progress + gaps + curriculum güncelle
-  → sonraki parça
+  → detect domain → pick approach (spec needed? or not?)
+  → per SLICE: ASKS ("what's your spec for this slice?")
+      → you write a mini-spec
+      → you interpret it together
+      → you write the code
+  → watches file saves → proactive, project-based feedback
+  → if it doesn't know → researches → then teaches
+  → slice ends → update progress + gaps + curriculum
+  → next slice
 ```
 
-**Parça-başı spek:** spek hiçbir zaman dev baştan-belge değil. Her parçanın başında küçük, o parçaya ait. Yap-geç, sonraki parçada tekrar mini-spek. Felç bu kadans ile çözülür.
+**Per-slice spec:** a spec is never a huge up-front document. At the start of each slice a small one, specific to that slice. Do it and move on, another mini-spec at the next slice. Paralysis is solved by this cadence.
 
-## 6. Mimari — "ince kabuk, kalın beyin"
+## 6. Architecture — "thin shell, thick brain"
 
-- **Rust = ince kabuk:** CLI, LLM backend, dosya izleme (`notify` crate), web araştırma, sağlık denetimi.
-- **Zekâ + kişilik = markdown dosyalarında** (headspace deseni). Davranış değiştirmek = markdown düzenle, Rust'a dokunma.
-- **Takılabilir LLM backend (her ikisi de destekli — kimisinde API var, kimisinde yok):**
-  - **CLI (default):** yerel `claude` CLI (Claude Code) → mevcut auth/abonelik, **API key yok, token faturası yok**. `--allowedTools WebSearch` araştırmayı açar + "dokunmaz"ı araç seviyesinde zorlar.
-  - **API (opsiyonel):** `ANTHROPIC_API_KEY` ile Anthropic Messages API (reqwest), model `claude-opus-4-8`, server-side web_search, adaptive thinking.
-  - Seçim: `USTA_BACKEND=cli|api` öncelikli; yoksa `claude` PATH'te → CLI, yoksa key varsa → API.
-- **Çağrı:** non-streaming (raw reqwest'te client timeout yok → sağlam). Streaming sonraki sürüm. CLI backend oturumu `--resume <session_id>` ile sürdürür — ilk çağrı `--output-format json`'dan id yakalar, sonraki turn'ler yalnız yeni mesajı gönderir (stale oturumda tam transcript'e düşülür).
+- **Rust = thin shell:** CLI, LLM backend, file watching (`notify` crate), web research, health auditing.
+- **Intelligence + personality = in markdown files** (the headspace pattern). Changing behavior = edit markdown, don't touch Rust.
+- **Pluggable LLM backend (both supported — some have an API, some don't):**
+  - **CLI (default):** the local `claude` CLI (Claude Code) → existing auth/subscription, **no API key, no token bill**. `--allowedTools WebSearch` opens research + enforces "no touching" at the tool level.
+  - **API (optional):** the Anthropic Messages API via `ANTHROPIC_API_KEY` (reqwest), model `claude-opus-4-8`, server-side web_search, adaptive thinking.
+  - Selection: `USTA_BACKEND=cli|api` takes priority; otherwise `claude` on PATH → CLI, otherwise if a key exists → API.
+- **Call:** non-streaming (no client timeout in raw reqwest → robust). Streaming in a later version. The CLI backend continues a session with `--resume <session_id>` — the first call captures the id from `--output-format json`, subsequent turns send only the new message (on a stale session it falls back to the full transcript).
 
-## 7. Dosya Yapısı (wiki-linkli)
+## 7. File Structure (wiki-linked)
 
 ```
 usta/
-  SPEC.md                # bu dosya
-  USTA.md                # çekirdek davranış: Socratic, dokunmaz, uydurmaz, senior
+  SPEC.md                # this file
+  USTA.md                # core behavior: Socratic, no touching, no making things up, senior
   learner/
-    index.md             # TÜM öğrenme başlıkları kataloğu — "## Kayıtlar" bölümü kapanışta otomatik upsert edilir (v0.4)
-    profile.md           # kullanıcı: ADHD, "suya gir", kişilik, iletişim tarzı
+    index.md             # catalog of ALL learning titles — the "## Kayıtlar" section is auto-upserted at close (v0.4)
+    profile.md           # user: ADHD, "get in the water", personality, communication style
     progress/
-      rust.md            # başlık-başı ilerleme + seviye (tekrar anlatmasın)
+      rust.md            # per-title progress + level (so it doesn't re-explain)
       javascript.md
     gaps/
-      rust.md            # tespit edilen eksikler + kanıt
-    curriculum/          # gap'lere göre planlanan dersler + müfredat haritası — v0.6'dan itibaren proje-lokal .usta/learner/curriculum/<konu>.md
-      rust.md            # görülmedi/görüldü/oturdu/derinleşildi durumlu konu ağacı
-    tech-notes.md        # (opsiyonel, sonra) araştırılan teknoloji notları — iki kez araştırmasın
+      rust.md            # detected gaps + evidence
+    curriculum/          # lessons planned per gap + curriculum map — from v0.6 on, project-local .usta/learner/curriculum/<topic>.md
+      rust.md            # topic tree with not seen/seen/settled/deepened status
+    tech-notes.md        # (optional, later) researched technology notes — so it doesn't research twice
   approaches/
-    software.md          # spek + mimari (ölçek okuma) + teknoloji seçimi + kod kalitesi
-    marketing.md         # brief/hipotez/ölçüm
-    _default.md          # "spek gereksiz, direkt yap" mantığı
+    software.md          # spec + architecture (scale reading) + technology choice + code quality
+    marketing.md         # brief/hypothesis/measurement
+    _default.md          # the "spec unnecessary, just do it" logic
   projects/
-    rust-takvim/         # aktif iş bağlamı, per-slice mini-spekler
-  mentor/                # KULLANICIYA DÖNÜK, görünür — proje root'unda (.usta DIŞINDA)
-    PROJECT.md           # proje tanımı (Ne/Neden/Ölçek/Stack/Kapsam Dışı) — Usta tanışmadan yazar, kullanıcı editler
-    PROGRESS.md          # proje durumu (Bitti/Yapılıyor/Sırada) + append-only Kararlar — kapanış flush'ı yazar, reset dokunmaz
+    rust-takvim/         # active work context, per-slice mini-specs
+  mentor/                # USER-FACING, visible — at the project root (OUTSIDE .usta)
+    PROJECT.md           # project definition (What/Why/Scale/Stack/Out of Scope) — Usta writes it before the introduction, the user edits it
+    PROGRESS.md          # project status (Done/In Progress/Next) + append-only Decisions — the closing flush writes it, reset doesn't touch it
   src/                   # Rust: cli, claude client, watcher, research, health
   Cargo.toml
 ```
 
-**İzolasyon prensibi (headspace'ten):** her öğrenme başlığı tam izole — Rust oturumunda JS eksikleri karışmaz. `index.md` hepsini üstten bağlar. `profile.md` paylaşılır (kullanıcı hep aynı).
+**Isolation principle (from headspace):** every learning title is fully isolated — in a Rust session JS gaps don't bleed in. `index.md` links them all from above. `profile.md` is shared (the user is always the same).
 
-## 8. Eş Zamanlı Çok Başlık
+## 8. Concurrent Multiple Titles
 
-- Paralel aktif başlıklar (bugün Rust, yarın JS — ikisi de AKTİF).
-- Usta oturumda hangi başlıktaysan o başlığın bağlamını yükler.
-- Çoklu terminal: bir terminalde Rust, öbüründe JS. Ayrı bağlam, ortak `profile.md`, ayrı progress.
+- Parallel active titles (Rust today, JS tomorrow — both ACTIVE).
+- Usta loads the context of whichever title you're on in the session.
+- Multiple terminals: Rust in one terminal, JS in another. Separate context, shared `profile.md`, separate progress.
 
-## 9. Hafıza & Durum
+## 9. Memory & State
 
-- **Kalıcı (v0.2'de gerçeklendi).** Oturum kapanışında (`/quit`, Ctrl-C, Ctrl-D) Usta oturumu özetleyip `.usta/learner/progress/<konu>.md`'yi tam içerik olarak yeniden yazar (atomik: tmp+rename). Sonraki oturum bu dosyayı system prompt'a yükler → tekrar anlatmaz. Boş oturum dosyaya dokunmaz.
-- **Çoklu terminal (MVP sonrası):** ortak beyin, eşzamanlı yazım nadir → sağlamlaştırma sonraya.
+- **Persistent (realized in v0.2).** At session close (`/quit`, Ctrl-C, Ctrl-D) Usta summarizes the session and rewrites `.usta/learner/progress/<topic>.md` in full as content (atomic: tmp+rename). The next session loads this file into the system prompt → doesn't re-explain. An empty session doesn't touch the file.
+- **Multiple terminals (post-MVP):** a shared brain, concurrent writes are rare → hardening comes later.
 
-## 10. MVP Sınırı
+## 10. MVP Boundary
 
-**İçinde:** sohbet döngüsü (proje seç → sor → sen yaz → Socratic feedback) + **dosya izleme** (proaktif kod feedback) + **araştırma** (uydurmama).
+**In:** the chat loop (pick project → ask → you write → Socratic feedback) + **file watching** (proactive code feedback) + **research** (no making things up).
 
-**Dışında (sonraki sürümler):** çoklu terminal sağlamlaştırma · model routing · marketing dışı çok-domain cilası · `tech-notes` cache · kendini-güncelleyen tech sistemi.
+**Out (later versions):** multi-terminal hardening · model routing · multi-domain polish beyond marketing · `tech-notes` cache · a self-updating tech system.
 
-## 11. Alınan Kararlar
+## 11. Decisions Made
 
 **(v0.2)**
 
-- **Dosya izleme granülaritesi:** 1 sn debounce (son kayıttan itibaren). İlk görüşte tam içerik, sonraki kayıtlarda unified diff, 64KB üstü dosya izleme dışı (tek seferlik yerel uyarı).
-- **Proaktiflik:** girdi ayrı thread'de (rustyline + ready el-sıkışması), ana döngü `tokio::select!` — feedback için Enter beklenmez.
-- **Pedagoji tetikleri (v0.3):** açılış drilli shell'den tetiklenir (progress boş değilse); `cargo check` sonucu LLM'e `[... SADECE SENİN GÖZÜN İÇİN ...]` bloğuyla gider — saklama/tahmin kararı USTA.md kuralında, kodda değil.
-- **Global USTA.md güncellemesi (v0.3):** scaffold var olan dosyanın üstüne yazmaz — davranış güncellemesinden sonra `rm ~/.config/usta/USTA.md` + bir kez `usta` çalıştırmak gerekir. Bilinçli kabul; dosya versiyonlama v0.4 adayı.
-- **Katalog formatı (v0.4):** `learner/index.md` sonunda `## Kayıtlar`; satır `- konu | proje-yolu | YYYY-MM-DD`; bölüm-üstü serbest metin korunur; tarih `chrono` ile yerel saat.
-- **Reset onayları (v0.4):** konu reseti `[e/H]`, factory reset kelime onayı ("yes" veya "evet"); stdin kapalı/boş = hayır (güvenli varsayılan). Reset komutları backend'siz çalışır.
-- **Sunum katmanı (v0.5):** roller ikonla ayrılır — `●` (turuncu 208) Usta bloğu, `■` kullanıcı promptu, soluk `·`/`!` sistem bildirimi. Usta yanıtları termimad ile markdown render edilir; LLM beklerken spinner. TTY değilse veya `NO_COLOR` set'liyse düz çıktı (pipe/test uyumu). Davranış katmanına dokunulmadı.
-- **Konu girişi (v0.5, sonra rafine):** TTY promptunda **ret yok** — kısa yaz ya da cümleyle anlat. Kısa girdi (≤2 kelime) yerel slug'lanır (Türkçe sadeleştirme + tire; "temel Linux güvenliği" → `temel-linux-guvenligi`). **Cümle yazılırsa modele bir kısa çağrı** ne öğrenmek istediğini çıkarıp en mantıklı slug'ı seçer ("ben rust ile bir todo yapmak istiyorum" → `rust-todo`); format `slugify_topic`'le garantilenir, çağrı hatasında yerel slug'a düşülür. Seçilen slug bildirilir. Detay yine sohbette. `usta start <konu>` ve pipe davranışı değişmedi.
-- **Her-konu (v0.6):** yaklaşım dosyaları elle değil ilk-oturum tanışmasıyla üretilir; curriculum proje-lokal (`.usta/learner/curriculum/`) yaşar — §7'deki global `learner/curriculum/` yerine (izolasyon: harita da konu+proje bağlamına ait). Kapanış bölücü formatı `===DOSYA: <ad>===`.
-- **Bağlam (v0.7):** pencere **modele göre türetilir** (`backend.context_window()`: opus/sonnet/fable 1M, haiku 200k) — sabit değil; kompaksiyon eşiği %70, korunan kuyruk 4 mesaj; ölçüm = son çağrının `usage` toplamı (input + cache_read + cache_creation) — ayrı sayaç tutulmaz, kaynak API/CLI raporudur.
-- **Hedefli öğrenme (v0.8):** hedef ayrı mod değil approach alanı; tarih referansı system prompt `TODAY` bölümünden (`load_system_prompt` `today` parametresi aldı — model saati güvenilmez). Tempo/ölçüm progress'te yaşar, kod tarafında hedef mantığı YOK (ince kabuk korundu).
-- **Sağlamlaştırma (v0.9):** transcript/lock hataları warn-and-continue (ana akışı asla kırmaz); batch tavanı 5; yedek tek nesil (`.bak`); yarım oturum otomatik işlenmez, sadece bildirilir (kurtarma kullanıcı kararı — YAGNI).
-- **Konu girişi TUI'de (v0.11):** konusuz `usta` interaktif yolda önce kimlik-welcome (logo + kayıtlı konular) basar, sonra girdi kutusundan konuyu sorar — Claude tarzı "welcome üstte, soru altta". `usta start <konu>` tam-mod welcome (öğrenme durumu) + doğrudan drill. Slug çözümü TUI içinde (≤2 kelime yerel `slugify_topic`, cümle → `SLUG_SYSTEM` LLM + spinner, `finalize_slug`). Konu-bağımlı kurulum `build_session` yardımcısında (system+session+lock+recorder+has_progress) — hem TUI hem plain paylaşır; `run` artefaktları döndürür, kapanış `main`'de ortak. Lock-çakışma onayı TUI'de tek-tuş. Plain yol (`NO_COLOR`/pipe) birebir korundu (rustyline `resolve_topic`). **Gömülü default profil isimsiz** — yeni kullanıcı jenerik karşılanır (kişisel kimlik seed'den çıkarıldı). Detay: `docs/superpowers/specs/2026-08-07-tui-topic-entry-design.md`.
-- **Arayüz — inline TUI (v0.10):** interaktif yol Claude Code tarzı ratatui `Viewport::Inline`'a taşındı — alt bölge (canlı girdi kutusu + durum satırı: spinner + bağlam göstergesi) sürekli çizilir, kalıcı içerik (açılış kutusu, Usta yanıtları, dosya feedback'i) `insert_before` ile normal **scrollback**'e iner. **Alternate screen YOK** — terminal geçmişi korunur (yukarı kaydır/kopyala). Girdi rustyline yerine crossterm `EventStream` + `tui-input`; LLM beklerken iç `select!` spinner döndürür, Enter kilitli (tek turn). v0.5'in `●`/`■`/markdown görsel dili korundu ama artık TUI akışında yaşar. **Plain yol (`ui::is_plain()`: TTY yok / `NO_COLOR`) birebir eski davranış** — rustyline döngüsü aynen; TUI hiç açılmaz (pipe/CI/test güvenli). Kompaksiyon/flush çıktısı TUI'de `TUI_ACTIVE` gate ile izole (raw-mode'da stdout kirletmez; spinner no-op, notice buffer→viewport). Detay tasarım: `docs/superpowers/specs/2026-08-07-tui-interface-design.md`.
-- **İlerleme özeti (v0.15):** `history.md` global ve append-only — proje-lokal değil, çünkü streak "herhangi bir konu"da ardışık gündür (izolasyon ilkesine istisna, çünkü motivasyon sinyali konu-üstü). `current streak: 0` yasağı kod seviyesinde zorlanır (`render_stats` saf fonksiyonu test-kilitli) — ADHD-safe ton bir prompt kuralı değil, kabuk garantisi. Sürüm: `0.15.0`.
-- **Deneme sınavı (v0.16):** `/exam` statik intercept değil, prompt-enjeksiyon komutu — kabuk yalnız hedef kapısını tutar (`## Hedef` yoksa LLM'e hiç gitmez), sınavın kendisi (soru üretimi, tek-soru akışı, askıya alınan ipucu merdiveni, skor + kırılım) tamamen `exam_prompt` enjeksiyonu ve GOAL.md `## Mock Exams` kuralları üzerinden LLM'de akar — "ince kabuk" ilkesi korundu. Sürüm: `0.16.0`.
-- **Gamification (v0.17):** `/game` statik intercept değil, `/exam` gibi prompt-enjeksiyon komutu — kabuk yalnız toggle kalıcılığını (USER.md `## Tercihler`, `set_game_pref` idempotent) ve açılış streak satırını (`game_streak_line`; `streak: 0` yapısal olarak üretilemez — ADHD-safe kabuk garantisi) tutar; XP/seviye/rozet anlatısı tamamen TEACHING.md `## Gamification` kuralları üzerinden LLM'de akar ("ince kabuk"). Sürüm: `0.17.0`.
-- **TUI tasarım sistemi (v0.18):** görsel dil tek kaynağa (`src/tui/theme.rs`) çekildi — semantik renk `Color::Indexed` + glif çiftleri, tüm TUI modülleri + `ui.rs` plain-ANSI + termimad skin buradan beslenir (dağınık `Color::` literal'i yok). Renk statü değil glifi pekiştirir (renk-körü/monokrom güvenliği); turuncu = kimlik, durağan ekranda ≤2 (test-kilitli). Exam kartı kabukta çizilmez — GOAL.md `## Mock Exams` format kuralıyla model çizer, kabuk soru-durumu parse etmez ("ince kabuk" korundu). Davranış/metin değişmez, yalnız sunum. Sürüm: `0.18.0`.
+- **File-watch granularity:** 1s debounce (from the last save). Full content on first sight, unified diff on subsequent saves, files over 64KB out of watching (a one-time local warning).
+- **Proactivity:** input on a separate thread (rustyline + ready handshake), the main loop `tokio::select!` — no waiting for Enter to give feedback.
+- **Pedagogy triggers (v0.3):** the opening drill is triggered from the shell (if progress is non-empty); the `cargo check` result goes to the LLM with a `[... FOR YOUR EYES ONLY ...]` block — the hide/predict decision is in a USTA.md rule, not in code.
+- **Global USTA.md update (v0.3):** the scaffold doesn't overwrite an existing file — after a behavior update you need `rm ~/.config/usta/USTA.md` + running `usta` once. A deliberate acceptance; file versioning is a v0.4 candidate.
+- **Catalog format (v0.4):** `## Kayıtlar` at the end of `learner/index.md`; the line `- topic | project-path | YYYY-MM-DD`; free text above the section is preserved; the date via `chrono` in local time.
+- **Reset confirmations (v0.4):** topic reset `[e/H]`, factory reset a word confirmation ("yes" or "evet"); closed/empty stdin = no (safe default). Reset commands work without a backend.
+- **Presentation layer (v0.5):** roles are separated by icon — `●` (orange 208) the Usta block, `■` the user prompt, a faint `·`/`!` a system notice. Usta responses are markdown-rendered with termimad; a spinner while waiting for the LLM. Plain output if not a TTY or if `NO_COLOR` is set (pipe/test compatibility). The behavior layer was not touched.
+- **Topic entry (v0.5, refined later):** **no rejection** at the TTY prompt — write it short or describe it in a sentence. Short input (≤2 words) is slugified locally (Turkish simplification + hyphen; `"temel Linux güvenliği"` → `temel-linux-guvenligi`). **If a sentence is written, a short call to the model** extracts what you want to learn and picks the most sensible slug (`"ben rust ile bir todo yapmak istiyorum"` → `rust-todo`); the format is guaranteed by `slugify_topic`, on a call error it falls back to the local slug. The chosen slug is announced. The detail is again in the chat. `usta start <topic>` and pipe behavior are unchanged.
+- **Every-topic (v0.6):** approach files are produced not by hand but by the first-session introduction; the curriculum lives project-local (`.usta/learner/curriculum/`) — instead of the global `learner/curriculum/` in §7 (isolation: the map too belongs to the topic+project context). The closing divider format is `===DOSYA: <name>===`.
+- **Context (v0.7):** the window is **derived per model** (`backend.context_window()`: opus/sonnet/fable 1M, haiku 200k) — not fixed; the compaction threshold is 70%, the preserved queue is 4 messages; measurement = the last call's `usage` total (input + cache_read + cache_creation) — no separate counter is kept, the source is the API/CLI report.
+- **Goal-directed learning (v0.8):** the goal is not a separate mode but an approach field; the date reference is from the system prompt's `TODAY` section (`load_system_prompt` took a `today` parameter — the model's clock is unreliable). Pace/measurement lives in progress, there's NO goal logic on the code side (the thin shell is preserved).
+- **Hardening (v0.9):** transcript/lock errors are warn-and-continue (never break the main flow); the batch ceiling is 5; the backup is single-generation (`.bak`); a half session isn't processed automatically, only announced (recovery is the user's decision — YAGNI).
+- **Topic entry in the TUI (v0.11):** a topic-less interactive `usta` first prints an identity-welcome (logo + saved topics), then asks the topic from the input box — a Claude-style "welcome on top, question below". `usta start <topic>` a full-mode welcome (learning status) + the drill directly. Slug resolution is inside the TUI (≤2 words local `slugify_topic`, a sentence → `SLUG_SYSTEM` LLM + spinner, `finalize_slug`). Topic-dependent setup is in the `build_session` helper (system+session+lock+recorder+has_progress) — shared by both the TUI and plain; `run` returns artifacts, the close is shared in `main`. The lock-conflict confirmation is single-key in the TUI. The plain path (`NO_COLOR`/pipe) was preserved verbatim (rustyline `resolve_topic`). **The embedded default profile is nameless** — a new user is greeted generically (personal identity was removed from the seed). Detail: `docs/superpowers/specs/2026-08-07-tui-topic-entry-design.md`.
+- **Interface — inline TUI (v0.10):** the interactive path was moved to a Claude Code-style ratatui `Viewport::Inline` — the bottom region (live input box + status line: spinner + context indicator) is drawn continuously, while permanent content (the opening box, Usta responses, file feedback) lands in normal **scrollback** via `insert_before`. **NO alternate screen** — terminal history is preserved (scroll up/copy). Input via crossterm `EventStream` + `tui-input` instead of rustyline; while waiting for the LLM an inner `select!` spins the spinner, Enter locked (single turn). The `●`/`■`/markdown visual language of v0.5 is preserved but now lives in the TUI flow. **The plain path (`ui::is_plain()`: no TTY / `NO_COLOR`) is the old behavior verbatim** — the rustyline loop as-is; the TUI never opens (pipe/CI/test safe). Compaction/flush output is isolated in the TUI with a `TUI_ACTIVE` gate (doesn't dirty stdout in raw-mode; spinner no-op, notice buffer→viewport). Detailed design: `docs/superpowers/specs/2026-08-07-tui-interface-design.md`.
+- **Progress summary (v0.15):** `history.md` is global and append-only — not project-local, because a streak is consecutive days on "any topic" (an exception to the isolation principle, because the motivation signal is cross-topic). The `current streak: 0` ban is enforced at the code level (the pure function `render_stats` is test-locked) — the ADHD-safe tone is not a prompt rule but a shell guarantee. Version: `0.15.0`.
+- **Mock exam (v0.16):** `/exam` is not a static intercept but a prompt-injection command — the shell only holds the goal gate (if there's no `## Hedef` it never goes to the LLM), the exam itself (question generation, single-question flow, suspended hint ladder, score + breakdown) flows entirely in the LLM via the `exam_prompt` injection and the GOAL.md `## Mock Exams` rules — the "thin shell" principle preserved. Version: `0.16.0`.
+- **Gamification (v0.17):** `/game` is not a static intercept but a prompt-injection command like `/exam` — the shell only holds the toggle persistence (USER.md `## Tercihler`, `set_game_pref` idempotent) and the opening streak line (`game_streak_line`; `streak: 0` is structurally impossible to produce — an ADHD-safe shell guarantee); the XP/level/badge narrative flows entirely in the LLM via the TEACHING.md `## Gamification` rules ("thin shell"). Version: `0.17.0`.
+- **TUI design system (v0.18):** the visual language was pulled to a single source (`src/tui/theme.rs`) — semantic color `Color::Indexed` + glyph pairs, all TUI modules + `ui.rs` plain-ANSI + termimad skin fed from here (no scattered `Color::` literals). Color reinforces the glyph, it isn't status (color-blind/monochrome safety); orange = identity, ≤2 on a static screen (test-locked). The exam card isn't drawn in the shell — the model draws it via the GOAL.md `## Mock Exams` format rule, the shell doesn't parse question-state ("thin shell" preserved). Behavior/text unchanged, only presentation. Version: `0.18.0`.
 
-## 12. Açık Karar Noktaları (implementasyon planında netleşir)
+## 12. Open Decision Points (clarified in the implementation plan)
 
-- `approaches/*` şablonlarının tam formatı (domaine göre yapılandırma-adımı temsili).
-- Örnek/pseudocode sınırı: "kavramı gösteren minik illüstrasyon OK, projene çözüm yazmak yasak" — pratikte nasıl zorlanır (prompt kuralı).
-- Araştırma aracı: hangi web arama/fetch mekanizması.
+- The full format of the `approaches/*` templates (representation of the structuring-step per domain).
+- The example/pseudocode limit: "a tiny illustration showing the concept is OK, writing a solution into your project is forbidden" — how it's enforced in practice (a prompt rule).
+- The research tool: which web search/fetch mechanism.

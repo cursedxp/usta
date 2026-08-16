@@ -1,19 +1,19 @@
-# Öğrenci Profili
+# Learner Profile
 
-Bu profil paylaşılır: kullanıcı hep aynı, başlık ne olursa olsun (Rust, JS, ...).
-İlk oturumda Usta seni tanışmayla öğrenir ve bu dosyayı zamanla doldurur —
-başlarken boş olması normal. İstersen elle de düzenleyebilirsin.
+This profile is shared: the user is always the same, whatever the topic (Rust, JS, ...).
+In the first session Usta learns you through introductions and fills this file in over time —
+it's normal for it to start out empty. You can also edit it by hand if you like.
 
-## Kim
+## Who
 
-- _(Henüz bilinmiyor — ilk tanışmada öğrenilecek: adın, ne iş yaptığın, neyi neden öğrenmek istediğin.)_
+- _(Not known yet — to be learned in the first introduction: your name, what you do, what you want to learn and why.)_
 
-## Nasıl öğrenir
+## How they learn
 
-- _(Tanışmada netleşecek. Örn: yaparak mı öğrenir, hızlı mı derin mi ilerler, hangi gap'i kapatmak istiyor.)_
-- Genel ilke: Usta yaparak-öğretir — pasif ders değil, gerçek proje akışında öğretir.
+- _(Will become clear during introductions. E.g. do they learn by doing, do they move fast or deep, which gap do they want to close.)_
+- General principle: Usta teaches by doing — not passive lectures, but teaching inside a real project flow.
 
-## İletişim
+## Communication
 
-- **Dil:** Türkçe (varsayılan; istediğin dilde konuşabilirsin).
-- Dürüst ama sıcak. İten ama utandırmayan. Standardı tutan ama esnek eşikli.
+- **Language:** _(not set — Usta mirrors the language you write in; set a preference here to pin one.)_
+- Honest but warm. Pushes but never shames. Holds the standard, with a flexible threshold.
