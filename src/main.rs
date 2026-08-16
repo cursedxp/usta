@@ -1383,6 +1383,24 @@ fn remove_topic_visuals(root: &Path, topic: &str) -> Result<()> {
 /// `confirm` call below); the wording names both so the prompt matches the SPEC.
 const FACTORY_RESET_PROMPT: &str = "Everything will be permanently deleted. Type 'yes' (or 'evet') to confirm: ";
 
+/// Factory-reset deletion targets: every catalogued project's `.usta` — plus the
+/// project the user is standing in (`cwd_root`), even if it was never catalogued
+/// (a cancelled session from before open-time cataloguing leaves such orphans).
+/// The user already word-confirms the reset; the next start must not come back
+/// asking about leftovers in the very project the reset was run from.
+fn factory_targets(index_content: &str, cwd_root: Option<&Path>) -> Vec<PathBuf> {
+    let mut targets: Vec<PathBuf> = index::entries(index_content)
+        .into_iter()
+        .map(|e| e.project.join(".usta"))
+        .collect();
+    if let Some(root) = cwd_root {
+        targets.push(root.join(".usta"));
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
 /// `usta reset --factory` — deletes the `.usta/` of every project in the catalog +
 /// the global brain. The next `usta` run sets everything back up from defaults
 /// (bootstrap) — Usta starts as if it never knew the user.
@@ -1390,20 +1408,18 @@ fn run_reset_factory() -> Result<()> {
     let global = config::global_root()?;
     let index_content =
         std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
-    let mut targets: Vec<PathBuf> = index::entries(&index_content)
-        .into_iter()
-        .map(|e| e.project.join(".usta"))
-        .filter(|p| p.is_dir())
-        .collect();
-    targets.sort();
-    targets.dedup();
+    let cwd_root = std::env::current_dir()
+        .ok()
+        .and_then(|c| config::find_project_root(&c));
+    let mut targets = factory_targets(&index_content, cwd_root.as_deref());
+    targets.retain(|p| p.is_dir());
 
     println!("FACTORY RESET — will be deleted:");
     for t in &targets {
         println!("  {}", t.display());
     }
     println!("  {} (global brain)", global.display());
-    println!("Note: old projects not in the catalog are NOT in this list.");
+    println!("Note: other old projects not in the catalog are NOT in this list (the current directory's project is).");
     println!("Check: find ~ -maxdepth 5 -name .usta -type d");
 
     if !confirm(FACTORY_RESET_PROMPT, &["evet", "yes"])? {
@@ -1495,10 +1511,13 @@ fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
 }
 
 /// Startup recover(true) / delete(false) decision from a raw confirm line.
-/// Default is RECOVER — the lossless side: only an explicit no
-/// ("n"/"no"/"h"/"hayır") deletes; empty Enter or anything unrecognized recovers.
+/// Default is RECOVER — the lossless side: only an explicit no deletes; empty
+/// Enter or anything unrecognized recovers. The no-set carries both "hayır" and
+/// ASCII "hayir": Rust lowercases 'I' to 'i' (not Turkish dotless 'ı'), so
+/// "HAYIR" arrives as "hayir" — without the ASCII form uppercase Turkish no
+/// would silently recover instead of delete.
 fn recover_choice(input: &str) -> bool {
-    !matches!(input.trim().to_lowercase().as_str(), "n" | "no" | "h" | "hayır")
+    !matches!(input.trim().to_lowercase().as_str(), "n" | "no" | "h" | "hayır" | "hayir")
 }
 
 /// Ask the startup recover/delete question. Default-YES variant of `confirm`
@@ -1841,6 +1860,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn factory_targets_includes_uncatalogued_cwd_project() {
+        let idx = "## Kayıtlar\n- rust | /p/a | 2026-08-01\n";
+        // cwd project not in the catalog → still targeted
+        let t = factory_targets(idx, Some(Path::new("/p/orphan")));
+        assert!(t.contains(&PathBuf::from("/p/a/.usta")));
+        assert!(t.contains(&PathBuf::from("/p/orphan/.usta")));
+        // cwd project already catalogued → no duplicate
+        let t2 = factory_targets(idx, Some(Path::new("/p/a")));
+        assert_eq!(t2.iter().filter(|p| p.as_path() == Path::new("/p/a/.usta")).count(), 1);
+        // no cwd root → catalog only
+        let t3 = factory_targets(idx, None);
+        assert_eq!(t3, vec![PathBuf::from("/p/a/.usta")]);
+    }
+
+    #[test]
     fn recover_choice_defaults_yes_only_explicit_no_deletes() {
         // default / lossless side → recover (true)
         assert!(recover_choice(""));
@@ -1854,6 +1888,9 @@ mod tests {
         assert!(!recover_choice("no"));
         assert!(!recover_choice("h"));
         assert!(!recover_choice("hayır"));
+        assert!(!recover_choice("hayir")); // ASCII fallback
+        assert!(!recover_choice("HAYIR")); // uppercase Turkish: lowercases to "hayir"
+        assert!(!recover_choice("Hayır"));
     }
 
     #[test]
@@ -2574,10 +2611,10 @@ mod tests {
 
     #[test]
     fn apply_watch_transitions() {
-        assert_eq!(apply_watch(WatchCmd::Off, true).0, false);
-        assert_eq!(apply_watch(WatchCmd::On, false).0, true);
-        assert_eq!(apply_watch(WatchCmd::Toggle, true).0, false);
-        assert_eq!(apply_watch(WatchCmd::Toggle, false).0, true);
+        assert!(!apply_watch(WatchCmd::Off, true).0);
+        assert!(apply_watch(WatchCmd::On, false).0);
+        assert!(!apply_watch(WatchCmd::Toggle, true).0);
+        assert!(apply_watch(WatchCmd::Toggle, false).0);
         assert!(apply_watch(WatchCmd::On, false).1.contains("on"));
         assert!(apply_watch(WatchCmd::Off, true).1.contains("off"));
     }
