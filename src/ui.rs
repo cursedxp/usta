@@ -197,11 +197,12 @@ pub fn render_markdown(md: &str, width: usize) -> String {
 /// (The termimad API can change between versions — the target colors are in
 /// Global Constraints; use the equivalent call.)
 fn skin() -> MadSkin {
+    use crate::tui::theme;
     use termimad::crossterm::style::Color;
     let mut skin = MadSkin::default();
-    skin.set_headers_fg(Color::AnsiValue(208));
-    skin.bold.set_fg(Color::AnsiValue(208));
-    skin.inline_code.set_fg(Color::AnsiValue(114));
+    skin.set_headers_fg(Color::AnsiValue(theme::BRAND_IDX));
+    skin.bold.set_fg(Color::AnsiValue(theme::BRAND_IDX));
+    skin.inline_code.set_fg(Color::AnsiValue(theme::CODE_IDX));
     skin
 }
 

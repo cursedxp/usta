@@ -11,9 +11,15 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
+// ── Raw 256-color indices — the numeric source of truth. Ratatui consumers use
+//    the `Color` constants below; the ANSI / termimad plain paths (ui.rs) reach
+//    for the index directly so a single number defines each hue. ────────────────
+pub const BRAND_IDX: u8 = 208;
+pub const CODE_IDX: u8 = 114;
+
 // ── Semantic palette (256-color index — see design tokens page 01) ───────────
 /// Identity & structure: logo, Usta bullet, prompt caret, panel titles. Orange.
-pub const BRAND: Color = Color::Indexed(208);
+pub const BRAND: Color = Color::Indexed(BRAND_IDX);
 /// Positive result: exam pass, gap closed, file converted, review recalled. Green.
 pub const SUCCESS: Color = Color::Indexed(149);
 /// Caution: context filling, missing tool, needs-confirm, truncation. Amber —
@@ -24,9 +30,6 @@ pub const ERROR: Color = Color::Indexed(210);
 /// Gamification ONLY: XP, level-up, badge. Violet — a cool hue that never
 /// masquerades as Usta's orange voice.
 pub const GAME: Color = Color::Indexed(141);
-/// Inline code inside Usta's markdown replies. Code-green (kept from the
-/// existing codebase); distinct from SUCCESS by context, per design tokens 01.
-pub const CODE: Color = Color::Indexed(114);
 /// The quiet default: system notices, hints, secondary meta, box borders.
 /// (Design tokens 01: dim = 256:244.)
 pub const DIM: Color = Color::Indexed(244);

@@ -23,6 +23,7 @@ use crate::tui::convert::ansi_to_text;
 use crate::tui::editor::{Action, InputBox};
 use crate::tui::status::{render_status, Status};
 use crate::tui::term::{Tui, VIEWPORT_H};
+use crate::tui::theme;
 use crate::tui::welcome;
 use crate::{feedback, history, progress, ui, watcher};
 
@@ -64,7 +65,7 @@ fn user_echo_text(line: &str, width: u16) -> Text<'static> {
     for logical in line.split('\n') {
         for chunk in wrap_cells(logical, inner) {
             let prefix = if first_visual {
-                Span::styled("❯ ", ratatui::style::Style::default().fg(ratatui::style::Color::Indexed(208)))
+                Span::styled(format!("{} ", theme::G_PROMPT), theme::brand())
             } else {
                 Span::raw("  ")
             };
@@ -958,7 +959,7 @@ mod tests {
         let t = user_echo_text("x", 80);
         let first = &t.lines[1].spans[0];
         assert_eq!(first.content.as_ref(), "❯ ");
-        assert_eq!(first.style.fg, Some(ratatui::style::Color::Indexed(208)));
+        assert_eq!(first.style.fg, Some(theme::BRAND));
     }
 
     #[test]

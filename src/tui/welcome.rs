@@ -1,11 +1,11 @@
 //! Welcome box: data gathering (pure) + render. Spec §5.
 //! All parsing is best-effort — malformed/missing input skips the field, never panics.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthStr;
 
-const ORANGE: Color = Color::Indexed(208);
+use crate::tui::theme;
 
 // 5 rows — a block-letter S needs top, left, middle, right AND bottom bars;
 // the old 4-row version had no bottom bar, so the S looked cut in half.
@@ -334,10 +334,10 @@ fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<(String, Styl
         let (rtxt, rtxt_style) = right.get(i).cloned().unwrap_or_default();
         let lspan = Span::styled(
             pad(&ltxt, left_w),
-            if is_logo { Style::default().fg(ORANGE) } else { Style::default() },
+            if is_logo { theme::brand() } else { Style::default() },
         );
         let rstyle = if i == 0 && !rtxt.is_empty() {
-            Style::default().add_modifier(Modifier::BOLD).fg(ORANGE)
+            theme::brand().add_modifier(Modifier::BOLD)
         } else { rtxt_style };
         lines.push(Line::from(vec![
             Span::raw("│"),
@@ -566,6 +566,40 @@ mod tests {
             .find(|s| s.content.contains("In other projects"))
             .expect("In other projects satırı bulunamalı");
         assert!(span.style.add_modifier.contains(Modifier::DIM), "stil DIM içermiyor: {:?}", span.style);
+    }
+
+    /// Count distinct orange (BRAND) elements: the whole logo block collapses to
+    /// one element (all its spans carry █), plus each non-logo brand span with
+    /// real text. Design tokens 06: ≤ 2 orange elements per screen at rest.
+    fn orange_element_count(t: &Text) -> usize {
+        let mut logo_seen = false;
+        let mut others = 0usize;
+        for line in &t.lines {
+            for s in &line.spans {
+                if s.style.fg != Some(theme::BRAND) {
+                    continue;
+                }
+                if s.content.contains('█') {
+                    logo_seen = true;
+                } else if !s.content.trim().is_empty() {
+                    others += 1;
+                }
+            }
+        }
+        (logo_seen as usize) + others
+    }
+
+    #[test]
+    fn welcome_orange_discipline() {
+        // Identity welcome at rest: logo block + the single section accent = 2.
+        let local = vec!["rust".to_string()];
+        let ident = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], false, 80, 0, 0);
+        assert!(orange_element_count(&ident) <= 2, "identity orange > 2: {ident:#?}");
+
+        // Full-mode welcome at rest: logo block + "Learning Status" title = 2.
+        let d = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/p", "2026-08-15", None);
+        let full = render_welcome(&d, 80);
+        assert!(orange_element_count(&full) <= 2, "full-mode orange > 2: {full:#?}");
     }
 
     #[test]

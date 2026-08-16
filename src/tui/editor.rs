@@ -3,12 +3,14 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 use tui_input::backend::crossterm::to_input_request;
 use tui_input::Input;
+
+use crate::tui::theme;
 
 /// Result of key handling — the loop behaves accordingly.
 #[derive(Debug)]
@@ -131,7 +133,7 @@ impl InputBox {
             .map(|(i, r)| {
                 let prefix = if i == 0 { "> " } else { "  " };
                 Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Indexed(208))),
+                    Span::styled(prefix, theme::brand()),
                     Span::raw(r.clone()),
                 ])
             })
@@ -140,7 +142,7 @@ impl InputBox {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().fg(theme::DIM)),
         );
         f.render_widget(para, area);
         let x = area.x + 3 + cur_col as u16;
