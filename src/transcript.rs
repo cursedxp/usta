@@ -54,7 +54,6 @@ pub fn find_unfinished(project_root: &Path) -> Vec<PathBuf> {
 /// Delete the given half-finished session records. Only ever called with the
 /// list produced by `find_unfinished` — never touches `.done` files by construction.
 /// Errors are collected, not fatal: a leftover record must never block startup.
-#[allow(dead_code)] // wired into the startup delete branch in the next task
 pub fn delete_unflushed(files: &[PathBuf]) -> (usize, Vec<String>) {
     let mut deleted = 0;
     let mut errors = Vec::new();

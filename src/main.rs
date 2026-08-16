@@ -95,37 +95,50 @@ async fn main() -> Result<()> {
     if !stale.is_empty() {
         let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         if !tty {
-            // pipe/script: EXACT existing behavior — warn only, no LLM calls
+            // pipe/script: EXACT existing behavior — warn only, no LLM calls, no delete
             for p in &stale {
                 ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display()));
             }
         } else {
+            // List the stale records (dim), then ask ONCE: recover (default) or delete.
             for p in &stale {
-                let Some(topic) = transcript::topic_from_record(p) else {
-                    ui::warn(&format!("unrecognized session record name, leaving as-is: {}", p.display()));
-                    continue;
-                };
-                match transcript::read_history(p) {
-                    Err(e) => ui::warn(&format!("could not read session record ({e}) — leaving as-is: {}", p.display())),
-                    Ok(history) if history.iter().filter(|m| m.role == "user").count() == 0 => {
-                        // nothing to recover — mark done silently so the noise stops
-                        let _ = transcript::mark_done(p);
-                    }
-                    Ok(history) => {
-                        ui::notice(&format!("recovering unflushed session: {} — writing files…", p.display()));
-                        let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
-                        match flush_core(&mut backend, &topic, &system, &history, &project_root, true).await {
-                            Ok(()) => {
-                                let _ = transcript::mark_done(p);
-                                ui::notice(&format!("recovered: {topic}"));
-                            }
-                            Err(e) => ui::warn(&format!("recovery failed ({e}) — record kept, will retry next start: {}", p.display())),
+                ui::notice(&format!("unflushed session record: {}", p.display()));
+            }
+            if confirm_recover(&format!("recover {} unflushed session(s)? [Y/n] ", stale.len())) {
+                for p in &stale {
+                    let Some(topic) = transcript::topic_from_record(p) else {
+                        ui::warn(&format!("unrecognized session record name, leaving as-is: {}", p.display()));
+                        continue;
+                    };
+                    match transcript::read_history(p) {
+                        Err(e) => ui::warn(&format!("could not read session record ({e}) — leaving as-is: {}", p.display())),
+                        Ok(history) if history.iter().filter(|m| m.role == "user").count() == 0 => {
+                            // nothing to recover — mark done silently so the noise stops
+                            let _ = transcript::mark_done(p);
                         }
-                        // Salvage is a standalone conversation — don't let its CLI session_id
-                        // leak into the next salvage or the real session that follows.
-                        backend.reset_session();
+                        Ok(history) => {
+                            ui::notice(&format!("recovering unflushed session: {} — writing files…", p.display()));
+                            let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
+                            match flush_core(&mut backend, &topic, &system, &history, &project_root, true).await {
+                                Ok(()) => {
+                                    let _ = transcript::mark_done(p);
+                                    ui::notice(&format!("recovered: {topic}"));
+                                }
+                                Err(e) => ui::warn(&format!("recovery failed ({e}) — record kept, will retry next start: {}", p.display())),
+                            }
+                            // Standalone conversation — don't let its CLI session_id leak
+                            // into the next salvage or the real session that follows.
+                            backend.reset_session();
+                        }
                     }
                 }
+            } else {
+                // User declined recovery → the conversation is dead; clean the records.
+                let (deleted, errors) = transcript::delete_unflushed(&stale);
+                for e in errors {
+                    ui::warn(&format!("could not delete: {e}"));
+                }
+                ui::notice(&format!("cleaned {deleted} stale session record(s)"));
             }
         }
     }
@@ -1472,6 +1485,27 @@ fn confirm(prompt: &str, yes: &[&str]) -> Result<bool> {
     Ok(yes.contains(&line.trim().to_lowercase().as_str()))
 }
 
+/// Startup recover(true) / delete(false) decision from a raw confirm line.
+/// Default is RECOVER — the lossless side: only an explicit no
+/// ("n"/"no"/"h"/"hayır") deletes; empty Enter or anything unrecognized recovers.
+fn recover_choice(input: &str) -> bool {
+    !matches!(input.trim().to_lowercase().as_str(), "n" | "no" | "h" | "hayır")
+}
+
+/// Ask the startup recover/delete question. Default-YES variant of `confirm`
+/// (which is default-NO). Never returns an error — on any stdin read failure it
+/// defaults to RECOVER so a startup hiccup can't cause data loss or block startup.
+fn confirm_recover(prompt: &str) -> bool {
+    use std::io::Write;
+    print!("{prompt}");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return true; // lossless side
+    }
+    recover_choice(&line)
+}
+
 /// Per-file/directory status line for `usta init`.
 fn print_scaffold_status(path: &Path, wrote: bool) {
     if wrote {
@@ -1796,6 +1830,22 @@ async fn trigger_auto_visual(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recover_choice_defaults_yes_only_explicit_no_deletes() {
+        // default / lossless side → recover (true)
+        assert!(recover_choice(""));
+        assert!(recover_choice("   \n"));
+        assert!(recover_choice("y"));
+        assert!(recover_choice("evet"));
+        assert!(recover_choice("garbage"));
+        // explicit no → delete (false)
+        assert!(!recover_choice("n"));
+        assert!(!recover_choice("N"));
+        assert!(!recover_choice("no"));
+        assert!(!recover_choice("h"));
+        assert!(!recover_choice("hayır"));
+    }
 
     #[test]
     fn is_exam_command_exact_only() {
