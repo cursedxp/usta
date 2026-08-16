@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::tokens;
+
 /// Read a file; if non-empty, add it to `parts` as a labeled section.
 /// A missing/empty file is silently skipped.
 fn read_section(path: &Path, label: &str, parts: &mut Vec<String>) {
@@ -101,9 +103,9 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     // session, the model doesn't carry irrelevant exam-pace/format rules (spec §3
     // conditional line). The topic's approach file (project override if present,
     // otherwise global — same PRIORITY as in read_approach_with_override) is read
-    // here ONCE just to check whether "## Hedef" is present; the full content is
-    // already loaded separately by read_all_approaches below, so it's not added
-    // to the prompt a SECOND time here.
+    // here ONCE just to check whether the goal section (tokens::H_GOAL) is present;
+    // the full content is already loaded separately by read_all_approaches below,
+    // so it's not added to the prompt a SECOND time here.
     let topic_rel = format!("{topic}.md");
     let topic_approach_path = project_usta
         .as_ref()
@@ -111,7 +113,7 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
         .filter(|p| p.exists())
         .unwrap_or_else(|| global.join("approaches").join(&topic_rel));
     let approach_konu = std::fs::read_to_string(&topic_approach_path).unwrap_or_default();
-    if approach_konu.contains("## Hedef") {
+    if approach_konu.contains(tokens::H_GOAL) {
         read_section(&global.join("GOAL.md"), "GOAL.md", &mut parts);
     }
 

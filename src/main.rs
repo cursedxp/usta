@@ -40,9 +40,14 @@ const COMPACT_THRESHOLD: f64 = 0.70;
 const COMPACT_KEEP_LAST: usize = 4;
 /// Note prepended to history after compaction — tells the model the context
 /// was compacted and the essence now lives in the files.
-const COMPACT_NOTE: &str = "[ARA KAYIT] Bağlam sıkıştırıldı. Önceki konuşmanın özü \
+fn compact_note() -> String {
+    format!(
+        "{} Bağlam sıkıştırıldı. Önceki konuşmanın özü \
 system prompt'taki progress/curriculum/approach dosyalarına yazıldı — güncel durum \
-orada. Kaldığımız yerden devam et; kullanıcıya kompaksiyonu anlatma.";
+orada. Kaldığımız yerden devam et; kullanıcıya kompaksiyonu anlatma.",
+        tokens::CHECKPOINT
+    )
+}
 /// Maximum number of files given feedback in a single debounce window — above
 /// this it counts as a "bulk change" (git checkout, format-all): no LLM call.
 const MAX_FEEDBACK_BATCH: usize = 5;
@@ -693,7 +698,7 @@ pub(crate) async fn maybe_compact(
         }
         Err(e) => ui::warn(&format!("system prompt could not be refreshed: {e}")),
     }
-    session.compact(COMPACT_KEEP_LAST, COMPACT_NOTE);
+    session.compact(COMPACT_KEEP_LAST, &compact_note());
     backend.reset_session();
     ui::notice("context compacted — pick up where you left off");
 }
@@ -791,7 +796,7 @@ async fn resolve_topic(
     // Empty-stdin / pipe path is UNTOUCHED: falls straight to "general" instead of
     // getting stuck on a prompt that can't be answered.
     if !std::io::stdin().is_terminal() {
-        return Ok(("genel".to_string(), None));
+        return Ok((tokens::DEFAULT_TOPIC.to_string(), None));
     }
     // Show topics resumable in this project — Enter = continue with the most recent one.
     let index_content =
@@ -808,7 +813,7 @@ async fn resolve_topic(
         let line = match rl.readline("What's the topic? (write it short or as a sentence): ") {
             Ok(l) => l,
             // Ctrl-D / Ctrl-C → fall through to "general" without blocking.
-            Err(_) => return Ok(("genel".to_string(), None)),
+            Err(_) => return Ok((tokens::DEFAULT_TOPIC.to_string(), None)),
         };
         let raw = line.trim();
         // Slash commands at topic entry (TUI parity): /help prints help; session-only
@@ -825,7 +830,7 @@ async fn resolve_topic(
         // the resume/new distinction only shows up in the slug — the TUI's visual notice
         // difference doesn't apply here.
         match interpret_topic_input(raw, &local, false) {
-            None => return Ok(("genel".to_string(), None)),
+            None => return Ok((tokens::DEFAULT_TOPIC.to_string(), None)),
             Some(TopicChoice::Resume(t)) => return Ok((t, None)),
             Some(TopicChoice::New(raw)) => {
                 // Short input (≤2 words) → local slug, don't waste an LLM call.
@@ -928,7 +933,7 @@ pub(crate) fn parse_game_command(line: &str) -> Option<GameCmd> {
     }
 }
 
-/// Shell-managed preference line in USER.md (`## Tercihler` section).
+/// Shell-managed preference line in USER.md (`tokens::H_PREFERENCES` section).
 /// The closing flush is told to keep this section as-is.
 pub(crate) fn game_pref(global: &Path) -> bool {
     std::fs::read_to_string(global.join("USER.md"))
@@ -989,10 +994,13 @@ pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
             rebuilt.push('\n');
         }
         rebuilt
-    } else if content.contains("## Tercihler") {
-        content.replace("## Tercihler", &format!("## Tercihler\n{value}"))
+    } else if content.contains(tokens::H_PREFERENCES) {
+        content.replace(
+            tokens::H_PREFERENCES,
+            &format!("{}\n{value}", tokens::H_PREFERENCES),
+        )
     } else {
-        format!("{}\n\n## Tercihler\n{value}\n", content.trim_end())
+        format!("{}\n\n{}\n{value}\n", content.trim_end(), tokens::H_PREFERENCES)
     };
     progress::write_atomic(&path, &new)
 }
@@ -1030,7 +1038,7 @@ pub(crate) fn is_exam_command(line: &str) -> bool {
     line.trim() == "/exam"
 }
 
-/// Does this topic have a goal (## Hedef)? Same approach-file priority as
+/// Does this topic have a goal (tokens::H_GOAL)? Same approach-file priority as
 /// brain.rs GOAL loading: project override wins over global — keep in sync.
 pub(crate) fn topic_has_goal(project_root: &Path, global: &Path, topic: &str) -> bool {
     let override_path = progress::approach_path(project_root, topic);
@@ -1040,7 +1048,7 @@ pub(crate) fn topic_has_goal(project_root: &Path, global: &Path, topic: &str) ->
         global.join("approaches").join(format!("{topic}.md"))
     };
     std::fs::read_to_string(path)
-        .map(|c| c.contains("## Hedef"))
+        .map(|c| c.contains(tokens::H_GOAL))
         .unwrap_or(false)
 }
 
@@ -1100,9 +1108,9 @@ pub(crate) fn parse_start_suggestion(reply: &str) -> Option<(String, String)> {
     let first = lines.next()?.trim();
     let rest_raw = first.strip_prefix("KONU:")?;
     // `slugify_topic` never returns an empty string — it falls back to
-    // "genel" for empty/whitespace input. So the emptiness check MUST happen
-    // here, before slugify_topic runs, or a blank `KONU:` line would wrongly
-    // parse to Some(("genel", ...)) instead of None.
+    // tokens::DEFAULT_TOPIC for empty/whitespace input. So the emptiness check MUST
+    // happen here, before slugify_topic runs, or a blank `KONU:` line would wrongly
+    // parse to Some((tokens::DEFAULT_TOPIC, ...)) instead of None.
     if rest_raw.trim().is_empty() {
         return None;
     }
@@ -1198,7 +1206,7 @@ fn deasciify(c: char) -> char {
 /// Turn free text into a topic slug — pure function, testable.
 /// Rule: simplify Turkish characters, lowercase, take at most the FIRST 3
 /// words, keep only ascii alphanumeric characters in each word, join words
-/// with hyphens. Empty result → `"genel"`.
+/// with hyphens. Empty result → `tokens::DEFAULT_TOPIC`.
 /// "temel Linux güvenliği" → `temel-linux-guvenligi`.
 pub fn slugify_topic(input: &str) -> String {
     // Filler words, compared against their deasciified (ç→c…) form — kept out
@@ -1220,7 +1228,7 @@ pub fn slugify_topic(input: &str) -> String {
         .take(3)
         .collect();
     if words.is_empty() {
-        "genel".to_string()
+        tokens::DEFAULT_TOPIC.to_string()
     } else {
         words.join("-")
     }

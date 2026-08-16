@@ -1,4 +1,4 @@
-//! Global learning catalog: the `## Kayıtlar` section at the end of
+//! Global learning catalog: the `tokens::H_RECORDS` section at the end of
 //! `~/.config/usta/learner/index.md`. Line format: `- topic | project-path | YYYY-MM-DD`.
 //! The closing flush upserts it → "where I'm learning what" is visible at a glance;
 //! `usta topics` lists them, factory reset finds project paths from here.
@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-const SECTION: &str = "## Kayıtlar";
+use crate::tokens;
+
+const SECTION: &str = tokens::H_RECORDS;
 
 /// A single entry in the catalog.
 #[derive(Debug, PartialEq)]
@@ -18,7 +20,7 @@ pub struct IndexEntry {
     pub date: String,
 }
 
-/// Parse the `- topic | path | date` lines under `## Kayıtlar`.
+/// Parse the `- topic | path | date` lines under `tokens::H_RECORDS`.
 /// Empty if the section is missing; lines that don't match the format are silently skipped.
 pub fn entries(content: &str) -> Vec<IndexEntry> {
     let Some(idx) = content.find(SECTION) else {
@@ -54,7 +56,7 @@ pub fn upsert(content: &str, topic: &str, project: &Path, date: &str) -> String 
     render(content, &list)
 }
 
-/// Preserve the free text before the section, rewrite `## Kayıtlar` with the lines.
+/// Preserve the free text before the section, rewrite `tokens::H_RECORDS` with the lines.
 fn render(content: &str, list: &[IndexEntry]) -> String {
     let prefix = match content.find(SECTION) {
         Some(idx) => &content[..idx],

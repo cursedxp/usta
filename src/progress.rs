@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::tokens;
+
 /// Progress file path for a topic: `<project>/.usta/learner/progress/<topic>.md`.
 pub fn progress_path(project_root: &Path, topic: &str) -> PathBuf {
     project_root
@@ -38,7 +40,7 @@ pub fn project_progress_path(project_root: &Path) -> PathBuf {
 }
 
 /// Closing-reply delimiter — the model starts every file with this.
-pub const FILE_DELIM: &str = "===DOSYA:";
+pub const FILE_DELIM: &str = tokens::FILE_DIVIDER;
 
 /// Introduction instruction appended to opening turns while the profile is empty (spec Ç3a).
 const MEET_BLOCK: &str = "\n[PROFILE EMPTY] You don't know the user yet. Introduce \
@@ -85,12 +87,13 @@ pub fn closing_prompt(
     let pr = profile.unwrap_or("(dosya henüz yok)");
     let prj = project.unwrap_or("(dosya henüz yok)");
     let ppg = project_progress.unwrap_or("(dosya henüz yok)");
+    let states = tokens::STATES.join("/");
     format!(
         "[SESSION CLOSING — FILE UPDATE]\n\
          Task: produce whichever of the files below need updating. Start each file with \
-         this line: `===DOSYA: <name>===` (name: progress | approach | curriculum | \
+         this line: `{delim} <name>===` (name: progress | approach | curriculum | \
          profile | project | project-progress — e.g. if generating the profile, \
-         `===DOSYA: profile===`).\n\n\
+         `{delim} profile===`).\n\n\
          Current progress ({topic}):\n---\n{p}\n---\n\n\
          Current approach:\n---\n{a}\n---\n\n\
          Current curriculum:\n---\n{c}\n---\n\n\
@@ -98,9 +101,9 @@ pub fn closing_prompt(
          Current project definition (mentor/PROJECT.md):\n---\n{prj}\n---\n\n\
          Current project status (mentor/PROGRESS.md):\n---\n{ppg}\n---\n\n\
          Rules:\n\
-         - `progress` is ALWAYS generated. Structure: `# {topic} — İlerleme` heading + \
-         `## Seviye` / `## Kapatılanlar` / `## Gap'ler` (PROVE IT) / \
-         `## Geri çağırma soruları` (each bullet: `- <question> — <one-line answer> | \
+         - `progress` is ALWAYS generated. Structure: `# {topic} {heading_suffix}` heading + \
+         `## {lvl}` / `## {ret}` / `## {gaps}` (PROVE IT) / \
+         `## {recall}` (each bullet: `- <question> — <one-line answer> | \
          due: YYYY-MM-DD | ivl: <days>`. Simplified spaced repetition, interval ladder \
          in days: 1, 3, 7, 16, 35, 90. Compute dates from the TODAY section. A question \
          recalled comfortably in this session's drill moves one rung up and gets `due = \
@@ -108,33 +111,33 @@ pub fn closing_prompt(
          (due tomorrow); a question not drilled this session keeps its tail UNCHANGED; a \
          new question starts at `ivl: 1` (due tomorrow); a legacy bullet without a tail \
          gets `ivl: 1` (due tomorrow). A question passed comfortably at `ivl: 90` \
-         retires: move it to `Kapatılanlar` as a one-line summary and remove it from \
-         this list.) / `## Hata günlüğü` (`type | count | \
-         last example`, 3+ repeats = GAP CANDIDATE) / `## İpucu merdiveni` / `## Hedef \
-         Durumu` — write ONLY if approach defines a `## Hedef`: time remaining (compute \
+         retires: move it to `{ret}` as a one-line summary and remove it from \
+         this list.) / `## {errlog}` (`type | count | \
+         last example`, 3+ repeats = GAP CANDIDATE) / `## {hint}` / `{goal_status}` \
+         — write ONLY if approach defines a `{goal}`: time remaining (compute \
          from the TODAY section), map progress (%), pace assessment (on track / at risk \
          / behind + one-line rationale), measurement log (`date | measurement | score` — \
          mock exam, writing assessment, etc.). If a mock exam (/exam) ran this session, \
          append its result to the measurement log (date | mock exam | score) and record \
          weak items as gaps. If there's no goal, don't write this \
-         section at all. / `## Açık egzersiz` — ONLY if an exercise was assigned this \
+         section at all. / `## {open_ex}` — ONLY if an exercise was assigned this \
          session (or an earlier one is still open) and not completed: `- <file> | \
          <one-line assignment> | assigned YYYY-MM-DD`. A completed exercise moves to \
-         `Kapatılanlar` as a normal item and leaves this section.\n\
+         `{ret}` as a normal item and leaves this section.\n\
          - `approach` is generated only on the first session or if the approach changed \
          this session — a living document that answers the three questions from \
          _default.md (practice / output / feedback). For goal-directed learning, approach \
-         includes a `## Hedef` section: what (certificate/level/output), exam/assessment \
+         includes a `{goal}` section: what (certificate/level/output), exam/assessment \
          date (YYYY-MM-DD), passing threshold, exam/assessment format.\n\
          - `curriculum` is extracted as the FULL map on the first session (topic/subtopic \
-         tree; each item with a `görülmedi/görüldü/oturdu/derinleşildi` status; draw on \
+         tree; each item with a `{states}` status; draw on \
          web research if needed); on later sessions it's generated only if a status \
          changed. An uncovered critical item must stay visible on the map. If the map \
-         was anchored to course material, KEEP the source refs (`— kaynak: <file> \
-         §<section>`) on every item; items added from web research are marked `— \
-         kaynak: web`.\n\
-         - Don't let the files bloat: if `Kapatılanlar` exceeds 20 items, collapse the \
-         oldest into a one-line period summary; in `Hata günlüğü`, remove resolved \
+         was anchored to course material, KEEP the source refs (`{src} <file> \
+         §<section>`) on every item; items added from web research are marked `{src} \
+         web`.\n\
+         - Don't let the files bloat: if `{ret}` exceeds 20 items, collapse the \
+         oldest into a one-line period summary; in `{errlog}`, remove resolved \
          entries not seen in a long time; keep curriculum sections that haven't changed \
          as-is (don't regenerate them).\n\
          - Don't add anything without evidence from this session; keep the valid \
@@ -168,7 +171,19 @@ pub fn closing_prompt(
          existing lines). This tracks the PROJECT's state — the learner's knowledge \
          belongs in `progress`, not here.\n\
          - Write no explanation/greeting outside the delimiter lines; every file is pure \
-         markdown."
+         markdown.",
+        delim = tokens::FILE_DIVIDER,
+        heading_suffix = tokens::PROGRESS_HEADING_SUFFIX,
+        lvl = tokens::S_LEVEL,
+        ret = tokens::S_RETIRED,
+        gaps = tokens::S_GAPS,
+        recall = tokens::S_RECALL,
+        errlog = tokens::S_ERROR_LOG,
+        hint = tokens::S_HINT_LADDER,
+        goal_status = tokens::H_GOAL_STATUS,
+        goal = tokens::H_GOAL,
+        open_ex = tokens::S_OPEN_EXERCISE,
+        src = tokens::SOURCE_DASH,
     )
 }
 
@@ -219,9 +234,10 @@ pub fn opening_prompt(
         "[SESSION OPENING — RECALL DRILL]\n{meet_block}\
          Topic: {topic}. {drill_block} When the \
          drill is done, say one sentence from the map: where we are, what's next (your \
-         curriculum file is in the system prompt). If your progress file has an `## Açık \
-         egzersiz` section, remind me in ONE sentence after the drill: open exercise: \
-         <file> — continue or discuss it.{project_block}"
+         curriculum file is in the system prompt). If your progress file has an `## {open_ex}` \
+         section, remind me in ONE sentence after the drill: open exercise: \
+         <file> — continue or discuss it.{project_block}",
+        open_ex = tokens::S_OPEN_EXERCISE,
     );
     match game_streak {
         Some(s) => format!("{base}\n[GAME] {s}\n"),
@@ -236,15 +252,17 @@ pub fn exam_prompt(topic: &str) -> String {
     format!(
         "[EXAM MODE — MOCK EXAM]\n\
          Topic: {topic}. Build a mock exam from your curriculum map, following the exam\n\
-         format defined under `## Hedef` in your approach (format, question style, time\n\
-         budget, passing threshold). Weight questions toward items not yet `oturdu` and\n\
+         format defined under `{goal}` in your approach (format, question style, time\n\
+         budget, passing threshold). Weight questions toward items not yet `{settled}` and\n\
          known gaps. State the number of questions and the time budget up front. Then:\n\
          ask ONE question at a time and wait for my answer; during the exam NO hints, NO\n\
          teaching, NO feedback between questions — the hint ladder is SUSPENDED until\n\
          the exam ends. After my last answer: score against the goal's threshold, give a\n\
          short per-map-item breakdown (strong/weak), name the weak items as gap\n\
          candidates, and remind me the result is recorded at session close. If I say\n\
-         'stop the exam', end it early and score what was answered."
+         'stop the exam', end it early and score what was answered.",
+        goal = tokens::H_GOAL,
+        settled = tokens::STATE_SETTLED,
     )
 }
 
@@ -290,10 +308,11 @@ pub fn onboarding_prompt(
              outline digests below. ASK whether to anchor this topic's curriculum \
              to this material (it may belong to another topic). If yes: build the \
              curriculum map FROM its chapters/sections — each map item carries a \
-             source ref (`— kaynak: <file> §<section>`); assign reading from it \
+             source ref (`{src} <file> §<section>`); assign reading from it \
              (the USER reads — you don't summarize the material into the chat); \
              still add critical items the material lacks, from web research \
-             (scope guarding). If no: proceed normally.\n---\n{d}\n---\n"
+             (scope guarding). If no: proceed normally.\n---\n{d}\n---\n",
+            src = tokens::SOURCE_DASH,
         ),
         None => String::new(),
     };
@@ -308,13 +327,14 @@ pub fn onboarding_prompt(
          they said, ask one jargon-free question: 'are you preparing for a deadline or \
          exam, or is this just out of curiosity?'. If it's goal-directed, gather the \
          what/date/threshold/format info during the conversation — it will go into the \
-         approach's `## Hedef` section; the map is built from the official framework \
+         approach's `{goal}` section; the map is built from the official framework \
          (exam syllabus / exam guide / CEFR) — research it on the web. If you don't \
          know the domain well enough, research it on the web. At session close you'll \
          be asked for the approach + FULL curriculum map CONTENT; the shell writes the \
          files, don't try to write files yourself during the session (Hard Rule 6) — \
          deepen the introduction accordingly but don't turn it into a lecture, keep it \
-         short.{material_block}"
+         short.{material_block}",
+        goal = tokens::H_GOAL,
     )
 }
 

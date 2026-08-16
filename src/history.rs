@@ -8,7 +8,9 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::NaiveDate;
 
-const HEADER: &str = "# Oturum Geçmişi\n\n";
+use crate::tokens;
+
+const HEADER: &str = tokens::HISTORY_HEADER;
 
 /// A single history line: date + topic + optional map percent + optional settled count.
 #[derive(Debug, PartialEq)]
@@ -172,14 +174,17 @@ pub fn week_summary(entries: &[Entry], today: &str) -> WeekSummary {
     WeekSummary { sessions: in_window.len() as u32, per_topic }
 }
 
-/// Count of curriculum items in the two "deepest" states (`oturdu`, `derinleşildi`).
-/// Deliberate copy of the two deepest words in `tui::welcome::STATUSES` (private there,
-/// so duplicated here) — test-locked, keep in sync if that list ever changes.
+/// Count of curriculum items in the two "deepest" states (`tokens::STATE_SETTLED`,
+/// `tokens::STATE_DEEPENED`). Both this and `tui::welcome::STATUSES` read from
+/// `tokens::STATES`, so the two stay in sync by construction.
 pub fn settled_count(curriculum: &str) -> Option<usize> {
     Some(
         curriculum
             .lines()
-            .filter(|l| l.starts_with("- ") && (l.contains("oturdu") || l.contains("derinleşildi")))
+            .filter(|l| {
+                l.starts_with("- ")
+                    && (l.contains(tokens::STATE_SETTLED) || l.contains(tokens::STATE_DEEPENED))
+            })
             .count(),
     )
 }

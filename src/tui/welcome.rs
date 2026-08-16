@@ -5,6 +5,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthStr;
 
+use crate::tokens;
 use crate::tui::theme;
 
 // 5 rows — a block-letter S needs top, left, middle, right AND bottom bars;
@@ -51,52 +52,52 @@ pub fn extract_name(profile: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-/// First non-empty line of the `## Seviye` section, with the list marker stripped.
+/// First non-empty line of the `tokens::S_LEVEL` section, with the list marker stripped.
 pub fn extract_level(progress: &str) -> Option<String> {
-    section(progress, "Seviye")?
+    section(progress, tokens::S_LEVEL)?
         .lines()
         .map(|l| l.trim().trim_start_matches(['-', '*', ' ']).trim())
         .find(|l| !l.is_empty())
         .map(String::from)
 }
 
-const STATUSES: [&str; 4] = ["görülmedi", "görüldü", "oturdu", "derinleşildi"];
+const STATUSES: [&str; 4] = tokens::STATES;
 
-/// Map percentage from the count of status-bearing lines: non-`görülmedi` / total.
+/// Map percentage from the count of status-bearing lines: non-`tokens::STATE_NOT_SEEN` / total.
 pub fn curriculum_percent(curriculum: &str) -> Option<u8> {
     let (mut total, mut seen) = (0u32, 0u32);
     for line in curriculum.lines() {
-        if line.contains("görülmedi") { total += 1; }
+        if line.contains(tokens::STATE_NOT_SEEN) { total += 1; }
         else if STATUSES[1..].iter().any(|s| line.contains(s)) { total += 1; seen += 1; }
     }
     if total == 0 { return None; }
     Some(((seen * 100) / total) as u8)
 }
 
-/// Text of the first `görülmedi` item — list marker and status suffix stripped.
+/// Text of the first `tokens::STATE_NOT_SEEN` item — list marker and status suffix stripped.
 pub fn next_unseen(curriculum: &str) -> Option<String> {
-    let line = curriculum.lines().find(|l| l.contains("görülmedi"))?;
-    let text = line.split("görülmedi").next()?
+    let line = curriculum.lines().find(|l| l.contains(tokens::STATE_NOT_SEEN))?;
+    let text = line.split(tokens::STATE_NOT_SEEN).next()?
         .trim()
         .trim_start_matches(['-', '*', ' '])
         .trim_end_matches([':', '—', '-', '·', '|', ' ']);
     if text.is_empty() { None } else { Some(text.to_string()) }
 }
 
-/// Number of items in the `## Geri çağırma soruları` section.
+/// Number of items in the `tokens::S_RECALL` section.
 pub fn drill_count(progress: &str) -> usize {
-    section(progress, "Geri çağırma soruları")
+    section(progress, tokens::S_RECALL)
         .map(|s| s.lines().filter(|l| l.trim().starts_with('-')).count())
         .unwrap_or(0)
 }
 
-/// All due bullets from the `## Geri çağırma soruları` section, paired with a
+/// All due bullets from the `tokens::S_RECALL` section, paired with a
 /// sort key (the `due:` date, or `""` for a legacy/untagged bullet so it sorts
 /// first — a bullet with no tail is treated as due now). No cap here — callers
 /// that need the count (`due_count`) or a capped preview (`due_questions`)
 /// derive from this single scan. Sort is stable: equal dates keep file order.
 fn due_items(progress: &str, today: &str) -> Vec<(String, String)> {
-    let Some(s) = section(progress, "Geri çağırma soruları") else { return Vec::new() };
+    let Some(s) = section(progress, tokens::S_RECALL) else { return Vec::new() };
     let mut items: Vec<(String, String)> = Vec::new();
     for l in s.lines().map(str::trim).filter(|l| l.starts_with('-')) {
         match l.find("due: ") {
