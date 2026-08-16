@@ -449,12 +449,36 @@ fn solo_box(title: &str, rows: Vec<Vec<Span<'static>>>, width: u16) -> Text<'sta
     let total = (width as usize).clamp(60, 100);
     let inner = total - 2; // borders
 
+    // Cap the title so it can never desync the top border from the panel
+    // body. The dash-run formula below (`inner.saturating_sub(4 +
+    // title.width())`) floors at 0 once the title is too wide, but nothing
+    // capped the title ITSELF — an uncapped title made the printed top-border
+    // line longer than every other line in the panel, breaking the
+    // equal-width invariant every bordered frame in this file relies on.
+    // `fit` truncates to a display width and appends `…`, so
+    // `title.width()` after this is always <= inner.saturating_sub(4),
+    // which keeps the dash count >= 0 and the top line's total width exactly
+    // `inner + 2`, matching every other line, for any title length at any
+    // width in the clamp range.
+    //
+    // NOTE: `title` is intentionally NOT trimmed here (unlike `render_box`,
+    // which calls `.trim()` on its title before measuring/printing it).
+    // `render_resume` bakes a trailing space into its title string
+    // (`"Continuing · {topic} "`) so the dash run starts one column later,
+    // matching the design mock (`Continuing · topic ─────`). Since
+    // `title.width()` is used unmodified for the dash count, trimming here
+    // would silently swallow that space and shift the dash run one column
+    // left with no test failure — see
+    // `solo_box_preserves_title_trailing_space_no_trim`, which pins the
+    // exact spacing.
+    let title = fit(title, inner.saturating_sub(4));
+
     // Same fixed-offset formula as render_box's top border (see that
     // function's comment): "╭─── " (5) + "╮" (1) = 6 fixed chars, and
     // inner already excludes the 2 side borders, so 6-2=4 remains.
     let top = Line::from(vec![
         Span::raw("╭─── "),
-        Span::styled(title.to_string(), theme::brand().add_modifier(Modifier::BOLD)),
+        Span::styled(title.clone(), theme::brand().add_modifier(Modifier::BOLD)),
         Span::raw("─".repeat(inner.saturating_sub(4 + title.width()))),
         Span::raw("╮"),
     ]);
@@ -495,25 +519,44 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
 
     // Row 1: "Last session {rel}" (+ " · Level {level}" if both present), or
     // just "Level {level}" if there's no last-session data. Dropped only when
-    // neither is present.
+    // neither is present. `d.level` is free-form curriculum text with no
+    // upper bound, so this wraps the same way "Up next" (row 4 below) does —
+    // never truncated/ellipsized — with continuation lines aligned to the
+    // 15-column value start. When the combined text fits on one line (the
+    // common case) the original mixed plain/DIM styling is kept; a genuine
+    // wrap falls back to a single plain style per line, since a word-level
+    // wrap can't cleanly preserve which fragment (rel vs level) a given
+    // wrapped word came from.
     if d.last_session.is_some() || d.level.is_some() {
-        let (label, value): (&str, Vec<Span<'static>>) = match (&d.last_session, &d.level) {
+        let (label, value_text, mixed): (&str, String, Option<Vec<Span<'static>>>) = match (&d.last_session, &d.level) {
             (Some(rel), Some(level)) => (
                 "Last session",
-                vec![
+                format!("{rel} · Level {level}"),
+                Some(vec![
                     Span::styled(rel.clone(), plain),
                     Span::styled(" · ".to_string(), dim),
                     Span::styled("Level ".to_string(), dim),
                     Span::styled(level.clone(), plain),
-                ],
+                ]),
             ),
-            (Some(rel), None) => ("Last session", vec![Span::styled(rel.clone(), plain)]),
-            (None, Some(level)) => ("Level", vec![Span::styled(level.clone(), plain)]),
+            (Some(rel), None) => ("Last session", rel.clone(), None),
+            (None, Some(level)) => ("Level", level.clone(), None),
             (None, None) => unreachable!("guarded by the outer if"),
         };
-        let mut row = vec![Span::raw("  "), Span::styled(pad(label, 12), dim), Span::raw(" ")];
-        row.extend(value);
-        rows.push(row);
+        let wrapped = wrap(&value_text, value_w);
+        let single_line = wrapped.len() <= 1;
+        for (i, line) in wrapped.into_iter().enumerate() {
+            if i == 0 {
+                let mut row = vec![Span::raw("  "), Span::styled(pad(label, 12), dim), Span::raw(" ")];
+                match (single_line, &mixed) {
+                    (true, Some(spans)) => row.extend(spans.clone()),
+                    _ => row.push(Span::styled(line, plain)),
+                }
+                rows.push(row);
+            } else {
+                rows.push(vec![Span::raw(" ".repeat(15)), Span::styled(line, plain)]);
+            }
+        }
     }
 
     // Row 2: "Map          {bar} {p}%" — dropped when there's no curriculum data.
@@ -563,6 +606,8 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
         ]);
     }
 
+    // Trailing space is deliberate — see solo_box's "NOTE: title is
+    // intentionally NOT trimmed" comment for why it must survive.
     let title = format!("Continuing · {} ", d.topic);
     solo_box(&title, rows, width)
 }
@@ -1183,5 +1228,64 @@ mod tests {
             assert!(joined.contains(word), "missing word '{word}' from wrapped next_item: {lines:#?}");
         }
         assert!(joined.contains("scheduling"));
+    }
+
+    // Finding 1 (CRITICAL): `solo_box`'s dash-run formula
+    // (`inner.saturating_sub(4 + title.width())`) floors at 0 for an
+    // oversized title but never caps the title itself, so the top border
+    // prints longer than every other line. `render_resume` builds its title
+    // as `"Continuing · {topic} "` (14 + topic.len()) and `d.topic` is a
+    // slug from free-typed input with no length cap — a realistic topic like
+    // this 41-char one overflows at width 60 (the legitimate floor of the
+    // clamp): title_w = 14 + 41 = 55 > inner(58) - 4 = 54.
+    #[test]
+    fn render_resume_long_topic_keeps_top_border_aligned() {
+        let mut d = full_resume_data();
+        d.topic = "async-trait-objects-and-pinning-semantics".to_string(); // 41 chars
+        for width in [60u16, 70, 80, 90, 100] {
+            let lines = plain_lines(&render_resume(&d, width));
+            let w = lines[0].width();
+            assert!(
+                lines.iter().all(|l| l.width() == w),
+                "hizasız satır (width={width}): {lines:#?}"
+            );
+        }
+    }
+
+    // Finding 2 (IMPORTANT): row 1 (`Last session {rel} · Level {level}`) is
+    // built directly from spans with no wrap and no length bound. `d.level`
+    // comes from free-form curriculum text (first non-empty line of a
+    // markdown section) — a long level string overflows `inner` and hits the
+    // same floor-to-zero padding in `solo_box`'s row loop.
+    #[test]
+    fn render_resume_long_level_row_wraps_and_stays_aligned() {
+        let mut d = full_resume_data();
+        d.level = Some(
+            "Intermediate — deep dive into async trait objects, pinning, and Send/Sync bounds for task schedulers"
+                .to_string(),
+        );
+        let t = render_resume(&d, 60);
+        let lines = plain_lines(&t);
+        let w = lines[0].width();
+        assert!(lines.iter().all(|l| l.width() == w), "hizasız satır: {lines:#?}");
+        let joined = lines.join(" ");
+        assert!(!joined.contains('…'), "level was truncated instead of wrapped: {lines:#?}");
+        assert!(joined.contains("schedulers"), "tail of wrapped level missing: {lines:#?}");
+    }
+
+    // Finding 3: `solo_box` deliberately does NOT `.trim()` its title (unlike
+    // `render_box`) because `render_resume` bakes a trailing space into the
+    // title so the dash run starts one column later, matching the design
+    // mock. This pins that exact spacing so a future ".trim()" addition
+    // fails loudly instead of silently swallowing the space.
+    #[test]
+    fn solo_box_preserves_title_trailing_space_no_trim() {
+        let t = solo_box("Continuing · topic ", vec![], 80);
+        let lines = plain_lines(&t);
+        assert!(
+            lines[0].contains("topic ─"),
+            "trailing space before dash run was trimmed: {}",
+            lines[0]
+        );
     }
 }
