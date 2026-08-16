@@ -56,7 +56,11 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
 
 /// Filter out build/VCS/hidden-dir noise — ignore if a path component is
 /// `target`, `node_modules`, or starts with `.` (e.g. `.git`, `.venv`).
-/// Language-agnostic: we don't filter by extension, Usta works across domains.
+/// Language-agnostic: we don't filter by extension-of-content, Usta works
+/// across domains. Tool-transient artifacts (temp files a library writes and
+/// then renames/deletes, e.g. libgit2's `_git2_<hex>`, editor swap/backup
+/// files) are a different category — not domain content, just noise from the
+/// tools around it — and ARE filtered by basename pattern.
 pub fn is_ignored(path: &Path) -> bool {
     path.components().any(|c| match c {
         std::path::Component::Normal(s) => {
@@ -69,6 +73,12 @@ pub fn is_ignored(path: &Path) -> bool {
                 || s.ends_with(".key")
                 || s.contains("secret")
                 || s.contains("credential")
+                // Tool-transient artifacts: never real content, just noise.
+                || s.starts_with("_git2_")
+                || s.ends_with('~')
+                || s.ends_with(".swp")
+                || s.ends_with(".tmp")
+                || (s.starts_with('#') && s.ends_with('#'))
         }
         _ => false,
     })
@@ -186,5 +196,35 @@ mod tests {
     #[test]
     fn is_ignored_allows_normal_config() {
         assert!(!is_ignored(Path::new("config/settings.yaml")));
+    }
+
+    #[test]
+    fn is_ignored_flags_git2_temp_file() {
+        assert!(is_ignored(Path::new("_git2_4fec0a8edace5")));
+    }
+
+    #[test]
+    fn is_ignored_flags_tilde_backup() {
+        assert!(is_ignored(Path::new("main.rs~")));
+    }
+
+    #[test]
+    fn is_ignored_flags_vim_swap() {
+        assert!(is_ignored(Path::new("main.rs.swp")));
+    }
+
+    #[test]
+    fn is_ignored_flags_tmp_suffix() {
+        assert!(is_ignored(Path::new("upload.tmp")));
+    }
+
+    #[test]
+    fn is_ignored_flags_emacs_lock_file() {
+        assert!(is_ignored(Path::new(".#main.rs")));
+    }
+
+    #[test]
+    fn is_ignored_flags_emacs_autosave_file() {
+        assert!(is_ignored(Path::new("#main.rs#")));
     }
 }

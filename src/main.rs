@@ -480,7 +480,12 @@ async fn run_plain_loop(
                                 maybe_compact(backend, session, project_root, tokens).await;
                                 trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
                             }
-                            // Binary/deleted file etc. — pass silently, the REPL survives.
+                            // Deleted-before-we-read-it (e.g. a tool's transient temp file
+                            // that came and went between the watcher event and the debounce
+                            // flush) — not the user's business, skip silently.
+                            Err(e) if is_not_found(&e) => {}
+                            // Other failures (binary/permission/etc.) — the REPL survives,
+                            // but the user still sees the warn.
                             Err(e) => ui::warn(&format!("file feedback skipped: {}: {e}", path.display())),
                         }
                     }
@@ -1799,6 +1804,16 @@ pub(crate) fn is_exercise_path(project_root: &Path, path: &Path) -> bool {
     rel.components().any(|c| c.as_os_str() == "exercises")
 }
 
+/// True if `e`'s cause chain contains an `io::ErrorKind::NotFound`. Used to
+/// tell "the file died between the watcher event and the feedback read"
+/// (silent — not the user's business, e.g. a tool's transient temp file)
+/// from a real read failure the user should see.
+pub(crate) fn is_not_found(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// Build the injected user-turn for a watched-file change. Exercise files get
 /// an exercise-review frame (assignment comparison, hint ladder, no solutions);
 /// everything else keeps the original project-feedback wording VERBATIM.
@@ -2958,6 +2973,20 @@ mod tests {
         // watcher may hand a path the root-strip doesn't cover — component scan fallback
         assert!(is_exercise_path(root, Path::new("/other/place/exercises/x.md")));
         assert!(!is_exercise_path(root, Path::new("/other/place/src/lib.rs")));
+    }
+
+    #[test]
+    fn is_not_found_true_for_wrapped_not_found() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
+        let e = anyhow::Error::new(io_err).context("reading watched file");
+        assert!(is_not_found(&e));
+    }
+
+    #[test]
+    fn is_not_found_false_for_wrapped_permission_denied() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let e = anyhow::Error::new(io_err).context("reading watched file");
+        assert!(!is_not_found(&e));
     }
 
     #[test]

@@ -106,6 +106,7 @@ Two modes of learning in one system: **exploration** (open-ended curiosity) and 
 - **Topic lock:** `.usta/.lock-<topic>` — a concurrent second session is opened with confirmation, progress isn't silently overwritten. In pipe mode: warn + continue.
 - **Backup:** `write_atomic` copies the previous version to `.bak` — a bad model output can be rolled back.
 - **Pruning + secret filter:** progress is pruned at a 20-item threshold; `.pem`/`.key`/`secret`/`credential` files never go from the watcher to the LLM.
+- **Tool-transient filter (v0.20.2):** `is_ignored` also drops tool-artifact basenames that aren't real content — libgit2's `_git2_` temp files, editor swap/backup files (`~`, `.swp`, `.tmp`, `#...#`) — and a file that vanishes between the watcher event and the feedback read (`io::ErrorKind::NotFound`) is skipped silently instead of warning.
 
 ## 4.12 Exercise Loop (v0.12)
 
