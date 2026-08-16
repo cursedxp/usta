@@ -98,20 +98,23 @@ pub fn notice(msg: &str) {
     if is_plain() {
         println!("({msg})");
     } else {
-        println!("{DIM}· {msg}{RESET}");
+        println!("{DIM}{} {msg}{RESET}", crate::tui::theme::G_INFO);
     }
 }
 
-/// Dim warning line (stderr).
+/// Amber warning line (stderr): `⚠ ` glyph + amber, the design-system caution
+/// voice. While the TUI is live it's buffered with the same `⚠ ` prefix so
+/// run.rs's flush routes it to the amber layer.
 pub fn warn(msg: &str) {
+    use crate::tui::theme;
     if tui_active() {
-        push_tui_notice(format!("⚠ {msg}"));
+        push_tui_notice(format!("{} {msg}", theme::G_WARN));
         return;
     }
     if is_plain() {
         eprintln!("({msg})");
     } else {
-        eprintln!("{DIM}! {msg}{RESET}");
+        eprintln!("{AMBER}{} {msg}{RESET}", theme::G_WARN);
     }
 }
 

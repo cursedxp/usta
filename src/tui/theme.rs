@@ -9,6 +9,14 @@
 //! banned. Orange (BRAND) is IDENTITY, never a status: logo, `●` bullet, `❯`
 //! prompt caret, panel titles. Status is carried by the four hues below.
 
+// This module is the design system's single source of truth. Its palette + glyph
+// API is intentionally COMPLETE (mandated by the design plan): the shell renders
+// BRAND / WARN / ERROR / DIM directly, while SUCCESS / GAME and the ✓ / ▸ glyphs
+// define the tokens that model-drawn surfaces (exam scorecard, game feed) emit —
+// per GOAL.md / TEACHING.md format rules — plus the helper fns are the public
+// styling API. So a few tokens have no direct shell call site by design.
+#![allow(dead_code)]
+
 use ratatui::style::{Color, Modifier, Style};
 
 // ── Raw 256-color indices — the numeric source of truth. Ratatui consumers use
@@ -16,17 +24,20 @@ use ratatui::style::{Color, Modifier, Style};
 //    for the index directly so a single number defines each hue. ────────────────
 pub const BRAND_IDX: u8 = 208;
 pub const CODE_IDX: u8 = 114;
+pub const SUCCESS_IDX: u8 = 149;
+pub const WARN_IDX: u8 = 179;
+pub const ERROR_IDX: u8 = 210;
 
 // ── Semantic palette (256-color index — see design tokens page 01) ───────────
 /// Identity & structure: logo, Usta bullet, prompt caret, panel titles. Orange.
 pub const BRAND: Color = Color::Indexed(BRAND_IDX);
 /// Positive result: exam pass, gap closed, file converted, review recalled. Green.
-pub const SUCCESS: Color = Color::Indexed(149);
+pub const SUCCESS: Color = Color::Indexed(SUCCESS_IDX);
 /// Caution: context filling, missing tool, needs-confirm, truncation. Amber —
 /// this REPLACES the old raw `Color::Yellow`, which read as a harsh warning.
-pub const WARN: Color = Color::Indexed(179);
+pub const WARN: Color = Color::Indexed(WARN_IDX);
 /// Failure / hard stop: backend missing, generation failed, dangerous action. Red.
-pub const ERROR: Color = Color::Indexed(210);
+pub const ERROR: Color = Color::Indexed(ERROR_IDX);
 /// Gamification ONLY: XP, level-up, badge. Violet — a cool hue that never
 /// masquerades as Usta's orange voice.
 pub const GAME: Color = Color::Indexed(141);

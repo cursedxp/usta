@@ -39,14 +39,49 @@ fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
 /// Print Usta's reply in the visual language: orange ● line + markdown + blank line.
 fn page_reply(tui: &mut Tui, reply: &str, width: u16) -> Result<()> {
     let ansi = ui::render_markdown(reply, width as usize);
-    let mut t = ansi_to_text(&format!("\x1b[38;5;208m●\x1b[0m\n{ansi}\n"));
+    let mut t = ansi_to_text(&format!("\x1b[38;5;{}m{}\x1b[0m\n{ansi}\n", theme::BRAND_IDX, theme::G_BRAND));
     t.lines.push(Line::raw(""));
     page(tui, t)
 }
 
-/// Dim system notice (the TUI counterpart of ui::notice).
+/// System-notice voice, three scan-levels sharing one shape: glyph + one space +
+/// the message, color reinforcing the glyph (design tokens 02, mockup 03). The
+/// message text is never altered — only the glyph+color prefix is chosen. These
+/// pure builders are unit-tested; the `page_*` wrappers just push them to scrollback.
+/// info `·` dim (the quiet default).
+fn notice_line(msg: &str) -> Text<'static> {
+    ansi_to_text(&format!("\x1b[2m{} {msg}\x1b[0m", theme::G_INFO))
+}
+/// warning `⚠` amber — something needs noticing.
+fn warn_line(msg: &str) -> Text<'static> {
+    ansi_to_text(&format!("\x1b[38;5;{}m{} {msg}\x1b[0m", theme::WARN_IDX, theme::G_WARN))
+}
+/// error `✗` red — a genuine stop.
+fn error_line(msg: &str) -> Text<'static> {
+    ansi_to_text(&format!("\x1b[38;5;{}m{} {msg}\x1b[0m", theme::ERROR_IDX, theme::G_ERR))
+}
+
 fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, ansi_to_text(&format!("\x1b[2m· {msg}\x1b[0m")))
+    page(tui, notice_line(msg))
+}
+fn page_warn(tui: &mut Tui, msg: &str) -> Result<()> {
+    page(tui, warn_line(msg))
+}
+fn page_error(tui: &mut Tui, msg: &str) -> Result<()> {
+    page(tui, error_line(msg))
+}
+
+/// Flush the notices buffered by ui::notice/ui::warn while the TUI was live,
+/// routing each to the right scan-level: a leading `⚠ ` (from ui::warn) renders
+/// as the amber warning layer; everything else is a dim `·` info line.
+fn flush_notices(tui: &mut Tui) -> Result<()> {
+    for m in ui::drain_tui_notices() {
+        match m.strip_prefix(&format!("{} ", theme::G_WARN)) {
+            Some(rest) => page_warn(tui, rest)?,
+            None => page_notice(tui, &m)?,
+        }
+    }
+    Ok(())
 }
 
 /// User block: blank separator line + orange `❯ ` prefix + NORMAL-colored text.
@@ -264,14 +299,14 @@ async fn run_visual_generation(
                                 ),
                             )
                         }
-                        Err(e) => page_notice(tui, &format!("error: {e}")),
+                        Err(e) => page_error(tui, &format!("error: {e}")),
                     }
                 }
-                Err(e) => page_notice(tui, &format!("visual generation failed ({e}) — try /show again")),
+                Err(e) => page_error(tui, &format!("visual generation failed ({e}) — try /show again")),
             }
         }
         Ok(AskOutcome::Cancelled) => page_notice(tui, "visual generation cancelled"),
-        Err(e) => page_notice(tui, &format!("error: {e}")),
+        Err(e) => page_error(tui, &format!("error: {e}")),
     };
     backend.reset_session(); // all paths — slug parity, ALWAYS runs (see notice_result above)
     notice_result
@@ -532,7 +567,7 @@ pub async fn run(
                             Ok(AskOutcome::Cancelled) | Err(_) => None,
                         };
                         let Some((slug, text)) = parsed else {
-                            page_notice(&mut tui, "suggestion failed — type a topic")?;
+                            page_error(&mut tui, "suggestion failed — type a topic")?;
                             continue;
                         };
                         if !text.is_empty() {
@@ -715,7 +750,7 @@ pub async fn run(
             backend.reset_session();
             page_notice(&mut tui, "opening turn cancelled")?;
         }
-        Err(e) => page_notice(&mut tui, &format!("opening turn skipped: {e}"))?,
+        Err(e) => page_error(&mut tui, &format!("opening turn skipped: {e}"))?,
     }
 
     let mut watching = true;
@@ -723,9 +758,7 @@ pub async fn run(
         // Drain the buffer at the start of every iteration — notices that
         // accumulate outside maybe_compact, like a transcript write error,
         // should never be lost either.
-        for m in ui::drain_tui_notices() {
-            page_notice(&mut tui, &m)?;
-        }
+        flush_notices(&mut tui)?;
         draw(&mut tui, &editor, &Status::Idle, last_tokens, window, Some(watching))?;
         tokio::select! {
             maybe_ev = events.next() => {
@@ -803,7 +836,7 @@ pub async fn run(
                         let outgoing = if crate::is_exam_command(&line) {
                             page_user_echo(&mut tui, "/exam")?;
                             if !crate::topic_has_goal(project_root, global, &topic) {
-                                page_notice(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
+                                page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
                                 continue;
                             }
                             progress::exam_prompt(&topic)
@@ -840,9 +873,9 @@ pub async fn run(
                                 // session is half-done — don't resume it, the next call should go
                                 // with the full transcript.
                                 backend.reset_session();
-                                page_notice(&mut tui, "response cancelled — your message is kept, continue if you like")?;
+                                page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
                             }
-                            Err(e) => page_notice(&mut tui, &format!("error: {e}"))?,
+                            Err(e) => page_error(&mut tui, &format!("error: {e}"))?,
                         }
                     }
                 }
@@ -882,7 +915,7 @@ pub async fn run(
                                 crate::maybe_compact(backend, &mut session, project_root, tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
-                            Err(e) => page_notice(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
+                            Err(e) => page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
                 }
@@ -892,9 +925,7 @@ pub async fn run(
     // Drain the last iteration's notices right before exit — so a transcript
     // warning that lands in the buffer on the /quit or Exit path is still seen
     // while the TUI is up.
-    for m in ui::drain_tui_notices() {
-        page_notice(&mut tui, &m)?;
-    }
+    flush_notices(&mut tui)?;
     Ok(Some((session, recorder, lock))) // Tui drop → restore
 }
 
@@ -941,6 +972,26 @@ mod tests {
         let total: usize = lines.iter().map(|l| l.chars().filter(|c| *c == 'a').count()).sum();
         assert_eq!(total, 50, "hiçbir karakter kaybolmaz");
         assert!(t.lines.len() >= 4, "birden çok görsel satıra bölündü: {}", t.lines.len());
+    }
+
+    #[test]
+    fn notice_layers_carry_glyph_and_color() {
+        // info: `·` dim, no hard fg color (survives light/dark).
+        let n = notice_line("resuming: rust");
+        assert!(line_text(&n.lines[0]).starts_with("· "));
+        assert!(line_text(&n.lines[0]).contains("resuming: rust"));
+
+        // warn: `⚠` amber (theme::WARN index), text verbatim.
+        let w = warn_line("context filling up");
+        assert!(line_text(&w.lines[0]).starts_with("⚠ "));
+        let wfg = w.lines[0].spans.iter().find_map(|s| s.style.fg);
+        assert_eq!(wfg, Some(theme::WARN));
+
+        // error: `✗` red (theme::ERROR index), text verbatim.
+        let e = error_line("no goal set for this topic");
+        assert!(line_text(&e.lines[0]).starts_with("✗ "));
+        let efg = e.lines[0].spans.iter().find_map(|s| s.style.fg);
+        assert_eq!(efg, Some(theme::ERROR));
     }
 
     #[test]
