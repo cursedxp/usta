@@ -13,6 +13,7 @@ mod history;
 mod index;
 mod input;
 mod materials;
+mod migrate;
 mod progress;
 mod session;
 mod tokens;
