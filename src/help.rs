@@ -19,6 +19,7 @@ pub fn help_text() -> &'static str {
      \x20\x20/watch on|off    file-feedback companion (on by default)\n\
      \x20\x20/show [topic]    animated visual explainer (opens in browser)\n\
      \x20\x20/exam            goal mode: timed mock exam from your map\n\
+     \x20\x20/game on|off     XP, levels, badges (ADHD-safe)\n\
      \x20\x20/help            this help\n\
      \x20\x20/quit            end the session\n\
      \n\
@@ -57,7 +58,7 @@ mod tests {
     #[test]
     fn help_text_lists_shortcuts_commands_and_cli() {
         let h = help_text();
-        for needle in ["Ctrl+J", "Esc", "↑ / ↓", "/watch on|off", "/show [topic]", "/exam", "/help", "/quit", "usta reset --factory", "usta topics", "usta stats"] {
+        for needle in ["Ctrl+J", "Esc", "↑ / ↓", "/watch on|off", "/show [topic]", "/exam", "/game on|off", "/help", "/quit", "usta reset --factory", "usta topics", "usta stats"] {
             assert!(h.contains(needle), "help_text missing: {needle}");
         }
     }

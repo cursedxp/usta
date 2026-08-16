@@ -183,6 +183,19 @@ Roadmap #7: hedefli (GOAL modlu) öğrenmede gerçek prova mekanizması. `/exam`
 
 Tasarım detayı: `docs/superpowers/specs/2026-08-15-mock-exam-design.md`.
 
+## 4.18 Gamification Modu (v0.17)
+
+Roadmap #8: opt-in oyunlaştırma — ADHD beyni için görünür dopamin döngüsü. Anlatı tamamen prompt/TEACHING katmanında; kabuk yalnız toggle kalıcılığı + açılış streak beslemesi yapar ("ince kabuk").
+
+- **Toggle + kalıcılık:** `/game on|off` USER.md `## Tercihler` bölümüne `- gamification: on|off` satırını yazar (kabuk-yönetimli `set_game_pref` — idempotent, dosyanın diğer içeriğini bozmaz). `/game` (argümansız) = durum bildirimi, **LLM'e gitmez**. On/Off `/exam` ile aynı enjeksiyon desenini kullanır: satır `[GAME MODE ON/OFF]` bilgi turuyla değiştirilip normal ask akışına bırakılır → model TEACHING.md kurallarını o noktadan itibaren uygular.
+- **Anlatıyı model yapar, kabuk saymaz:** XP müfredat durumlarından (görüldü 10 · oturdu 25 · derinleşildi 50) + süreç puanlarından (oturum +5, tahmin +2, egzersiz teslimi +10 — doğruluktan bağımsız) türetilir; seviye eşikleri 0/100/250/500/1000/2000 (Çırak → Usta); rozetler gap kapanışı / ilk egzersiz / 7-gün streak / ilk boss; `/exam` = boss fight.
+- **Açılış [GAME] beslemesi:** oyun açıkken kabuk açılış turuna `history.md`'den tek satır ekler (`game_streak_line`): streak>0 → `streak: N day(s) (longest M)`; kırık seri → yalnız `longest streak: M day(s)`. **ADHD-safe kod garantisi:** `streak: 0` yapısal olarak üretilemez (test-kilitli) — bir prompt kuralı değil, kabuk garantisi.
+- **Kapanış koruması:** `closing_prompt` profil kuralına tek cümle — `## Tercihler` bölümü kabuk-yönetimli, olduğu gibi korunur.
+- **Kural evi: TEACHING.md `## Gamification`** (embedded, pedagoji katmanı — GOAL.md değil; yalnız `- gamification: on` iken aktif, kapalıyken tek oyun kelimesi yok). DOZ: kilometre taşında tek satır, her mesajda skor YOK. Overjustification bekçisi: puan süreçte, ceza mekaniği yok.
+- **Kapsam dışı:** kabuğun XP hesabı/persist'i, lider tablosu, görsel rozet, ayrı oyun-veri dosyası (seviye müfredattan türetilir — idempotent).
+
+Tasarım detayı: `docs/superpowers/specs/2026-08-15-gamification-design.md`.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -279,6 +292,7 @@ usta/
 - **Arayüz — inline TUI (v0.10):** interaktif yol Claude Code tarzı ratatui `Viewport::Inline`'a taşındı — alt bölge (canlı girdi kutusu + durum satırı: spinner + bağlam göstergesi) sürekli çizilir, kalıcı içerik (açılış kutusu, Usta yanıtları, dosya feedback'i) `insert_before` ile normal **scrollback**'e iner. **Alternate screen YOK** — terminal geçmişi korunur (yukarı kaydır/kopyala). Girdi rustyline yerine crossterm `EventStream` + `tui-input`; LLM beklerken iç `select!` spinner döndürür, Enter kilitli (tek turn). v0.5'in `●`/`■`/markdown görsel dili korundu ama artık TUI akışında yaşar. **Plain yol (`ui::is_plain()`: TTY yok / `NO_COLOR`) birebir eski davranış** — rustyline döngüsü aynen; TUI hiç açılmaz (pipe/CI/test güvenli). Kompaksiyon/flush çıktısı TUI'de `TUI_ACTIVE` gate ile izole (raw-mode'da stdout kirletmez; spinner no-op, notice buffer→viewport). Detay tasarım: `docs/superpowers/specs/2026-08-07-tui-interface-design.md`.
 - **İlerleme özeti (v0.15):** `history.md` global ve append-only — proje-lokal değil, çünkü streak "herhangi bir konu"da ardışık gündür (izolasyon ilkesine istisna, çünkü motivasyon sinyali konu-üstü). `current streak: 0` yasağı kod seviyesinde zorlanır (`render_stats` saf fonksiyonu test-kilitli) — ADHD-safe ton bir prompt kuralı değil, kabuk garantisi. Sürüm: `0.15.0`.
 - **Deneme sınavı (v0.16):** `/exam` statik intercept değil, prompt-enjeksiyon komutu — kabuk yalnız hedef kapısını tutar (`## Hedef` yoksa LLM'e hiç gitmez), sınavın kendisi (soru üretimi, tek-soru akışı, askıya alınan ipucu merdiveni, skor + kırılım) tamamen `exam_prompt` enjeksiyonu ve GOAL.md `## Mock Exams` kuralları üzerinden LLM'de akar — "ince kabuk" ilkesi korundu. Sürüm: `0.16.0`.
+- **Gamification (v0.17):** `/game` statik intercept değil, `/exam` gibi prompt-enjeksiyon komutu — kabuk yalnız toggle kalıcılığını (USER.md `## Tercihler`, `set_game_pref` idempotent) ve açılış streak satırını (`game_streak_line`; `streak: 0` yapısal olarak üretilemez — ADHD-safe kabuk garantisi) tutar; XP/seviye/rozet anlatısı tamamen TEACHING.md `## Gamification` kuralları üzerinden LLM'de akar ("ince kabuk"). Sürüm: `0.17.0`.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
