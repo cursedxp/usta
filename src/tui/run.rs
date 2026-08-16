@@ -455,7 +455,7 @@ pub async fn run(
     // `usta start "JavaScript Basics"` works). If no argument, show the identity
     // welcome + ask via the input box.
     let had_topic_arg = topic_arg.is_some();
-    let mut resumed = false; // whether the resume flow was chosen — triggers the full-mode welcome
+    let mut resumed = false; // whether the resume flow was chosen — triggers the identity-free continuation panel
     // The RAW text from the user's topic entry — carried into the new-topic intro
     // turn as the "first answer"; reducing it to a slug and discarding it would
     // force the model to re-ask what was already said. Not used in the resume flow.
@@ -592,7 +592,7 @@ pub async fn run(
                     }
                     Some(crate::TopicChoice::Resume(t)) => {
                         page_notice(&mut tui, &format!("resuming: {t}"))?;
-                        resumed = true; // for the full-mode welcome below
+                        resumed = true; // for the continuation panel below
                         break t;
                     }
                     Some(crate::TopicChoice::New(raw)) => {
@@ -620,7 +620,7 @@ pub async fn run(
                         };
                         // If the LLM/short slug happens to match a local topic, this also
                         // counts as RESUME (spec K2): the notice becomes "resuming", the
-                        // full-mode welcome is printed, NO confirmation.
+                        // identity-free continuation panel is printed, NO confirmation.
                         if local.contains(&slug) {
                             page_notice(&mut tui, &format!("resuming: {slug}"))?;
                             resumed = true;
@@ -687,11 +687,9 @@ pub async fn run(
         }
     }
 
-    // Welcome: if the topic was known upfront (an arg was given) OR resume was
-    // chosen, the full-mode learning-status box is printed. On resume, the
-    // identity welcome was already printed inside ask_topic; the learning-status
-    // box is added on top of it (two boxes stacked — similar to Claude Code's
-    // flow). On a purely new topic, only the identity welcome remains.
+    // Welcome: dispatch between the full-mode box and the identity-free resume
+    // panel — see `welcome::render_for_entry`'s doc comment for why the two
+    // entry paths render differently.
     if had_topic_arg || resumed {
         let data = welcome::gather(
             read(global.join("USER.md")).as_deref(),
@@ -704,7 +702,13 @@ pub async fn run(
             read(global.join("learner/history.md")).as_deref(),
         );
         let w = current_width(&tui);
-        page(&mut tui, welcome::render_welcome(&data, w))?;
+        // `None` only on the resume path with nothing recorded yet (Finding 1,
+        // v0.21 review) — the `resuming: <topic>` notice already printed by the
+        // topic-entry loop stands on its own; skip the panel rather than print
+        // an empty frame.
+        if let Some(text) = welcome::render_for_entry(had_topic_arg, &data, w) {
+            page(&mut tui, text)?;
+        }
     }
 
     // Opening drill / intro (the TUI counterpart of main.rs's plain path). If the
