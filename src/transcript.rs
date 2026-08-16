@@ -51,6 +51,22 @@ pub fn find_unfinished(project_root: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Delete the given half-finished session records. Only ever called with the
+/// list produced by `find_unfinished` — never touches `.done` files by construction.
+/// Errors are collected, not fatal: a leftover record must never block startup.
+#[allow(dead_code)] // wired into the startup delete branch in the next task
+pub fn delete_unflushed(files: &[PathBuf]) -> (usize, Vec<String>) {
+    let mut deleted = 0;
+    let mut errors = Vec::new();
+    for f in files {
+        match std::fs::remove_file(f) {
+            Ok(()) => deleted += 1,
+            Err(e) => errors.push(format!("{}: {e}", f.display())),
+        }
+    }
+    (deleted, errors)
+}
+
 /// Read a transcript file written by `Recorder` (`{"role","text"}` per line)
 /// and reconstruct it as `Message` history, preserving order. Any line that
 /// fails to parse, or carries a role other than "user"/"assistant", fails
@@ -250,6 +266,26 @@ mod tests {
         assert!(done.ends_with("x-20260807-1030.done.jsonl"));
         assert!(done.exists());
         assert!(find_unfinished(&base).is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn delete_unflushed_removes_only_given_files_reports_errors() {
+        let base = std::env::temp_dir().join(format!("usta_transcript_del_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let sdir = base.join(".usta/sessions");
+        std::fs::create_dir_all(&sdir).unwrap();
+        std::fs::write(sdir.join("a-1.jsonl"), "x").unwrap();
+        std::fs::write(sdir.join("b-2.jsonl"), "x").unwrap();
+        std::fs::write(sdir.join("c-3.done.jsonl"), "x").unwrap();
+
+        let files = vec![sdir.join("a-1.jsonl"), sdir.join("b-2.jsonl"), sdir.join("yok.jsonl")];
+        let (deleted, errors) = delete_unflushed(&files);
+        assert_eq!(deleted, 2);
+        assert_eq!(errors.len(), 1);
+        assert!(!sdir.join("a-1.jsonl").exists());
+        assert!(sdir.join("c-3.done.jsonl").exists()); // .done untouched
 
         let _ = std::fs::remove_dir_all(&base);
     }
