@@ -480,11 +480,11 @@ async fn run_plain_loop(
                                 maybe_compact(backend, session, project_root, tokens).await;
                                 trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
                             }
-                            // Deleted-before-we-read-it (e.g. a tool's transient temp file
-                            // that came and went between the watcher event and the debounce
-                            // flush) — not the user's business, skip silently.
-                            Err(e) if is_not_found(&e) => {}
-                            // Other failures (binary/permission/etc.) — the REPL survives,
+                            // Deleted-before-we-read-it (a tool's transient temp file) or
+                            // binary content (an image saved into the project) — not the
+                            // user's business, skip silently.
+                            Err(e) if is_silent_skip(&e) => {}
+                            // Other failures (permission/etc.) — the REPL survives,
                             // but the user still sees the warn.
                             Err(e) => ui::warn(&format!("file feedback skipped: {}: {e}", path.display())),
                         }
@@ -1804,14 +1804,21 @@ pub(crate) fn is_exercise_path(project_root: &Path, path: &Path) -> bool {
     rel.components().any(|c| c.as_os_str() == "exercises")
 }
 
-/// True if `e`'s cause chain contains an `io::ErrorKind::NotFound`. Used to
-/// tell "the file died between the watcher event and the feedback read"
-/// (silent — not the user's business, e.g. a tool's transient temp file)
-/// from a real read failure the user should see.
-pub(crate) fn is_not_found(e: &anyhow::Error) -> bool {
+/// True if `e`'s cause chain contains an io error the user shouldn't be
+/// bothered with — a read failure that means "there is no text content here",
+/// not "something is wrong":
+/// - `NotFound`: the file died between the watcher event and the feedback
+///   read (e.g. a tool's transient temp file).
+/// - `InvalidData`: non-UTF-8 content — a binary (image, archive, …) dropped
+///   into the project. Content-based, so the domain-agnostic principle holds:
+///   any TEXT file of any extension is still watched (a GTM brief is a valid
+///   deliverable), binary never is.
+///
+/// Everything else (PermissionDenied, …) is a real failure the user should see.
+pub(crate) fn is_silent_skip(e: &anyhow::Error) -> bool {
     e.chain()
         .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .any(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+        .any(|io_err| matches!(io_err.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData))
 }
 
 /// Build the injected user-turn for a watched-file change. Exercise files get
@@ -2976,17 +2983,41 @@ mod tests {
     }
 
     #[test]
-    fn is_not_found_true_for_wrapped_not_found() {
+    fn is_silent_skip_true_for_wrapped_not_found() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
         let e = anyhow::Error::new(io_err).context("reading watched file");
-        assert!(is_not_found(&e));
+        assert!(is_silent_skip(&e));
     }
 
     #[test]
-    fn is_not_found_false_for_wrapped_permission_denied() {
+    fn is_silent_skip_true_for_wrapped_invalid_data() {
+        // Binary content (an image dropped into the project) → read_to_string
+        // fails with InvalidData. Not the user's business — silent, like NotFound.
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, "stream did not contain valid UTF-8");
+        let e = anyhow::Error::new(io_err).context("reading watched file");
+        assert!(is_silent_skip(&e));
+    }
+
+    #[test]
+    fn is_silent_skip_false_for_wrapped_permission_denied() {
+        // A real read failure the user SHOULD see — must keep warning.
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
         let e = anyhow::Error::new(io_err).context("reading watched file");
-        assert!(!is_not_found(&e));
+        assert!(!is_silent_skip(&e));
+    }
+
+    #[test]
+    fn binary_file_read_error_classifies_as_silent_skip() {
+        // Integration-style: a real non-UTF-8 byte file through the same read
+        // call handle_file_change uses must classify as silent.
+        let dir = std::env::temp_dir().join(format!("usta-binary-skip-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("image.png");
+        std::fs::write(&p, [0x89u8, 0x50, 0x4E, 0x47, 0xFF, 0xFE, 0x00, 0x9C]).unwrap();
+        let err = std::fs::read_to_string(&p).expect_err("non-UTF-8 must fail read_to_string");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(is_silent_skip(&anyhow::Error::new(err)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

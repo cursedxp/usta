@@ -923,6 +923,10 @@ pub async fn run(
                                 crate::maybe_compact(backend, &mut session, project_root, tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
+                            // Same silent-skip classes as the plain path (main.rs):
+                            // vanished temp file (NotFound) or binary content
+                            // (InvalidData) — no noise for either.
+                            Err(e) if crate::is_silent_skip(&e) => {}
                             Err(e) => page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
