@@ -3,10 +3,14 @@
 //! legacy Turkish tokens are allowed to appear in src/.
 //!
 //! Directory scope (verified against progress.rs/brain.rs/transcript.rs/config.rs,
-//! spec §4/§7): global root `~/.config/usta/` holds USER.md/SOUL.md/RULES.md/
-//! TEACHING.md/GOAL.md/MATERIAL.md/PREDICTION.md/GAMIFICATION.md/USTA.md directly
-//! (root scan) + `approaches/*.md` + `learner/*.md` (index.md, history.md — no
-//! nested subdirs globally, curriculum/progress moved project-local in v0.6).
+//! spec §4 "nereye bakar"/§7): global root `~/.config/usta/` — at the root
+//! level ONLY `USER.md` (the user-owned profile). The other root files
+//! (SOUL.md, RULES.md, TEACHING.md, GOAL.md, MATERIAL.md, PREDICTION.md,
+//! GAMIFICATION.md, USTA.md) are code-owned templates resynced from the
+//! English embeds — migrating them would only create pointless `.bak`/`.tmp`
+//! churn, so they are deliberately out of scope. Subdirs stay in scope:
+//! `approaches/*.md` + `learner/*.md` (index.md, history.md — no nested
+//! subdirs globally, curriculum/progress moved project-local in v0.6).
 //! Project `.usta/` holds `approaches/*.md` + `learner/progress/<topic>.md` +
 //! `learner/curriculum/<topic>.md` + `sessions/<topic>-<stamp>.jsonl` (raw
 //! transcripts — `.jsonl`, not `.md`; each line is one escaped JSON record, so
@@ -117,9 +121,15 @@ fn migrate_file(path: &Path) -> Result<bool> {
 /// Walk both trees; returns the number of migrated files.
 pub fn run(global: &Path, project_usta: Option<&Path>) -> Result<usize> {
     let mut n = 0;
+    // Global ROOT: exactly USER.md — never a `*.md` glob. The sibling root
+    // files are code-owned templates (see module doc); sweeping them in would
+    // produce .bak churn for files the scaffold resyncs anyway (spec §4).
+    let user_md = global.join("USER.md");
+    if user_md.is_file() && migrate_file(&user_md)? {
+        n += 1;
+    }
     // (root, subdir relative to root, file extension to touch)
     let mut targets: Vec<(PathBuf, &str, &str)> = vec![
-        (global.to_path_buf(), "", "md"),
         (global.to_path_buf(), "approaches", "md"),
         (global.to_path_buf(), "learner", "md"),
     ];
@@ -130,7 +140,7 @@ pub fn run(global: &Path, project_usta: Option<&Path>) -> Result<usize> {
         targets.push((p.to_path_buf(), "sessions", "jsonl"));
     }
     for (root, sub, ext) in targets {
-        let dir = if sub.is_empty() { root } else { root.join(sub) };
+        let dir = root.join(sub);
         let Ok(rd) = fs::read_dir(&dir) else { continue };
         for e in rd.flatten() {
             let p = e.path();
@@ -218,13 +228,42 @@ mod tests {
     fn run_second_pass_returns_zero() {
         let (global, project_usta) = temp_pair("second_pass");
         fs::write(global.join("USER.md"), "## Tercihler\n- gamification: on\n").unwrap();
+        let session = project_usta.join("sessions").join("rust-1.jsonl");
         fs::write(
-            project_usta.join("sessions").join("rust-1.jsonl"),
+            &session,
             "{\"role\":\"assistant\",\"text\":\"===DOSYA: rust.md===\\n## Seviye\\northa\"}\n",
         )
         .unwrap();
 
         assert_eq!(run(&global, Some(&project_usta)).unwrap(), 2);
         assert_eq!(run(&global, Some(&project_usta)).unwrap(), 0);
+
+        // The migrated session record must still be valid JSON — the marker
+        // substitution is plain ASCII and may never corrupt the escaping.
+        let migrated = fs::read_to_string(&session).unwrap();
+        let line = migrated.lines().next().unwrap();
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            v["text"].as_str().unwrap(),
+            "===FILE: rust.md===\n## Seviye\northa"
+        );
+    }
+
+    #[test]
+    fn code_owned_root_files_out_of_scope_only_user_md_migrated() {
+        let (global, project_usta) = temp_pair("root_scope");
+        // Code-owned template at the global root with Turkish tokens — must NOT
+        // be touched (resynced from English embeds; migrating = .bak churn).
+        let soul_tr = "## Tercihler\n- a: oturdu\n";
+        fs::write(global.join("SOUL.md"), soul_tr).unwrap();
+        // User-owned profile — the only root-level file in migration scope.
+        fs::write(global.join("USER.md"), "## Tercihler\n- gamification: on\n").unwrap();
+
+        assert_eq!(run(&global, Some(&project_usta)).unwrap(), 1); // USER.md only
+        assert_eq!(fs::read_to_string(global.join("SOUL.md")).unwrap(), soul_tr);
+        assert!(!super::sibling(&global.join("SOUL.md"), ".bak").exists());
+        let user = fs::read_to_string(global.join("USER.md")).unwrap();
+        assert!(user.contains("## Preferences"));
+        assert!(super::sibling(&global.join("USER.md"), ".bak").exists());
     }
 }
