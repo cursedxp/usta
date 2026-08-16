@@ -15,6 +15,7 @@ mod input;
 mod materials;
 mod progress;
 mod session;
+mod tokens;
 mod transcript;
 mod tui;
 mod ui;
