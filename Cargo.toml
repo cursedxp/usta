@@ -1,6 +1,6 @@
 [package]
 name = "usta"
-version = "0.18.1"
+version = "0.18.2"
 edition = "2021"
 description = "Terminal'de çalışan, Opus destekli Socratic öğrenim mentoru"
 
