@@ -56,7 +56,7 @@ pub const G_PROMPT: &str = "❯"; // your input, echoed into scrollback (orange 
 
 /// Thinking spinner frames — Braille, ~120 ms cadence. Kept as the existing
 /// four-frame set (matches the shipped `ui::Spinner` and status line).
-pub const SPINNER: [&str; 4] = ["⠋", "⠙", "⠸", "⠴"];
+pub const SPINNER: [&str; 4] = ["⠋", "⠙", "⢸", "⢴"];
 
 // ── Ready-made styles — helpers so no module hand-rolls `.fg(...)` ────────────
 /// Info/ambient: dim, no explicit color (survives dark & light themes).
@@ -126,5 +126,7 @@ mod tests {
     fn spinner_has_four_frames() {
         assert_eq!(SPINNER.len(), 4);
         assert!(SPINNER.iter().all(|f| !f.is_empty()));
+        // Claude Design mockup 01 legend frames (Anil onaylı).
+        assert_eq!(SPINNER, ["⠋", "⠙", "⢸", "⢴"]);
     }
 }
