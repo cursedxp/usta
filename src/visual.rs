@@ -183,7 +183,25 @@ fn match_marker_line(line: &str) -> Option<String> {
 /// an empty assistant message would make the NEXT API turn fail (the
 /// Messages API rejects empty content). The stand-in doubles as useful
 /// context: future turns can see a visual was shown here.
+/// Strip a leading speaker glyph the model may have echoed at the very start of
+/// its reply. The shell already draws the speaker mark (orange `●`, theme
+/// `G_BRAND`); a model that prefixes its own text with `●` yields a doubled
+/// bullet — the model's one renders uncolored/white. Only the FIRST glyph (plus
+/// one optional following space) at the absolute start is removed; `●` bullets
+/// inside the body are left untouched. Pure function, returns a borrowed slice.
+pub(crate) fn strip_speaker_glyph(text: &str) -> &str {
+    match text.strip_prefix('●') {
+        Some(rest) => rest.strip_prefix(' ').unwrap_or(rest),
+        None => text,
+    }
+}
+
 pub fn extract_show_marker(reply: &str) -> (String, Option<String>) {
+    // Defense against a model that echoes the speaker bullet — the shell draws
+    // it, so a leading `●` from the model would double it. Applied here because
+    // every reply path (normal turn, feedback turn, plain path) funnels through
+    // this function before the text is shown or stored.
+    let reply = strip_speaker_glyph(reply);
     let lines: Vec<&str> = reply.lines().collect();
     let Some(last) = lines.last() else {
         return (reply.to_string(), None);
@@ -388,6 +406,45 @@ mod tests {
         let s = p.to_string_lossy();
         assert!(s.starts_with("/proj/.usta/visuals/rust/"));
         assert!(s.ends_with(".html") && s.contains("how-ownership-works"));
+    }
+
+    // --- strip_speaker_glyph -------------------------------------------
+
+    #[test]
+    fn strip_speaker_glyph_removes_leading_glyph_with_space() {
+        assert_eq!(strip_speaker_glyph("● metin"), "metin");
+    }
+
+    #[test]
+    fn strip_speaker_glyph_removes_leading_glyph_no_space() {
+        assert_eq!(strip_speaker_glyph("●metin"), "metin");
+    }
+
+    #[test]
+    fn strip_speaker_glyph_leaves_mid_text_glyph_untouched() {
+        assert_eq!(strip_speaker_glyph("metin ● ortada"), "metin ● ortada");
+    }
+
+    #[test]
+    fn strip_speaker_glyph_leaves_glyphless_text_untouched() {
+        assert_eq!(strip_speaker_glyph("düz bir cümle"), "düz bir cümle");
+    }
+
+    #[test]
+    fn strip_speaker_glyph_only_first_glyph_stripped() {
+        // A second glyph right after the first (+space) is body content, kept.
+        assert_eq!(strip_speaker_glyph("● ● iki"), "● iki");
+    }
+
+    #[test]
+    fn extract_show_marker_strips_leading_speaker_glyph() {
+        // Integration lock: the shared reply chokepoint drops a model-echoed bullet.
+        let (clean, topic) = extract_show_marker("● TCP is a handshake.\n[[show: tcp handshake]]");
+        assert_eq!(clean, "TCP is a handshake.");
+        assert_eq!(topic, Some("tcp handshake".to_string()));
+
+        let (clean2, _) = extract_show_marker("●No space here.");
+        assert_eq!(clean2, "No space here.");
     }
 
     // --- extract_show_marker (Görev 4) ---------------------------------
