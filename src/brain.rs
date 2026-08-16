@@ -103,6 +103,16 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
 
     read_section(&global.join("USER.md"), "USER.md", &mut parts);
 
+    // GAMIFICATION is only loaded when the user's USER.md has opted in
+    // (`- gamification: on`, shell-managed via `/game on`) — saves the XP/level/badge
+    // rules from a session where the player never turned the game on (spec §3
+    // conditional line, same pattern as the GOAL block above). Exact-line match, not
+    // a naive `contains`, mirrors `game_pref` in main.rs.
+    let user_md = std::fs::read_to_string(global.join("USER.md")).unwrap_or_default();
+    if user_md.lines().any(|l| l.trim() == "- gamification: on") {
+        read_section(&global.join("GAMIFICATION.md"), "GAMIFICATION.md", &mut parts);
+    }
+
     // User-facing project context: definition + status live in the VISIBLE
     // `mentor/` dir at the project root (not under `.usta/`) so the user can
     // read and hand-edit them (spec: mentor layer). Loaded right after the
@@ -210,6 +220,22 @@ mod tests {
 
         let sys2 = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys2.contains("GOAL-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn gamification_loaded_only_when_user_md_opts_in() {
+        let (global, _project) = temp_pair("gamification");
+        fs::write(global.join("GAMIFICATION.md"), "GAMIFICATION-İÇERİK").unwrap();
+        fs::write(global.join("USER.md"), "# Profil\n\n## Tercihler\n- gamification: off\n").unwrap();
+
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(!sys.contains("GAMIFICATION-İÇERİK"));
+
+        fs::write(global.join("USER.md"), "# Profil\n\n## Tercihler\n- gamification: on\n").unwrap();
+        let sys2 = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(sys2.contains("GAMIFICATION-İÇERİK"));
 
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }

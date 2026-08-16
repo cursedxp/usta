@@ -375,7 +375,9 @@ async fn run_plain_loop(
                         progress::exam_prompt(topic)
                     } else if let Some(cmd) = game_cmd {
                         match cmd {
-                            GameCmd::On => "[GAME MODE ON] Gamification is now ON — apply the Gamification rules from TEACHING.md from this point on.".to_string(),
+                            GameCmd::On => game_on_turn(
+                                &std::fs::read_to_string(global.join("GAMIFICATION.md")).unwrap_or_default(),
+                            ),
                             GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
                             GameCmd::Status => line, // unreachable: Status returns above
                         }
@@ -949,6 +951,21 @@ pub(crate) fn game_streak_line(global: &Path, today: &str) -> Option<String> {
         Some(format!("longest streak: {longest} day(s)"))
     } else {
         None
+    }
+}
+
+/// Turn text for `/game on`. Embeds the GAMIFICATION.md rules directly so the
+/// model doesn't have to recall them from a TEACHING.md reference — pure so it's
+/// unit-testable without touching disk; callers read GAMIFICATION.md themselves.
+/// Empty/whitespace-only rules (file missing/unreadable) fall back to the old
+/// short instruction so a broken read never breaks the `/game on` turn.
+pub(crate) fn game_on_turn(rules: &str) -> String {
+    let rules = rules.trim();
+    if rules.is_empty() {
+        "[GAME MODE ON] Gamification is now ON — apply the Gamification rules from this point on."
+            .to_string()
+    } else {
+        format!("[GAME MODE ON] Gamification is now ON — apply these rules from this point on:\n{rules}")
     }
 }
 
@@ -2647,6 +2664,20 @@ mod tests {
         assert!(parse_game_command("/game x").is_none());
         assert!(parse_game_command("/gamer").is_none());
         assert!(parse_game_command("game on").is_none());
+    }
+
+    #[test]
+    fn game_on_turn_embeds_rules_or_falls_back_when_empty() {
+        let turn = game_on_turn("- **XP** ... · **Levels** ...");
+        assert!(turn.contains("- **XP** ... · **Levels** ..."));
+
+        let fallback = game_on_turn("");
+        assert_eq!(
+            fallback,
+            "[GAME MODE ON] Gamification is now ON — apply the Gamification rules from this point on."
+        );
+        let fallback_whitespace = game_on_turn("   \n  ");
+        assert_eq!(fallback_whitespace, fallback);
     }
 
     #[test]

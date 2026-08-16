@@ -28,6 +28,11 @@ pub fn global_defaults() -> Vec<(&'static str, &'static str, Ownership)> {
             include_str!("../TEACHING.md"),
             Ownership::Code,
         ),
+        (
+            "GAMIFICATION.md",
+            include_str!("../GAMIFICATION.md"),
+            Ownership::Code,
+        ),
         ("GOAL.md", include_str!("../GOAL.md"), Ownership::Code),
         ("USER.md", include_str!("../USER.md"), Ownership::User),
         (
@@ -55,7 +60,7 @@ mod tests {
     #[test]
     fn returns_all_nonempty_files() {
         let defaults = global_defaults();
-        assert_eq!(defaults.len(), 9);
+        assert_eq!(defaults.len(), 10);
         for (rel, content, _) in defaults {
             assert!(!content.trim().is_empty(), "boş içerik: {rel}");
         }

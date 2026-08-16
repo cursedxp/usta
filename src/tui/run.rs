@@ -846,7 +846,9 @@ pub async fn run(
                         } else if let Some(cmd) = game_cmd {
                             // literal command already echoed in the /game block above
                             match cmd {
-                                crate::GameCmd::On => "[GAME MODE ON] Gamification is now ON — apply the Gamification rules from TEACHING.md from this point on.".to_string(),
+                                crate::GameCmd::On => crate::game_on_turn(
+                                    &std::fs::read_to_string(global.join("GAMIFICATION.md")).unwrap_or_default(),
+                                ),
                                 crate::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
                                 crate::GameCmd::Status => line.clone(), // unreachable: Status returns above
                             }
