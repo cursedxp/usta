@@ -463,7 +463,7 @@ pub async fn run(
     let topic = match topic_arg {
         Some(t) => {
             intro = Some(t.clone());
-            crate::slugify_topic(&t)
+            crate::topic::slugify_topic(&t)
         }
         None => {
             // Topic lists are computed here and passed to ask_topic:
@@ -540,13 +540,13 @@ pub async fn run(
                     page_notice(&mut tui, "that command works inside a session — pick a topic first")?;
                     continue;
                 }
-                match crate::interpret_topic_input(&raw, &local, project_known) {
+                match crate::topic::interpret_topic_input(&raw, &local, project_known) {
                     // SAFE FALLBACK: interpret only returns None when (input is empty +
                     // local is empty); ask_topic only produces the empty-Enter sentinel
                     // when local is non-empty, so this normally isn't reached. Its natural
                     // counterpart in the loop is "swallow, ask again" — this is the safe fallback.
                     None => {}
-                    Some(crate::TopicChoice::Suggest) => {
+                    Some(crate::topic::TopicChoice::Suggest) => {
                         // One-shot suggestion from mentor/PROJECT.md (spec: project-aware
                         // start). Same mechanics as the slug mini-session: single call,
                         // then ALWAYS reset.
@@ -556,14 +556,14 @@ pub async fn run(
                             &mut editor,
                             &mut events,
                             backend,
-                            &crate::start_suggest_system(),
+                            &crate::topic::start_suggest_system(),
                             &[Message::user(project_md.as_str())],
                             None,
                         )
                         .await;
                         backend.reset_session(); // suggestion chat must not leak into the session
                         let parsed = match outcome {
-                            Ok(AskOutcome::Reply(reply)) => crate::parse_start_suggestion(&reply.text),
+                            Ok(AskOutcome::Reply(reply)) => crate::topic::parse_start_suggestion(&reply.text),
                             Ok(AskOutcome::Cancelled) | Err(_) => None,
                         };
                         let Some((slug, text)) = parsed else {
@@ -590,29 +590,29 @@ pub async fn run(
                         }
                         page_notice(&mut tui, "cancelled — type a topic")?;
                     }
-                    Some(crate::TopicChoice::Resume(t)) => {
+                    Some(crate::topic::TopicChoice::Resume(t)) => {
                         page_notice(&mut tui, &format!("resuming: {t}"))?;
                         resumed = true; // for the continuation panel below
                         break t;
                     }
-                    Some(crate::TopicChoice::New(raw)) => {
+                    Some(crate::topic::TopicChoice::New(raw)) => {
                         // New-topic flow: ≤2 words → local slug; a sentence → LLM slug (spinner).
                         let slug = if raw.split_whitespace().count() <= 2 {
-                            crate::slugify_topic(&raw)
+                            crate::topic::slugify_topic(&raw)
                         } else {
                             let slug = match ask_live(
                                 &mut tui,
                                 &mut editor,
                                 &mut events,
                                 backend,
-                                &crate::slug_system(&local),
+                                &crate::topic::slug_system(&local),
                                 &[Message::user(raw.as_str())],
                                 None,
                             )
                             .await
                             {
-                                Ok(AskOutcome::Reply(reply)) => crate::finalize_slug(&raw, &reply.text),
-                                Ok(AskOutcome::Cancelled) | Err(_) => crate::slugify_topic(&raw),
+                                Ok(AskOutcome::Reply(reply)) => crate::topic::finalize_slug(&raw, &reply.text),
+                                Ok(AskOutcome::Cancelled) | Err(_) => crate::topic::slugify_topic(&raw),
                             };
                             // The slug mini-session must not carry over into the learning session (spec B1).
                             backend.reset_session();
@@ -633,7 +633,7 @@ pub async fn run(
                                 &mut tui,
                                 &editor,
                                 &mut events,
-                                &crate::new_topic_confirm_msg(&slug),
+                                &crate::topic::new_topic_confirm_msg(&slug),
                             )
                             .await?
                         {

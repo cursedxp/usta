@@ -99,7 +99,7 @@ pub fn visual_system() -> String {
 /// Target file: `.usta/visuals/<topic>/<timestamp>-<concept-slug>.html`.
 pub fn visual_path(project_root: &std::path::Path, topic: &str, concept: &str) -> std::path::PathBuf {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
-    let slug = crate::slugify_topic(concept);
+    let slug = crate::topic::slugify_topic(concept);
     project_root
         .join(".usta/visuals")
         .join(topic)
