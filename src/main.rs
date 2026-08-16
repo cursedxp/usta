@@ -809,11 +809,16 @@ pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     let value = if on { "- gamification: on" } else { "- gamification: off" };
     let new = if content.lines().any(|l| l.trim().starts_with("- gamification:")) {
-        content
+        let had_trailing_newline = content.ends_with('\n');
+        let mut rebuilt = content
             .lines()
             .map(|l| if l.trim().starts_with("- gamification:") { value } else { l })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        if had_trailing_newline && !rebuilt.ends_with('\n') {
+            rebuilt.push('\n');
+        }
+        rebuilt
     } else if content.contains("## Tercihler") {
         content.replace("## Tercihler", &format!("## Tercihler\n{value}"))
     } else {
@@ -2324,8 +2329,11 @@ mod tests {
         assert_eq!(c.matches("- gamification:").count(), 1);
         assert!(c.contains("## Kim")); // diğer içerik korunur
         assert!(c.contains("## Tercihler"));
+        assert!(c.ends_with('\n')); // trailing newline korunur (line-replace path)
         set_game_pref(&base, false).unwrap();
         assert!(!game_pref(&base));
+        let c2 = std::fs::read_to_string(base.join("USER.md")).unwrap();
+        assert!(c2.ends_with('\n')); // ikinci toggle'da da korunur
 
         let _ = std::fs::remove_dir_all(&base);
     }
