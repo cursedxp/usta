@@ -502,9 +502,9 @@ fn solo_box(title: &str, rows: Vec<Vec<Span<'static>>>, width: u16) -> Text<'sta
 /// box above, and repeating them was the bug this panel replaces. Its job is
 /// continuity: what you are picking up, when you were last here, how far
 /// along the map you are. Design: Claude Design f8cc2dc7 page 06, variant A.
-// Not wired into run.rs yet — Task 3 branches `resumed` to call this instead
-// of `render_welcome`. Until then it's only reachable from tests.
-#[allow(dead_code)]
+// Wired into run.rs (v0.21.0): the `resumed` branch calls this instead of
+// `render_welcome`, replacing the second identity-carrying frame that used
+// to print right after the one ask_topic already showed.
 pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
     let inner = total - 2;
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn version_aligned_with_spec() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.20.4");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.21.0");
     }
 
     fn plain_lines(t: &Text) -> Vec<String> {

@@ -687,11 +687,14 @@ pub async fn run(
         }
     }
 
-    // Welcome: if the topic was known upfront (an arg was given) OR resume was
-    // chosen, the full-mode learning-status box is printed. On resume, the
-    // identity welcome was already printed inside ask_topic; the learning-status
-    // box is added on top of it (two boxes stacked — similar to Claude Code's
-    // flow). On a purely new topic, only the identity welcome remains.
+    // Welcome: if the topic was known upfront (an arg was given), the
+    // full-mode learning-status box is printed — the identity welcome was
+    // never shown for this path, so this is the only frame. On resume, the
+    // identity welcome was already printed inside ask_topic, so printing the
+    // full-mode box again would repeat the logo/greeting/model/dir and the
+    // week/streak line a second time within a few rows — instead, a compact
+    // continuation panel (no identity) is printed to say what's being picked
+    // up, when it was last touched, and how far along the map it is.
     if had_topic_arg || resumed {
         let data = welcome::gather(
             read(global.join("USER.md")).as_deref(),
@@ -704,7 +707,11 @@ pub async fn run(
             read(global.join("learner/history.md")).as_deref(),
         );
         let w = current_width(&tui);
-        page(&mut tui, welcome::render_welcome(&data, w))?;
+        if had_topic_arg {
+            page(&mut tui, welcome::render_welcome(&data, w))?;
+        } else {
+            page(&mut tui, welcome::render_resume(&data, w))?;
+        }
     }
 
     // Opening drill / intro (the TUI counterpart of main.rs's plain path). If the
