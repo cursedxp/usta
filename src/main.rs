@@ -1133,11 +1133,33 @@ fn run_topics() -> Result<()> {
         println!("No saved topics — start with 'usta start <topic>'.");
         return Ok(());
     }
-    println!("Topic | Project | Last session");
-    for e in list {
-        println!("{} | {} | {}", e.topic, e.project.display(), e.date);
-    }
+    print!("{}", render_topics_table(&list));
     Ok(())
+}
+
+/// Pad `s` to visible width `w` (unicode-width — byte counting misaligns Turkish
+/// and path characters). Shared by the `stats`/`topics` column layouts.
+fn col_pad(s: &str, w: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    format!("{s}{}", " ".repeat(w.saturating_sub(s.width())))
+}
+
+/// Render the `usta topics` catalog as space-aligned columns with a single dim
+/// rule under the header (design tokens 06 / mockup 05). Pure — no I/O. The
+/// topic/project/date values are unchanged; only the layout is aligned.
+fn render_topics_table(entries: &[index::IndexEntry]) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let projects: Vec<String> = entries.iter().map(|e| e.project.display().to_string()).collect();
+    let topic_w = entries.iter().map(|e| e.topic.width()).chain(std::iter::once("Topic".width())).max().unwrap_or(5);
+    let proj_w = projects.iter().map(|p| p.width()).chain(std::iter::once("Project".width())).max().unwrap_or(7);
+    let last = "Last session";
+    let mut out = format!("{}  {}  {}\n", col_pad("Topic", topic_w), col_pad("Project", proj_w), last);
+    out.push_str(&"─".repeat(topic_w + 2 + proj_w + 2 + last.width()));
+    out.push('\n');
+    for (e, p) in entries.iter().zip(&projects) {
+        out.push_str(&format!("{}  {}  {}\n", col_pad(&e.topic, topic_w), col_pad(p, proj_w), e.date));
+    }
+    out
 }
 
 /// `usta stats` — this week's summary + streaks, read from the global session
@@ -1165,8 +1187,9 @@ fn render_stats(entries: &[history::Entry], today: &str) -> String {
     }
     let current = history::current_streak(entries, today);
     let mut out = String::from("This week (last 7 days)\n\n");
+    let topic_w = week.per_topic.iter().map(|t| unicode_width::UnicodeWidthStr::width(t.topic.as_str())).max().unwrap_or(0);
     for t in &week.per_topic {
-        out.push_str(&format!("  {}   {} session(s)", t.topic, t.sessions));
+        out.push_str(&format!("  {}   {} session(s)", col_pad(&t.topic, topic_w), t.sessions));
         if let (Some(from), Some(to)) = (t.map_from, t.map_to) {
             out.push_str(&format!("   map {from}% → {to}%"));
         }
@@ -1930,6 +1953,39 @@ mod tests {
         assert!(!out2.contains("settled"));
         assert!(!out2.contains("None"));
         assert!(!out2.contains("→"));
+    }
+
+    #[test]
+    fn render_topics_table_aligns_columns_with_header_rule() {
+        use std::path::PathBuf;
+        let entries = vec![
+            index::IndexEntry { topic: "rust".into(), project: PathBuf::from("~/projects/tokio-lab"), date: "2026-08-14".into() },
+            index::IndexEntry { topic: "kaynak-ingest".into(), project: PathBuf::from("~/work/ingest"), date: "2026-08-11".into() },
+        ];
+        let out = render_topics_table(&entries);
+        let lines: Vec<&str> = out.lines().collect();
+        // Header, a dim `─` rule, then the rows — content preserved.
+        assert!(lines[0].starts_with("Topic"));
+        assert!(lines[1].chars().all(|c| c == '─'), "header rule line: {:?}", lines[1]);
+        assert!(out.contains("rust"));
+        assert!(out.contains("~/projects/tokio-lab"));
+        assert!(out.contains("2026-08-11"));
+        // Columns align: every data row's project column (starts with ~) begins
+        // at the same character offset.
+        assert_eq!(lines[2].find('~'), lines[3].find('~'), "project column misaligned: {lines:#?}");
+    }
+
+    #[test]
+    fn render_stats_aligns_topic_column() {
+        let mk = |d: &str, t: &str| history::Entry { date: d.into(), topic: t.into(), map: None, settled: None };
+        // Two topics of different widths → the "session(s)" column must line up.
+        let out = render_stats(&[mk("2026-08-15", "rust"), mk("2026-08-15", "kaynak-ingest")], "2026-08-15");
+        // Only the per-topic rows (2-space indent) — NOT the "total:" footer line.
+        let sess_lines: Vec<&str> = out.lines().filter(|l| l.starts_with("  ") && l.contains("session(s)")).collect();
+        assert!(sess_lines.len() >= 2);
+        use unicode_width::UnicodeWidthStr;
+        let offsets: Vec<usize> = sess_lines.iter().map(|l| l.split_once("session(s)").map(|(a, _)| a.width()).unwrap()).collect();
+        assert!(offsets.windows(2).all(|w| w[0] == w[1]), "session(s) column misaligned: {sess_lines:#?}");
     }
 
     #[test]

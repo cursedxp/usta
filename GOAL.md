@@ -27,3 +27,8 @@ Goal rules:
 - Scoring: against the goal's passing threshold. Give a per-map-item breakdown; weak items become gap candidates and return to normal teaching AFTER the exam.
 - 'stop the exam' ends early — score what was answered.
 - The result goes into `## Hedef Durumu`'s measurement log at session close. Mock exams are the strongest retrieval practice — suggest one when the goal date approaches or the map nears completion.
+
+**Format (the shell does NOT parse exam state — YOU draw the card, so keep it exact):**
+- Open each question with a rule-edge header line: `── EXAM · <topic> ──────… Question N/M ──` — a light `─` rule that reads as a calm card edge, never a heavy box.
+- Under the header, show progress as filled/empty dots, e.g. `●●●○○○○○○○` (answered = filled `●`, remaining = empty `○`), followed by the answered count and the time budget.
+- End the scorecard with `N / M  ✓ pass — threshold T` (or `✗ fail`), then a per-map-item breakdown table: `map item | result (✓/✗) | note`, with a single light `─` rule under the header row. Weak items carry the word (`weak`/`shaky`), so a red/green-blind reader still reads the verdict.
