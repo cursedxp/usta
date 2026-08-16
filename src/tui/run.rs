@@ -535,7 +535,7 @@ pub async fn run(
                     return Ok(None); // quit without giving a topic
                 }
                 if crate::visual::parse_show_command(&raw).is_some()
-                    || crate::parse_watch_command(&raw).is_some()
+                    || crate::slash::parse_watch_command(&raw).is_some()
                 {
                     page_notice(&mut tui, "that command works inside a session — pick a topic first")?;
                     continue;
@@ -721,7 +721,7 @@ pub async fn run(
         .unwrap_or(true);
     let project_known = progress::project_md_path(project_root).exists();
     let opening = if has_progress {
-        let gs = crate::game_streak_line(global, today);
+        let gs = crate::slash::game_streak_line(global, today);
         let progress_content = read(progress::progress_path(project_root, &topic)).unwrap_or_default();
         let due = welcome::due_questions(&progress_content, today);
         let has_questions = welcome::drill_count(&progress_content) > 0;
@@ -786,9 +786,9 @@ pub async fn run(
                     Action::None => {}
                     Action::Exit => break,
                     Action::Submit(line) => {
-                        if let Some(cmd) = crate::parse_watch_command(&line) {
+                        if let Some(cmd) = crate::slash::parse_watch_command(&line) {
                             page_user_echo(&mut tui, &line)?;
-                            let (next, msg) = crate::apply_watch(cmd, watching);
+                            let (next, msg) = crate::slash::apply_watch(cmd, watching);
                             watching = next;
                             page_notice(&mut tui, msg)?;
                             continue;
@@ -815,21 +815,21 @@ pub async fn run(
                         // /game: toggle persists to USER.md. Status is a local notice (never
                         // reaches the LLM). On/Off flip the pref + inject a mode-switch turn
                         // (swapped below) that flows through the normal ask — same shape as /exam.
-                        let game_cmd = crate::parse_game_command(&line);
+                        let game_cmd = crate::slash::parse_game_command(&line);
                         if let Some(cmd) = &game_cmd {
                             page_user_echo(&mut tui, &line)?;
                             match cmd {
-                                crate::GameCmd::Status => {
-                                    page_notice(&mut tui, if crate::game_pref(global) {
+                                crate::slash::GameCmd::Status => {
+                                    page_notice(&mut tui, if crate::slash::game_pref(global) {
                                         "gamification is on"
                                     } else {
                                         "gamification is off"
                                     })?;
                                     continue;
                                 }
-                                crate::GameCmd::On | crate::GameCmd::Off => {
-                                    let on = matches!(cmd, crate::GameCmd::On);
-                                    if let Err(e) = crate::set_game_pref(global, on) {
+                                crate::slash::GameCmd::On | crate::slash::GameCmd::Off => {
+                                    let on = matches!(cmd, crate::slash::GameCmd::On);
+                                    if let Err(e) = crate::slash::set_game_pref(global, on) {
                                         page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
                                         continue;
                                     }
@@ -843,9 +843,9 @@ pub async fn run(
                         }
                         // /exam: echo the literal command, gate on goal presence, then swap the
                         // outgoing text and fall through to the normal ask flow below.
-                        let outgoing = if crate::is_exam_command(&line) {
+                        let outgoing = if crate::slash::is_exam_command(&line) {
                             page_user_echo(&mut tui, "/exam")?;
-                            if !crate::topic_has_goal(project_root, global, &topic) {
+                            if !crate::slash::topic_has_goal(project_root, global, &topic) {
                                 page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
                                 continue;
                             }
@@ -853,11 +853,11 @@ pub async fn run(
                         } else if let Some(cmd) = game_cmd {
                             // literal command already echoed in the /game block above
                             match cmd {
-                                crate::GameCmd::On => crate::game_on_turn(
+                                crate::slash::GameCmd::On => crate::slash::game_on_turn(
                                     &std::fs::read_to_string(global.join("GAMIFICATION.md")).unwrap_or_default(),
                                 ),
-                                crate::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
-                                crate::GameCmd::Status => line.clone(), // unreachable: Status returns above
+                                crate::slash::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
+                                crate::slash::GameCmd::Status => line.clone(), // unreachable: Status returns above
                             }
                         } else {
                             // Push the submitted line to scrollback as a distinct user block.
