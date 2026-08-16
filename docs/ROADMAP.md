@@ -16,6 +16,7 @@
 | 9 | **Prompt diet** | ✅ done (2026-08-16) | Principle: anything the shell can solve deterministically never goes into a prompt. Conditional brain loading (GAMIFICATION/MATERIAL/PREDICTION follow the GOAL.md pattern), due-question selection moves to the shell, dead instructions removed. Target v0.19.0. |
 | 10 | **Spaced-rep arithmetic → shell** | pending | Audit finding: the interval ladder + date math (`due = today + ivl`, reset on miss, retirement at 90) is deterministic but currently done by the model at closing. Move it to the shell: the model only labels a per-question verdict (recalled / struggled / not drilled); the shell computes and writes the schedule tail. Needs a structured verdict channel in the closing format — medium refactor; the win is reliability (zero arithmetic drift), not tokens. |
 | 11 | **Distribution (deferred half of #4)** | pending | CI release workflow (macOS arm64/x86_64 + Linux), GitHub Releases, Homebrew tap (`brew install cursedxp/usta/usta`). Deliberately parked until "anyone can use it" matters. |
+| 12 | **English protocol tokens** | ✅ done (2026-08-16) | Every marker the shell parses or writes (map states, section headers, dividers, checkpoint) flips from Turkish to English, single-sourced in `src/tokens.rs`; a one-shot idempotent migration upgrades existing files at every entry point. Design: `docs/superpowers/specs/2026-08-16-english-protocol-tokens-design.md`. |
 
 ## Tech debt / small items
 
@@ -24,6 +25,8 @@
 - Further ideas (unscheduled): streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
 
 ## Completed
+
+- 2026-08-16: English protocol tokens — every marker the shell parses or writes (map states `not seen`/`seen`/`settled`/`deepened`, section headers `## Records`/`## Goal`/`## Goal Status`/`## Preferences`/`Level`/`Recall questions`/`Retired`/`Open exercise`/`Gaps`/`Error log`/`Hint ladder`, file divider `===FILE:`, `[CHECKPOINT]`, `— source:`, `# Session History`, default topic `general`) is single-sourced in `src/tokens.rs` (T1–T21) — the shell no longer parses Turkish and English forms in parallel. `map_state_of` matches on the exact trailing segment, never a substring scan, so `seen` can't false-match inside `not seen`. A one-shot idempotent migration (`src/migrate.rs`) rewrites legacy Turkish-token files in place with a `.bak` backup, wired at every entry point (`usta` bare launch, `start`, `init`, TUI and plain paths) — silent on files already migrated, so re-running never re-migrates or drops data. 331/331 tests green. v0.20.0.
 
 - 2026-08-16: Prompt diet — principle locked: anything the shell solves deterministically never rides in a prompt. Conditional brain loading (GAMIFICATION.md only when the profile enables the game — /game on embeds the rules into the turn; MATERIAL.md only when materials/ has files; PREDICTION.md only in Cargo projects — GOAL.md pattern); due-question selection moved to the shell (deterministic drill list, due_count single-sourced); dead Tercihler KEEP instruction removed (shell restore already guarantees it). Common-scenario system prompt ~4.1KB (~19%) smaller; TEACHING.md 11KB → 6.9KB; v0.19.0.
 
