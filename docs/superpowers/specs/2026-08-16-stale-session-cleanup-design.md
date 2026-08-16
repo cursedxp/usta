@@ -28,6 +28,13 @@
 - Pipe yolu: davranış değişmedi (kod incelemesi).
 - LLM'li uçtan uca: elle doğrulama (Anil, stagit'teki 2 gerçek kayıt).
 
+## Factory reset kapsamı (Anil eki, 2026-08-16)
+
+- Factory reset katalogdaki projelerin `.usta`'sını zaten komple siler (session kayıtları dahil) — bu davranış korunur.
+- Boşluğun kökü: iptal edilen oturum hiç flush olmadığından projesi kataloğa yazılmıyordu → reset göremiyordu. Çözüm: **katalog upsert'i oturum AÇILIŞINDA da yapılır** (`index::record` — mevcut kapanış upsert'ine ek; aynı satır formatı, tarih = açılış günü). Böylece bir kez bile oturum açılan her proje katalogdadır; factory reset session artıklarıyla birlikte HEPSİNİ siler.
+- Yan etki kabulü: katalogda progress'i olmayan (açılıp iptal edilmiş) konular görünebilir — `usta topics` zaten progress-yokluğunu tolere ediyor; kabul.
+- Geçmişe dönük (bu değişiklikten önce iptal edilmiş, katalog-dışı) artıklar için v4 soru akışı zaten devrede.
+
 ## Kapsam dışı
 
-- Kayıt-başına ayrı soru (batch tek soru yeter) · factory reset'in katalog-dışı proje bulması · transcript'ten sohbeti sürdürme (yalnız flush kurtarılır).
+- Kayıt-başına ayrı soru (batch tek soru yeter) · disk taramasıyla katalog-dışı proje keşfi · transcript'ten sohbeti sürdürme (yalnız flush kurtarılır).
