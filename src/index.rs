@@ -218,6 +218,25 @@ mod tests {
     }
 
     #[test]
+    fn record_writes_resumable_catalog_row_without_flush() {
+        let base = std::env::temp_dir().join(format!("usta_index_open_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // A single open-time upsert — no flush, no progress file — must still catalog the project.
+        record(&base, "rust", Path::new("/p/a"), "2026-08-16").unwrap();
+
+        let content = std::fs::read_to_string(base.join("learner/index.md")).unwrap();
+        let list = entries(&content);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].topic, "rust");
+        assert_eq!(list[0].project, Path::new("/p/a").to_path_buf());
+        assert_eq!(list[0].date, "2026-08-16");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn local_topics_without_index_entry_still_lists_by_mtime() {
         let base = std::env::temp_dir().join(format!("usta_localtopics_mtime_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);

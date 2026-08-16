@@ -481,6 +481,15 @@ fn build_session(
 
     let recorder = Recorder::new(transcript::session_path(project_root, topic, &now_stamp()));
 
+    // Catalog upsert at OPEN (not only at close): a project opened even once must be
+    // in the catalog so factory reset can find and clean it — even if this session is
+    // cancelled before the closing flush ever runs. Same row format as the close-time
+    // upsert (index::record in flush_core); date = today (the open day). Non-fatal —
+    // a catalog miss must never block the session.
+    if let Err(e) = index::record(global, topic, project_root, today) {
+        ui::warn(&format!("catalog could not be updated at open: {e}"));
+    }
+
     let has_progress = std::fs::read_to_string(progress::progress_path(project_root, topic))
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
