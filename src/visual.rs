@@ -4,6 +4,8 @@
 
 use anyhow::{bail, Context, Result};
 
+use crate::session::Session;
+
 const SKELETON: &str = include_str!("visual_skeleton.html");
 const ANIME: &str = include_str!("vendor/anime.min.js");
 const ROUGH: &str = include_str!("vendor/rough.min.js");
@@ -215,6 +217,33 @@ pub fn extract_show_marker(reply: &str) -> (String, Option<String>) {
         return (format!("(visual explainer: {topic})"), Some(topic));
     }
     (clean, Some(topic))
+}
+
+/// Last assistant reply in this session — the concept a bare `/show` visualizes.
+pub(crate) fn last_assistant_text(session: &Session) -> Option<String> {
+    session
+        .history()
+        .iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .and_then(|m| m.content.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Compose the visual mini-session user turn. `explicit` = `/show <topic>` argument.
+pub(crate) fn show_request(explicit: Option<String>, last_reply: Option<&str>) -> Option<String> {
+    match (explicit, last_reply) {
+        (Some(t), last) => Some(match last {
+            Some(l) => format!(
+                "Create scenes that visually explain: {t}\n\nRecent explanation for context:\n{l}"
+            ),
+            None => format!("Create scenes that visually explain: {t}"),
+        }),
+        (None, Some(l)) => Some(format!(
+            "Create scenes that visually explain the following explanation:\n{l}"
+        )),
+        (None, None) => None, // nothing to visualize yet
+    }
 }
 
 #[cfg(test)]
@@ -606,5 +635,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("usta_visual_test_missing_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         prune_visuals(&dir, 10); // must not panic
+    }
+
+    #[test]
+    fn show_request_composition() {
+        assert!(show_request(None, None).is_none());
+        let bare = show_request(None, Some("ownership explained")).unwrap();
+        assert!(bare.contains("ownership explained"));
+        let explicit = show_request(Some("dns".into()), Some("prior")).unwrap();
+        assert!(explicit.contains("dns") && explicit.contains("prior"));
+        let cold = show_request(Some("dns".into()), None).unwrap();
+        assert!(cold.contains("dns"));
     }
 }

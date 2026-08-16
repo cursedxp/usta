@@ -329,7 +329,7 @@ async fn trigger_auto_visual(
     last_tokens: Option<u64>,
 ) -> Result<()> {
     let Some(t) = show_topic else { return Ok(()) };
-    if let Some(req) = crate::show_request(Some(t.clone()), crate::last_assistant_text(session).as_deref()) {
+    if let Some(req) = crate::visual::show_request(Some(t.clone()), crate::visual::last_assistant_text(session).as_deref()) {
         page_notice(tui, &format!("visualizing: {t}…"))?;
         run_visual_generation(tui, editor, events, backend, project_root, topic, &t, &req, last_tokens).await?;
     }
@@ -802,8 +802,8 @@ pub async fn run(
                             page_user_echo(&mut tui, &line)?;
                             let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                             // Borrow care: read the last reply BEFORE any &mut session borrow.
-                            let last = crate::last_assistant_text(&session);
-                            match crate::show_request(arg, last.as_deref()) {
+                            let last = crate::visual::last_assistant_text(&session);
+                            match crate::visual::show_request(arg, last.as_deref()) {
                                 None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
                                 Some(req) => {
                                     run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
