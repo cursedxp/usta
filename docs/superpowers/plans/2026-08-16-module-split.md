@@ -231,7 +231,9 @@ Bölme tek başına yetmez; kural yazılmazsa aynı birikim tekrarlar.
 
 4. **Sürüm:** `Cargo.toml` `0.21.0` → `0.22.0`, `src/tui/welcome.rs`'teki `version_aligned_with_spec` testinin dizgesini de güncelle.
 
-5. **Son ölçüm ve raporlama:** `wc -l src/*.rs src/tui/*.rs` çıktısını al, spec'teki "Ölçüm" tablosunun yanına ulaşılan hâli yaz. 600 satırı aşan modül kaldıysa gerekçesini yaz.
+5. **Biçim normalizasyonu:** Task 1'de taşınan test dosyaları (`welcome_tests.rs`, `progress_tests.rs`) eski `mod tests { }` yuvalamasından kalma 4-boşluk taban girintisini koruyor — saf-taşıma kısıtı gereği bilinçliydi, ama artık üst düzey dosyalar ve rustfmt-clean değiller. Tüm yeni/taşınan dosyalarda `cargo fmt` çalıştır. Bu task'ta bilinçli olarak yapılır: bir önceki task'ta yapılsaydı taşımanın saflığı kanıtlanamazdı. `cargo fmt` sonrası test sayısı yine 372 olmalı.
+
+6. **Son ölçüm ve raporlama:** `wc -l src/*.rs src/tui/*.rs` çıktısını al, spec'teki "Ölçüm" tablosunun yanına ulaşılan hâli yaz. 600 satırı aşan modül kaldıysa gerekçesini yaz.
 
 ### Doğrulama
 
