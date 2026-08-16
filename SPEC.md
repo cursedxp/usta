@@ -196,6 +196,30 @@ Roadmap #8: opt-in oyunlaştırma — ADHD beyni için görünür dopamin döng�
 
 Tasarım detayı: `docs/superpowers/specs/2026-08-15-gamification-design.md`.
 
+## 4.19 TUI Tasarım Sistemi (v0.18)
+
+Onaylı tasarım sistemi (Claude Design projesi) koda uygulandı — davranış değişmez, yalnız sunum. Amaç: sakin ekran (ADHD), renk semantiği, renk-körü güvenliği, monokrom dayanıklılığı.
+
+- **Tek kaynak `src/tui/theme.rs`:** tüm TUI modülleri (+ `ui.rs` plain-ANSI, termimad skin) renk/glifi buradan alır — dağınık `Color::` literal'leri temizlendi. Renkler `Color::Indexed` (truecolor terminalde de doğru).
+- **Semantik palet + glif çiftleri** (renk körlüğü/monokrom — renk yalnız glifi pekiştirir, tek başına anlam taşımaz):
+
+  | Rol | Renk | Glif |
+  |---|---|---|
+  | Marka / kimlik | turuncu 208 | `●` bullet · `❯` prompt |
+  | Bilgi / ortam | dim 244 | `·` |
+  | Başarı | yeşil 149 | `✓` |
+  | Uyarı | amber 179 (eski `Color::Yellow` öldü) | `⚠` |
+  | Hata | kırmızı 210 | `✗` |
+  | Oyun / XP | mor 141 | `▸` |
+  | Kod (inline) | yeşil 114 | — |
+
+- **Turuncu disiplini:** durağan ekranda ≤2 turuncu öğe (logo bloğu = 1) — test-kilitli (`welcome_orange_discipline`). Turuncu = kimlik, asla statü.
+- **Kutu/gösterge dili:** canlı çerçeveler yuvarlak `╭╮╰╯`; tablo başlığı altı ince `─` çizgi; gauge `▓░`, ≥%70'te amber; spinner `⠋⠙⠸⠴` ~120ms; exam ilerleme `●○`.
+- **Notice katmanları:** `page_notice` `·` dim · `page_warn` `⚠` amber · `page_error` `✗` kırmızı — mevcut metinler aynen, yalnız ön-ek + stil. `ui::warn` buffer'ı flush'ta amber katmana yönlenir.
+- **Exam kartı kabukta DEĞİL:** GOAL.md `## Mock Exams`'a format kuralı eklendi (`── Question N/M ──` başlık, `●○` ilerleme, kırılım tablosu) — model çizer, kabuk parse etmez ("ince kabuk"). Game satırı glif notu TEACHING.md DOZ kuralına (`▸`).
+
+Tasarım detayı: `docs/superpowers/specs/2026-08-16-tui-design-apply-design.md`.
+
 ## 5. Akış (bir öğrenme oturumu)
 
 ```
@@ -293,6 +317,7 @@ usta/
 - **İlerleme özeti (v0.15):** `history.md` global ve append-only — proje-lokal değil, çünkü streak "herhangi bir konu"da ardışık gündür (izolasyon ilkesine istisna, çünkü motivasyon sinyali konu-üstü). `current streak: 0` yasağı kod seviyesinde zorlanır (`render_stats` saf fonksiyonu test-kilitli) — ADHD-safe ton bir prompt kuralı değil, kabuk garantisi. Sürüm: `0.15.0`.
 - **Deneme sınavı (v0.16):** `/exam` statik intercept değil, prompt-enjeksiyon komutu — kabuk yalnız hedef kapısını tutar (`## Hedef` yoksa LLM'e hiç gitmez), sınavın kendisi (soru üretimi, tek-soru akışı, askıya alınan ipucu merdiveni, skor + kırılım) tamamen `exam_prompt` enjeksiyonu ve GOAL.md `## Mock Exams` kuralları üzerinden LLM'de akar — "ince kabuk" ilkesi korundu. Sürüm: `0.16.0`.
 - **Gamification (v0.17):** `/game` statik intercept değil, `/exam` gibi prompt-enjeksiyon komutu — kabuk yalnız toggle kalıcılığını (USER.md `## Tercihler`, `set_game_pref` idempotent) ve açılış streak satırını (`game_streak_line`; `streak: 0` yapısal olarak üretilemez — ADHD-safe kabuk garantisi) tutar; XP/seviye/rozet anlatısı tamamen TEACHING.md `## Gamification` kuralları üzerinden LLM'de akar ("ince kabuk"). Sürüm: `0.17.0`.
+- **TUI tasarım sistemi (v0.18):** görsel dil tek kaynağa (`src/tui/theme.rs`) çekildi — semantik renk `Color::Indexed` + glif çiftleri, tüm TUI modülleri + `ui.rs` plain-ANSI + termimad skin buradan beslenir (dağınık `Color::` literal'i yok). Renk statü değil glifi pekiştirir (renk-körü/monokrom güvenliği); turuncu = kimlik, durağan ekranda ≤2 (test-kilitli). Exam kartı kabukta çizilmez — GOAL.md `## Mock Exams` format kuralıyla model çizer, kabuk soru-durumu parse etmez ("ince kabuk" korundu). Davranış/metin değişmez, yalnız sunum. Sürüm: `0.18.0`.
 
 ## 12. Açık Karar Noktaları (implementasyon planında netleşir)
 
