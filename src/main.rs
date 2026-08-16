@@ -1152,9 +1152,10 @@ pub(crate) fn parse_start_suggestion(reply: &str) -> Option<(String, String)> {
 }
 
 /// New-topic confirmation text (for TUI tui_confirm). The plain path uses its own
-/// `[e/H]` rustyline format — the wording is deliberately different, the two surfaces are separate.
+/// `[y/N]` rustyline format — the wording is deliberately different, the two surfaces are separate.
+/// Display advertises `y` only; `e` stays silently accepted (tui_confirm key match).
 pub(crate) fn new_topic_confirm_msg(slug: &str) -> String {
-    format!("new topic: {slug} — open it? [e = yes / any other key = go back]")
+    format!("new topic: {slug} — open it? [y = yes / any other key = go back]")
 }
 
 /// Interpret the topic input: resume or new topic? (spec K1)
@@ -1456,7 +1457,7 @@ fn remove_topic_visuals(root: &Path, topic: &str) -> Result<()> {
 
 /// Factory-reset confirmation prompt. Both `yes` and `evet` are accepted (see the
 /// `confirm` call below); the wording names both so the prompt matches the SPEC.
-const FACTORY_RESET_PROMPT: &str = "Everything will be permanently deleted. Type 'yes' (or 'evet') to confirm: ";
+const FACTORY_RESET_PROMPT: &str = "Everything will be permanently deleted. Type 'yes' to confirm: ";
 
 /// Factory-reset deletion targets: every catalogued project's `.usta` — plus the
 /// project the user is standing in (`cwd_root`), even if it was never catalogued
@@ -2671,11 +2672,13 @@ mod tests {
     }
 
     #[test]
-    fn factory_reset_prompt_names_both_confirmation_words() {
-        // The prompt must mention both accepted words so it matches the SPEC and
-        // the `confirm(&["evet", "yes"])` call — neither drifts from the other.
+    fn factory_reset_prompt_advertises_only_english_word() {
+        // Display is English-only (Claude Code model: shell text = English base);
+        // `evet` stays silently accepted in the `confirm(&["evet", "yes"])` call
+        // but is never advertised — the display and the acceptance list are
+        // deliberately different surfaces.
         assert!(FACTORY_RESET_PROMPT.contains("yes"));
-        assert!(FACTORY_RESET_PROMPT.contains("evet"));
+        assert!(!FACTORY_RESET_PROMPT.contains("evet"));
     }
 
     #[test]
