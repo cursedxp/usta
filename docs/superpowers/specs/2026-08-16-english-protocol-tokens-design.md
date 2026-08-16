@@ -24,8 +24,16 @@
 | T13 | `[ARA KAYIT]` | `[CHECKPOINT]` | session.rs:95–106 (yarım oturum kaydı) |
 | T14 | `- kaynak:` | `- source:` | progress.rs:133,135,293,581,633–634 (müfredat kaynak referansı) |
 | T15 | `genel` (default konu slug'ı) | `general` (yalnız yeni emit) | main.rs:793,810,827; kabul tarafı zaten iki dilli (main.rs:1074) |
+| T16 | `## Seviye` | `## Level` | tui/welcome.rs `extract_level` (section), progress.rs:102 kapanış kuralı |
+| T17 | `## Gap'ler` | `## Gaps` | progress.rs:102 kapanış kuralı (model üretir) |
+| T18 | `## Hata günlüğü` | `## Error log` | progress.rs kapanış kuralı (model üretir) |
+| T19 | `## İpucu merdiveni` | `## Hint ladder` | progress.rs kapanış kuralı (model üretir) |
+| T20 | `# <konu> — İlerleme` | `# <topic> — Progress` | progress.rs kapanış kuralı (model üretir) |
+| T21 | `# Oturum Geçmişi` | `# Session History` | history.rs:11 HEADER (kabuk yazar) |
+| T14b | `— kaynak:` (em-dash biçimi) | `— source:` | progress.rs kapanış kuralı — T14'ün her iki tire biçimi de eşlenir |
 
-Not: `## Hedef Durumu` `## Hedef`ten ÖNCE eşlenmeli (prefix çakışması); migration ve parser sıralaması buna göre.
+Not 1: `## Hedef Durumu` `## Hedef`ten ÖNCE eşlenmeli (prefix çakışması); migration ve parser sıralaması buna göre.
+Not 2: **`"seen"` ⊂ `"not seen"` substring tuzağı** — mevcut kod harita durumlarını `line.contains(state)` ile sayıyor (history.rs:182 `settled_count`, tui/welcome.rs `curriculum_percent`/`next_unseen`). İngilizce'de madde metninde "seen"/"settled" geçmesi çok daha olası; geçiş öncesi bu üç fonksiyon **exact-match'e sertleştirilir**: durum = satırın son `:` sonrası trim'lenmiş segmenti (varsa `| due:` kuyruğu öncesi), `STATES` dizisiyle tam eşitlik. Davranış iyi-biçimli veri için birebir aynı kalır; test-locked senkron yorumu (history.rs:176) korunur.
 
 **Dokunulmayanlar (bilinçli):**
 - `evet/hayır/e/h` kullanıcı girdisi kabulü — UI, protokol değil; `yes/no` zaten kabul. Aynen kalır.
