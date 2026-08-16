@@ -53,6 +53,20 @@ orada. Kaldığımız yerden devam et; kullanıcıya kompaksiyonu anlatma.",
 /// this it counts as a "bulk change" (git checkout, format-all): no LLM call.
 const MAX_FEEDBACK_BATCH: usize = 5;
 
+/// One-shot TR→EN protocol-token migration, run at the top of every command
+/// dispatch path (start/topics/stats/reset) right after global root + project
+/// `.usta` are known, before any file is read. Silent on `Ok(0)` (nothing to
+/// migrate) and on `Err` — a migration failure must never abort the session,
+/// it's surfaced as a warning and the command proceeds against whatever state
+/// is on disk (pre- or partially-migrated).
+fn run_migration(global: &Path, project_usta: Option<&Path>) {
+    match migrate::run(global, project_usta) {
+        Ok(0) => {}
+        Ok(n) => ui::notice(&format!("migrated {n} file(s) to English protocol tokens (backup: .bak)")),
+        Err(e) => ui::warn(&format!("token migration skipped: {e}")),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -92,6 +106,7 @@ async fn main() -> Result<()> {
     // Global brain + project root are merged to produce the system prompt (hybrid
     // model — see brain.rs). build_session uses this.
     let global = config::global_root()?;
+    run_migration(&global, Some(&project_root.join(".usta")));
 
     // File watcher — spawned ONCE (starts a thread), then passed by (&mut) into
     // the running path. Input thread + debounce state are path-specific:
@@ -1278,6 +1293,11 @@ fn run_init() -> Result<()> {
 /// `usta topics` — list the entries in the global catalog. No LLM needed.
 fn run_topics() -> Result<()> {
     let global = config::global_root()?;
+    let project_usta = std::env::current_dir()
+        .ok()
+        .and_then(|c| config::find_project_root(&c))
+        .map(|root| root.join(".usta"));
+    run_migration(&global, project_usta.as_deref());
     let content =
         std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
     let list = index::entries(&content);
@@ -1318,6 +1338,11 @@ fn render_topics_table(entries: &[index::IndexEntry]) -> String {
 /// history. No LLM needed; missing/empty history just renders the empty state.
 fn run_stats() -> Result<()> {
     let global = config::global_root()?;
+    let project_usta = std::env::current_dir()
+        .ok()
+        .and_then(|c| config::find_project_root(&c))
+        .map(|root| root.join(".usta"));
+    run_migration(&global, project_usta.as_deref());
     let content =
         std::fs::read_to_string(global.join("learner/history.md")).unwrap_or_default();
     let es = history::entries(&content);
@@ -1373,6 +1398,8 @@ fn run_reset_topic(topic: &str) -> Result<()> {
     let Some(root) = config::find_project_root(&cwd) else {
         anyhow::bail!("no .usta in this directory (or above) — no project found to reset");
     };
+    let global = config::global_root()?;
+    run_migration(&global, Some(&root.join(".usta")));
     let path = progress::progress_path(&root, topic);
     if !path.is_file() {
         println!("no record: {}", path.display());
@@ -1392,7 +1419,6 @@ fn run_reset_topic(topic: &str) -> Result<()> {
     remove_topic_visuals(&root, topic)?;
 
     // Drop it from the catalog too — pass silently if the catalog doesn't exist / can't be read.
-    let global = config::global_root()?;
     let index_path = global.join("learner/index.md");
     if let Ok(current) = std::fs::read_to_string(&index_path) {
         let updated = index::remove(&current, topic, &root);
@@ -1440,11 +1466,13 @@ fn factory_targets(index_content: &str, cwd_root: Option<&Path>) -> Vec<PathBuf>
 /// (bootstrap) — Usta starts as if it never knew the user.
 fn run_reset_factory() -> Result<()> {
     let global = config::global_root()?;
-    let index_content =
-        std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
     let cwd_root = std::env::current_dir()
         .ok()
         .and_then(|c| config::find_project_root(&c));
+    let cwd_usta = cwd_root.as_deref().map(|r| r.join(".usta"));
+    run_migration(&global, cwd_usta.as_deref());
+    let index_content =
+        std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
     let mut targets = factory_targets(&index_content, cwd_root.as_deref());
     targets.retain(|p| p.is_dir());
 
@@ -1517,6 +1545,11 @@ fn run_reset_profile() -> Result<()> {
         anyhow::bail!("no TTY — cannot get confirmation, profile not reset. Run in an interactive terminal.");
     }
     let global = config::global_root()?;
+    let project_usta = std::env::current_dir()
+        .ok()
+        .and_then(|c| config::find_project_root(&c))
+        .map(|root| root.join(".usta"));
+    run_migration(&global, project_usta.as_deref());
     let path = global.join("USER.md");
     if !confirm(
         &format!(

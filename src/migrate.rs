@@ -249,6 +249,52 @@ mod tests {
         );
     }
 
+    /// Task 6 integration coverage: a single `run` call sweeping BOTH trees at
+    /// once — global root (USER.md + learner/index.md) and a project `.usta`
+    /// (learner/progress/<topic>.md) — proving the multi-file/multi-root count
+    /// and cross-tree `.bak` behavior in one pass. File-level substitution
+    /// rules are already covered above; this test's added value is the
+    /// end-to-end fan-out that main.rs's wiring actually exercises.
+    #[test]
+    fn run_sweeps_global_and_project_trees_in_one_call() {
+        let (global, project_usta) = temp_pair("multi_root");
+        fs::create_dir_all(project_usta.join("learner/progress")).unwrap();
+
+        let user_md = global.join("USER.md");
+        fs::write(&user_md, "## Tercihler\n- gamification: on\n").unwrap();
+        let index_md = global.join("learner/index.md");
+        fs::write(&index_md, "## Kayıtlar\n- rust | /proje | 2026-08-01\n").unwrap();
+        let progress_md = project_usta.join("learner/progress/rust.md");
+        fs::write(&progress_md, "# rust — İlerleme\n\n## Seviye\n- a: oturdu\n").unwrap();
+
+        let first = run(&global, Some(&project_usta)).unwrap();
+        assert!(first >= 3, "expected at least 3 migrated files, got {first}");
+
+        assert!(fs::read_to_string(&user_md).unwrap().contains("## Preferences"));
+        assert!(fs::read_to_string(&index_md).unwrap().contains("## Records"));
+        let progress_after = fs::read_to_string(&progress_md).unwrap();
+        assert!(progress_after.contains("# rust — Progress"));
+        assert!(progress_after.contains("## Level"));
+        assert!(progress_after.contains("- a: settled"));
+
+        // .baks hold the first (pre-migration) state, across both trees.
+        assert_eq!(
+            fs::read_to_string(super::sibling(&user_md, ".bak")).unwrap(),
+            "## Tercihler\n- gamification: on\n"
+        );
+        assert_eq!(
+            fs::read_to_string(super::sibling(&index_md, ".bak")).unwrap(),
+            "## Kayıtlar\n- rust | /proje | 2026-08-01\n"
+        );
+        assert_eq!(
+            fs::read_to_string(super::sibling(&progress_md, ".bak")).unwrap(),
+            "# rust — İlerleme\n\n## Seviye\n- a: oturdu\n"
+        );
+
+        // Second run: idempotent across the whole sweep — zero further changes.
+        assert_eq!(run(&global, Some(&project_usta)).unwrap(), 0);
+    }
+
     #[test]
     fn code_owned_root_files_out_of_scope_only_user_md_migrated() {
         let (global, project_usta) = temp_pair("root_scope");
