@@ -12,7 +12,9 @@ use termimad::MadSkin;
 
 pub const ORANGE: &str = "\x1b[38;5;208m";
 pub const DIM: &str = "\x1b[2m";
-pub const YELLOW: &str = "\x1b[33m";
+/// Amber (256:179) — the plain-path counterpart of theme::WARN. Replaces the old
+/// raw `\x1b[33m` yellow so the CLI gauge matches the TUI's warning hue.
+pub const AMBER: &str = "\x1b[38;5;179m";
 pub const RESET: &str = "\x1b[0m";
 
 /// Is the TUI active? While true, notice/warn/Spinner don't print raw ANSI — they're
@@ -132,7 +134,7 @@ pub fn context_gauge(tokens: Option<u64>, window: u64) {
     let ratio = (t as f64 / window as f64).min(1.0);
     let filled = ((ratio * 8.0).round() as usize).min(8);
     let bar = format!("{}{}", "▓".repeat(filled), "░".repeat(8 - filled));
-    let color = if ratio >= 0.7 { YELLOW } else { DIM };
+    let color = if ratio >= 0.7 { AMBER } else { DIM };
     println!("{color}  {bar} context {}k/{}k{RESET}", t / 1000, window / 1000);
 }
 
@@ -152,10 +154,10 @@ impl Spinner {
         }
         let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
-            const FRAMES: [&str; 4] = ["⠋", "⠙", "⠸", "⠴"];
+            use crate::tui::theme::SPINNER;
             let mut i = 0usize;
             loop {
-                print!("\r{DIM}{} {msg}{RESET}", FRAMES[i % FRAMES.len()]);
+                print!("\r{DIM}{} {msg}{RESET}", SPINNER[i % SPINNER.len()]);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 i += 1;
                 tokio::select! {
