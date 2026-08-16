@@ -1,119 +1,131 @@
-# Yarım Kalmış Oturum Temizliği Implementation Plan
+# Yarım Kalmış Oturum: Otomatik Salvage Flush Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Ön-koşul:** Yok (v0.18.2 üstüne). Spec: `docs/superpowers/specs/2026-08-16-stale-session-cleanup-design.md` — önce oku.
+> **REVİZE:** Bu plan "onaylı silme" planının yerine geçti (Anil kararı: sormadan direkt flush). Önceki plandan Task 1 (`delete_unflushed`) implement edildiyse KALDIR — salvage rename kullanır, silme yardımcısına gerek yok.
 
-**Goal:** Açılıştaki "half-finished session record" uyarısının ardından TTY'de tek onaylı silme önerisi; pipe/red yolunda davranış birebir aynı. v0.18.3.
+**Ön-koşul:** Yok (v0.18.2 üstüne). Spec: `docs/superpowers/specs/2026-08-16-stale-session-cleanup-design.md` (revize hali) — önce oku.
+
+**Goal:** Açılışta yarım kayıt → sormadan kurtarma: transcript parse → kapanış flush'ı o history ile koşar → dosyalar yazılır → kayıt `.done` rename. TTY-değilse eski warn davranışı. v0.18.3.
+
+**Architecture:** `transcript.rs`'e okuma tarafı (`read_history`, konu çıkarımı, rename). `flush_progress` (main.rs) `(topic, history, system)` alan yeniden kullanılabilir çekirdeğe ayrılır — hem normal kapanış hem salvage onu çağırır. Salvage `main`'de backend seçiminden sonra, konu/oturum akışından önce.
 
 ## Global Constraints
 
-- Default HAYIR (boş Enter = silme). Kabul kümesi mevcut `confirm` konvansiyonu: `["e","evet","y","yes"]`.
-- TTY-değil yol + red yolu: bugünkü davranış birebir (yalnız warn).
-- Binary crate — `cargo test <filtre>`. Commit Türkçe + push; sonda 0.18.3 + tag + `cargo install --path .`.
+- Salvage YALNIZ TTY'de (stdin+stdout `is_terminal` — sihirbaz koşulunun aynısı); pipe'ta mevcut warn birebir.
+- Hata asla açılışı engellemez: her hata warn + kayıt yerinde kalır (bir sonraki açılışta tekrar denenir).
+- Kullanıcıya soru YOK; kayıt başına tek `notice`.
+- Binary crate — `cargo test <filtre>`. Her task commit (Türkçe) + push; sonda 0.18.3 + tag + `cargo install --path .`. clippy yeni uyarı 0.
 
 ---
 
-### Task 1: `transcript::delete_unflushed` yardımcısı
+### Task 1: Transcript okuma tarafı (`src/transcript.rs`)
 
-**Files:** Modify: `src/transcript.rs` · test in-module
+**Files:** Modify: `src/transcript.rs` · testler in-module
 
-- [ ] **Step 1: Failing test**
+**Interfaces (Produces):**
+- `pub fn read_history(path: &Path) -> Result<Vec<Message>>` — Recorder'ın YAZDIĞI jsonl formatını okur (önce yazma formatına bak, birebir tersi; bozuk satır → Err).
+- `pub fn topic_from_record(path: &Path) -> Option<String>` — `<topic>-<YYYYMMDD>-<HHMMSS>.jsonl` → `topic` (sondan timestamp deseni soyulur; konu adında tire OLABİLİR — sondan iki `-` bloğu sayısal+uzunluk kontrolüyle soyulur; uymuyorsa None).
+- `pub fn mark_done(path: &Path) -> Result<PathBuf>` — `x.jsonl` → `x.done.jsonl` rename (mevcut done-işaret konvansiyonunun aynısı — koda bak, done nasıl işaretleniyorsa o mekanizmayı YENİDEN KULLAN; ayrı fonksiyon zaten varsa onu pub yap, yenisini yazma).
+
+- [ ] **Step 1: Failing testler**
 
 ```rust
 #[test]
-fn delete_unflushed_removes_only_given_files_reports_errors() {
-    let base = std::env::temp_dir().join(format!("usta_transcript_del_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
-    let sdir = base.join(".usta/sessions");
-    std::fs::create_dir_all(&sdir).unwrap();
-    std::fs::write(sdir.join("a-1.jsonl"), "x").unwrap();
-    std::fs::write(sdir.join("b-2.jsonl"), "x").unwrap();
-    std::fs::write(sdir.join("c-3.done.jsonl"), "x").unwrap();
+fn read_history_roundtrips_recorder_output() {
+    // tmpdir: Recorder ile 2 user + 1 assistant turu yaz → read_history aynı sırayla döndürür
+}
 
-    let files = vec![sdir.join("a-1.jsonl"), sdir.join("b-2.jsonl"), sdir.join("yok.jsonl")];
-    let (deleted, errors) = delete_unflushed(&files);
-    assert_eq!(deleted, 2);
-    assert_eq!(errors.len(), 1);
-    assert!(!sdir.join("a-1.jsonl").exists());
-    assert!(sdir.join("c-3.done.jsonl").exists()); // .done'a dokunulmaz
+#[test]
+fn topic_from_record_strips_timestamp_keeps_hyphenated_topic() {
+    assert_eq!(topic_from_record(Path::new("kaynak-ingest-20260814-153309.jsonl")).as_deref(), Some("kaynak-ingest"));
+    assert_eq!(topic_from_record(Path::new("rust-20260807-1030.jsonl")).as_deref(), Some("rust"));
+    assert!(topic_from_record(Path::new("garip.jsonl")).is_none());
+}
 
-    let _ = std::fs::remove_dir_all(&base);
+#[test]
+fn mark_done_renames_and_unflushed_no_longer_finds_it() {
+    // tmpdir: işaretsiz dosya → mark_done → unflushed boş döner
 }
 ```
 
-- [ ] **Step 2:** Run: `cargo test delete_unflushed` → derleme hatası
+(Gövdeler transcript.rs'nin gerçek yazma API'siyle doldurulur — Recorder imzasına bak. Timestamp deseni mevcut dosya-adı üretimindeki formatla birebir aynı olmalı; üretim kodundaki formatı sabit/fonksiyon olarak paylaş.)
 
-- [ ] **Step 3: Implement**
-
-```rust
-/// Delete the given half-finished session records. Only ever called with the
-/// list produced by `unflushed` — never touches `.done` files by construction.
-/// Errors are collected, not fatal: a leftover record must never block startup.
-pub fn delete_unflushed(files: &[PathBuf]) -> (usize, Vec<String>) {
-    let mut deleted = 0;
-    let mut errors = Vec::new();
-    for f in files {
-        match std::fs::remove_file(f) {
-            Ok(()) => deleted += 1,
-            Err(e) => errors.push(format!("{}: {e}", f.display())),
-        }
-    }
-    (deleted, errors)
-}
-```
-
-- [ ] **Step 4:** `cargo test delete_unflushed` → PASS
-- [ ] **Step 5:** Commit + push: `temizlik: transcript::delete_unflushed — verilen kayıtları siler, hata toplar`
+- [ ] **Step 2:** `cargo test transcript` → derleme hatası
+- [ ] **Step 3:** Implement — parse: her satır jsonl (`role` + `content` neyse), Message'a eşle; bilinmeyen role → Err. `topic_from_record`: dosya kökünden sondan `-\d{8}-\d+` benzeri iki bloğu soy (yazma formatıyla senkron).
+- [ ] **Step 4:** `cargo test transcript` → PASS
+- [ ] **Step 5:** Commit + push: `salvage: transcript okuma — read_history + topic_from_record + mark_done`
 
 ---
 
-### Task 2: Açılış onay akışı (`src/main.rs:95` civarı)
+### Task 2: `flush_progress` çekirdeğini yeniden kullanılabilir yap
 
-**Files:** Modify: `src/main.rs` (uyarı döngüsü)
+**Files:** Modify: `src/main.rs`
 
-- [ ] **Step 1: Implement** — mevcut warn döngüsünü koru, ardına ekle (koda bak — `confirm` yardımcısının gerçek imzası + sihirbaz entegrasyonundaki TTY koşulu neyse aynısı):
+- [ ] **Step 1:** `flush_progress`'in gövdesini `(backend, topic: &str, system: &str, history: &[Message], project_root, record_history: bool)` alan `flush_core` benzeri fonksiyona çıkar; mevcut `flush_progress(backend, session, project_root, record_history)` onu `session.topic/session.system/session.history()` ile çağırır. DAVRANIŞ DEĞİŞMEZ — saf refactor, mevcut testler yeşil kalmalı.
+- [ ] **Step 2:** `cargo test` → tümü PASS. Commit + push: `salvage: flush çekirdeği session'dan bağımsızlaştı (saf refactor)`
+
+---
+
+### Task 3: Açılış salvage akışı (`src/main.rs` unflushed tarama noktası)
+
+**Files:** Modify: `src/main.rs` (mevcut warn döngüsünün yeri, ~satır 95)
+
+- [ ] **Step 1: Implement** — mevcut döngünün yerine:
 
 ```rust
-    let stale = transcript::unflushed(&project_root); // mevcut çağrı neyse
+    let stale = /* mevcut unflushed çağrısı */;
     if !stale.is_empty() {
-        for p in &stale {
-            ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display()));
-        }
         use std::io::IsTerminal;
-        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-            let q = format!("delete {} half-finished session record(s)? [y/N] ", stale.len());
-            if confirm(&q, &["e", "evet", "y", "yes"])? {
-                let (deleted, errors) = transcript::delete_unflushed(&stale);
-                for e in errors {
-                    ui::warn(&format!("could not delete: {e}"));
+        let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        if !tty {
+            for p in &stale { ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display())); }
+        } else {
+            for p in &stale {
+                let Some(topic) = transcript::topic_from_record(p) else {
+                    ui::warn(&format!("unrecognized session record name, leaving as-is: {}", p.display()));
+                    continue;
+                };
+                match transcript::read_history(p) {
+                    Err(e) => ui::warn(&format!("could not read session record ({e}) — leaving as-is: {}", p.display())),
+                    Ok(h) if h.iter().filter(|m| /* user turn */ true).count() == 0 => {
+                        // kurtarılacak içerik yok — sessizce kapat (gürültü kalmasın)
+                        let _ = transcript::mark_done(p);
+                    }
+                    Ok(history) => {
+                        ui::notice(&format!("recovering unflushed session: {} — writing files…", p.display()));
+                        let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
+                        match flush_core(&mut backend, &topic, &system, &history, &project_root, true).await {
+                            Ok(()) => {
+                                let _ = transcript::mark_done(p);
+                                ui::notice(&format!("recovered: {topic}"));
+                            }
+                            Err(e) => ui::warn(&format!("recovery failed ({e}) — record kept, will retry next start: {}", p.display())),
+                        }
+                    }
                 }
-                ui::notice(&format!("deleted {deleted} record(s)"));
             }
         }
     }
 ```
 
-DİKKAT: mevcut kodda uyarı nasıl üretiliyorsa (döngü/values) onu yeniden kullan; `confirm` reddinde ve TTY-değilken akış aynen devam etmeli (oturum açılışı engellenmez).
+Uyum notları (koda bak): `global`/`project_root`/`backend` bu noktada gerçekte hangi sırayla hazır — salvage backend seçiminden SONRA durmalı, gerekirse tarama noktasını taşı; user-turn filtresi Message tipinin gerçek role alanıyla; boş-history eşiği "hiç user turn yok". `backend.reset_session()` gerekiyorsa flush çağrıları arasında (CLI session kirliliği — slug mini-session paritesine bak).
 
-- [ ] **Step 2:** `cargo build && cargo test` → tümü PASS
-- [ ] **Step 3:** Commit + push: `temizlik: açılışta yarım kayıtlar için tek onaylı silme önerisi (TTY-only, default hayır)`
+- [ ] **Step 2:** `cargo build && cargo test` → PASS. Commit + push: `salvage: açılışta yarım kayıt sormadan kurtarılır — flush + .done rename (TTY-only)`
 
 ---
 
-### Task 3: SPEC + v0.18.3
+### Task 4: SPEC + v0.18.3
 
-**Files:** `SPEC.md`, `Cargo.toml`(+lock), sürüm testi
-
-- [ ] **Step 1:** SPEC'te half-finished uyarısını anlatan maddeye tek cümle: TTY'de onaylı silme önerisi (default hayır), pipe'ta yalnız uyarı.
-- [ ] **Step 2:** Cargo `0.18.3`; `version_aligned_with_spec` testi `"0.18.3"`; `cargo build`.
+- [ ] **Step 1:** SPEC'te half-finished maddesi güncellenir: otomatik salvage (TTY), pipe'ta warn, hata=bekle-tekrar-dene.
+- [ ] **Step 2:** Cargo `0.18.3`; sürüm testi `"0.18.3"`; `cargo build`.
 - [ ] **Step 3:** Verify: `cargo test` PASS · clippy yeni uyarı 0 · `cargo install --path .`.
 
 ```bash
 git add SPEC.md Cargo.toml Cargo.lock src/
-git commit -m "temizlik: SPEC + v0.18.3"
+git commit -m "salvage: SPEC + v0.18.3"
 git push
 git tag v0.18.3 && git push --tags
 ```
 
-- [ ] **Step 4 (elle doğrulama — ATLA, Anil koşacak):** stagit'te `usta` → uyarılar + "delete 2 ...? [y/N]" → `y` → silinir, bir sonraki açılış temiz; pipe'ta (`echo | usta ...`) soru sorulmaz.
+- [ ] **Step 4 (elle doğrulama — ATLA, Anil koşacak):** stagit'te `usta` → "recovering unflushed session … recovered: kaynak-ingest" ×2 → progress dosyaları oluşmuş, kayıtlar `.done.jsonl`, bir sonraki açılış uyarısız; `echo | usta ...` pipe'ta yalnız warn.
