@@ -512,6 +512,10 @@ async fn flush_progress(
     if files.is_empty() {
         anyhow::bail!("model produced no files — nothing was written");
     }
+    // Shell guarantee for the `/game` preference: capture the on-disk state of the
+    // `- gamification:` line BEFORE the model rewrites USER.md. If the closing prompt's
+    // KEEP rule is ignored (line dropped or value flipped), we restore it after the write.
+    let game_pref_before = global.as_deref().and_then(read_game_pref);
     for (name, content) in files {
         let path = match name.as_str() {
             "progress" => p_path.clone(),
@@ -535,6 +539,16 @@ async fn flush_progress(
         }
         progress::write_atomic(&path, &content)?;
         ui::notice(&format!("updated: {}", path.display()));
+    }
+
+    // Restore the `/game` preference if the model's profile rewrite dropped or flipped
+    // it (game_pref_before == None → user never toggled → left untouched).
+    if let Some(g) = &global {
+        match restore_game_pref(g, game_pref_before) {
+            Ok(true) => ui::notice("gamification preference restored"),
+            Ok(false) => {}
+            Err(e) => ui::warn(&format!("gamification preference could not be restored: {e}")),
+        }
     }
 
     // Update the global catalog — a failure here doesn't roll back the progress
@@ -880,6 +894,34 @@ pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
         format!("{}\n\n## Tercihler\n{value}\n", content.trim_end())
     };
     progress::write_atomic(&path, &new)
+}
+
+/// Raw on-disk state of the shell-managed `- gamification:` line in USER.md.
+/// `None` = no such line (user never toggled `/game`); `Some(true/false)` = line
+/// present with value. Unlike `game_pref`, this distinguishes "line absent" from
+/// "line present and off" — needed to know whether a restore should touch the file.
+pub(crate) fn read_game_pref(global: &Path) -> Option<bool> {
+    let content = std::fs::read_to_string(global.join("USER.md")).ok()?;
+    content.lines().find_map(|l| {
+        let v = l.trim().strip_prefix("- gamification:")?;
+        Some(v.trim() == "on")
+    })
+}
+
+/// Shell restore guarantee for the `/game` preference. `before` is the raw state
+/// captured (via `read_game_pref`) BEFORE the closing flush rewrote USER.md. If the
+/// model dropped the line or flipped its value, the captured value is written back.
+/// `before == None` (user never toggled) is left strictly untouched — no line is added.
+/// Returns whether a restore was performed. Pure: does exactly one conditional write.
+pub(crate) fn restore_game_pref(global: &Path, before: Option<bool>) -> Result<bool> {
+    let Some(want) = before else {
+        return Ok(false);
+    };
+    if read_game_pref(global) == Some(want) {
+        return Ok(false); // model honored the KEEP rule — nothing to do
+    }
+    set_game_pref(global, want)?;
+    Ok(true)
 }
 
 /// Mock-exam slash command (`/exam`) — same exact-match pattern as `help::is_help_command`.
@@ -2446,6 +2488,80 @@ mod tests {
         let c2 = std::fs::read_to_string(base.join("USER.md")).unwrap();
         assert!(c2.ends_with('\n')); // ikinci toggle'da da korunur
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_game_pref_readds_dropped_line_and_keeps_other_content() {
+        let base = std::env::temp_dir().join(format!("usta_restore_drop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // Before flush: preference is on.
+        std::fs::write(
+            base.join("USER.md"),
+            "# Öğrenci Profili\n\n## Kim\n- Anil\n\n## Tercihler\n- gamification: on\n",
+        )
+        .unwrap();
+        let before = read_game_pref(&base);
+        assert_eq!(before, Some(true));
+
+        // Simulate the model rewriting the profile and DROPPING the preference line.
+        std::fs::write(
+            base.join("USER.md"),
+            "# Öğrenci Profili\n\n## Kim\n- Anil (güncel)\n",
+        )
+        .unwrap();
+
+        let restored = restore_game_pref(&base, before).unwrap();
+        assert!(restored); // restore happened
+        let c = std::fs::read_to_string(base.join("USER.md")).unwrap();
+        assert!(c.contains("- gamification: on")); // line is back
+        assert!(c.contains("## Kim")); // other (rewritten) profile content preserved
+        assert!(c.contains("Anil (güncel)"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_game_pref_reverts_flipped_value() {
+        let base = std::env::temp_dir().join(format!("usta_restore_flip_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("USER.md"),
+            "# Öğrenci Profili\n\n## Tercihler\n- gamification: on\n",
+        )
+        .unwrap();
+        let before = read_game_pref(&base);
+        assert_eq!(before, Some(true));
+
+        // Model flipped the value to off.
+        std::fs::write(
+            base.join("USER.md"),
+            "# Öğrenci Profili\n\n## Tercihler\n- gamification: off\n",
+        )
+        .unwrap();
+
+        let restored = restore_game_pref(&base, before).unwrap();
+        assert!(restored);
+        assert_eq!(read_game_pref(&base), Some(true)); // back to old value
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_game_pref_none_before_is_untouched() {
+        let base = std::env::temp_dir().join(format!("usta_restore_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // User never toggled — no preference line at all.
+        let body = "# Öğrenci Profili\n\n## Kim\n- Anil\n";
+        std::fs::write(base.join("USER.md"), body).unwrap();
+        let before = read_game_pref(&base);
+        assert_eq!(before, None);
+
+        let restored = restore_game_pref(&base, before).unwrap();
+        assert!(!restored); // nothing done
+        let c = std::fs::read_to_string(base.join("USER.md")).unwrap();
+        assert_eq!(c, body); // byte-for-byte untouched, no line added
         let _ = std::fs::remove_dir_all(&base);
     }
 
