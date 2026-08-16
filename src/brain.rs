@@ -232,7 +232,7 @@ mod tests {
 
         fs::write(
             global.join("approaches/rust.md"),
-            "YAKLAŞIM\n## Hedef\n2026-12-01",
+            "YAKLAŞIM\n## Goal\n2026-12-01",
         )
         .unwrap();
 
@@ -246,12 +246,12 @@ mod tests {
     fn gamification_loaded_only_when_user_md_opts_in() {
         let (global, _project) = temp_pair("gamification");
         fs::write(global.join("GAMIFICATION.md"), "GAMIFICATION-İÇERİK").unwrap();
-        fs::write(global.join("USER.md"), "# Profil\n\n## Tercihler\n- gamification: off\n").unwrap();
+        fs::write(global.join("USER.md"), "# Profil\n\n## Preferences\n- gamification: off\n").unwrap();
 
         let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(!sys.contains("GAMIFICATION-İÇERİK"));
 
-        fs::write(global.join("USER.md"), "# Profil\n\n## Tercihler\n- gamification: on\n").unwrap();
+        fs::write(global.join("USER.md"), "# Profil\n\n## Preferences\n- gamification: on\n").unwrap();
         let sys2 = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys2.contains("GAMIFICATION-İÇERİK"));
 
@@ -467,10 +467,10 @@ mod tests {
         fs::write(global.join("SOUL.md"), "ÇEKIRDEK").unwrap();
         let cdir = project.join(".usta/learner/curriculum");
         fs::create_dir_all(&cdir).unwrap();
-        fs::write(cdir.join("rust.md"), "HARITA: ownership görüldü").unwrap();
+        fs::write(cdir.join("rust.md"), "HARITA: ownership seen").unwrap();
 
         let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
-        assert!(sys.contains("HARITA: ownership görüldü"));
+        assert!(sys.contains("HARITA: ownership seen"));
         assert!(sys.contains("learner/curriculum/rust.md"));
 
         let _ = fs::remove_dir_all(global.parent().unwrap());

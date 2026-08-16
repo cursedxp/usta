@@ -15,7 +15,7 @@ This file contains NO behavior and is NOT loaded into the model — it's a human
 ## Loading Order (`brain.rs`)
 
 ```
-SOUL.md → RULES.md → TEACHING.md → [GOAL.md, only if approach has "## Hedef"]
+SOUL.md → RULES.md → TEACHING.md → [GOAL.md, only if approach has "## Goal"]
 → approaches/(software|_default).md → approaches/<topic>.md
 → USER.md → progress → curriculum → [TODAY section as-is]
 ```

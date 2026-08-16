@@ -197,7 +197,7 @@ mod tests {
     fn record_line_entries_roundtrip_and_skip_malformed() {
         let l1 = record_line("2026-08-15", "rust", Some(55), Some(7));
         let l2 = record_line("2026-08-15", "gtm", None, None);
-        let content = format!("# Oturum Geçmişi\n{l1}\n{l2}\nbozuk satır\n");
+        let content = format!("# Session History\n{l1}\n{l2}\nbozuk satır\n");
         let es = entries(&content);
         assert_eq!(es.len(), 2);
         assert_eq!(es[0].topic, "rust");
@@ -236,14 +236,14 @@ mod tests {
 
     #[test]
     fn settled_count_counts_settled_states() {
-        let c = "- a: oturdu\n- b: görüldü\n- c: derinleşildi\n- d: görülmedi\n";
+        let c = "- a: settled\n- b: seen\n- c: deepened\n- d: not seen\n";
         assert_eq!(settled_count(c), Some(2));
         assert_eq!(settled_count(""), Some(0));
     }
 
     #[test]
     fn settled_count_ignores_state_words_in_item_text() {
-        let c = "- oturdu üstüne makale: görülmedi\n- b: oturdu\n- c: derinleşildi | due: 2026-01-01\n";
+        let c = "- makale hakkında settled: not seen\n- b: settled\n- c: deepened | due: 2026-01-01\n";
         assert_eq!(settled_count(c), Some(2));
     }
 
@@ -255,7 +255,7 @@ mod tests {
         append(&base, &record_line("2026-08-15", "rust", None, None)).unwrap();
         append(&base, &record_line("2026-08-15", "gtm", None, None)).unwrap();
         let c = std::fs::read_to_string(base.join("learner/history.md")).unwrap();
-        assert!(c.starts_with("# Oturum Geçmişi"));
+        assert!(c.starts_with("# Session History"));
         assert_eq!(entries(&c).len(), 2);
         let _ = std::fs::remove_dir_all(&base);
     }

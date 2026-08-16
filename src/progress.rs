@@ -397,9 +397,9 @@ mod tests {
 
     #[test]
     fn closing_prompt_embeds_topic_and_existing() {
-        let s = closing_prompt("rust", Some("- Seviye: orta"), None, None, None, None, None);
+        let s = closing_prompt("rust", Some("- Level: orta"), None, None, None, None, None);
         assert!(s.contains("rust"));
-        assert!(s.contains("- Seviye: orta"));
+        assert!(s.contains("- Level: orta"));
     }
 
     #[test]
@@ -417,9 +417,9 @@ mod tests {
     #[test]
     fn closing_prompt_requests_rich_sections() {
         let s = closing_prompt("rust", None, None, None, None, None, None);
-        assert!(s.contains("Geri çağırma soruları"));
-        assert!(s.contains("Hata günlüğü"));
-        assert!(s.contains("İpucu merdiveni"));
+        assert!(s.contains("Recall questions"));
+        assert!(s.contains("Error log"));
+        assert!(s.contains("Hint ladder"));
     }
 
     #[test]
@@ -428,7 +428,7 @@ mod tests {
         assert!(s.contains("due: YYYY-MM-DD"));
         assert!(s.contains("ivl:"));
         assert!(s.contains("1, 3, 7, 16, 35, 90"));
-        assert!(s.contains("retires: move it to")); // unique to the ivl:90 retirement sentence, unlike "Kapatılanlar" which also appears in unrelated rules
+        assert!(s.contains("retires: move it to")); // unique to the ivl:90 retirement sentence, unlike "Retired" which also appears in unrelated rules
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn split_files_separates_three_files() {
-        let reply = "===DOSYA: progress===\nP İÇERİK\n===DOSYA: approach===\nA İÇERİK\n===DOSYA: curriculum===\nC İÇERİK\n";
+        let reply = "===FILE: progress===\nP İÇERİK\n===FILE: approach===\nA İÇERİK\n===FILE: curriculum===\nC İÇERİK\n";
         let out = split_files(reply);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0], ("progress".to_string(), "P İÇERİK".to_string()));
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn split_files_cleans_fenced_content() {
-        let reply = "===DOSYA: progress===\n```markdown\n# başlık\n```\n";
+        let reply = "===FILE: progress===\n```markdown\n# başlık\n```\n";
         let out = split_files(reply);
         assert_eq!(out[0].1, "# başlık");
     }
@@ -495,8 +495,8 @@ mod tests {
         assert!(s.contains("PMEVCUT"));
         assert!(s.contains("AMEVCUT"));
         assert!(s.contains("CMEVCUT"));
-        assert!(s.contains("===DOSYA:"));
-        assert!(s.contains("görülmedi/görüldü/oturdu/derinleşildi"));
+        assert!(s.contains("===FILE:"));
+        assert!(s.contains("not seen/seen/settled/deepened"));
     }
 
     #[test]
@@ -509,15 +509,15 @@ mod tests {
     #[test]
     fn closing_prompt_defines_goal_sections() {
         let s = closing_prompt("almanca", None, None, None, None, None, None);
-        assert!(s.contains("## Hedef Durumu"));
-        assert!(s.contains("## Hedef"));
+        assert!(s.contains("## Goal Status"));
+        assert!(s.contains("## Goal"));
         assert!(s.contains("pace assessment"));
     }
 
     #[test]
     fn closing_prompt_defines_profile_rules() {
         let s = closing_prompt("rust", None, None, None, Some("CURRENT PROFILE"), None, None);
-        assert!(s.contains("===DOSYA: profile==="));
+        assert!(s.contains("===FILE: profile==="));
         assert!(s.contains("CURRENT PROFILE"));
         assert!(s.contains("NO TOPIC KNOWLEDGE"));
         assert!(s.contains("only")); // generated only if new/changed info exists
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn split_files_carries_mentor_names() {
-        let reply = "===DOSYA: project===\nP\n===DOSYA: project-progress===\nQ";
+        let reply = "===FILE: project===\nP\n===FILE: project-progress===\nQ";
         let files = split_files(reply);
         assert_eq!(files[0], ("project".to_string(), "P".to_string()));
         assert_eq!(files[1], ("project-progress".to_string(), "Q".to_string()));
@@ -598,7 +598,7 @@ mod tests {
         assert!(s.contains("COURSE MATERIAL FOUND"));
         assert!(s.contains("=== kitap.md ==="));
         assert!(s.contains("ASK whether to anchor"));
-        assert!(s.contains("kaynak:"));
+        assert!(s.contains("source:"));
         let s = onboarding_prompt("rust", None, false, false, None);
         assert!(!s.contains("COURSE MATERIAL FOUND"));
     }
@@ -612,7 +612,7 @@ mod tests {
         // Jargon-free fallback question + question limit.
         assert!(s.contains("a deadline or exam"));
         assert!(s.contains("at most two questions"));
-        assert!(s.contains("## Hedef"));
+        assert!(s.contains("## Goal"));
     }
 
     #[test]
@@ -650,14 +650,14 @@ mod tests {
     #[test]
     fn closing_prompt_preserves_material_source_refs() {
         let s = closing_prompt("rust", None, None, None, None, None, None);
-        assert!(s.contains("kaynak:"));
-        assert!(s.contains("— kaynak: web"));
+        assert!(s.contains("source:"));
+        assert!(s.contains("— source: web"));
     }
 
     #[test]
     fn closing_prompt_defines_open_exercise_section() {
         let s = closing_prompt("rust", None, None, None, None, None, None);
-        assert!(s.contains("## Açık egzersiz"));
+        assert!(s.contains("## Open exercise"));
         assert!(s.contains("assigned"));
     }
 
@@ -719,10 +719,10 @@ mod tests {
 
     #[test]
     fn clean_reply_strips_fenced_block() {
-        let raw = "```markdown\n# Rust — İlerleme\n- Seviye: orta\n```";
+        let raw = "```markdown\n# Rust — Progress\n- Level: orta\n```";
         assert_eq!(
             clean_markdown_reply(raw),
-            "# Rust — İlerleme\n- Seviye: orta"
+            "# Rust — Progress\n- Level: orta"
         );
     }
 

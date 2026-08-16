@@ -145,7 +145,7 @@ mod tests {
     fn upsert_creates_section_preserving_prose() {
         let out = upsert("# Katalog\naçıklama satırı", "rust", Path::new("/p/a"), "2026-08-07");
         assert!(out.contains("açıklama satırı"));
-        assert!(out.contains("## Kayıtlar"));
+        assert!(out.contains("## Records"));
         assert!(out.contains("- rust | /p/a | 2026-08-07"));
     }
 
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn entries_parses_topic_project_date() {
-        let content = "önsöz\n\n## Kayıtlar\n- rust | /p/a | 2026-08-07\n- js | /p/b | 2026-08-01\n";
+        let content = "önsöz\n\n## Records\n- rust | /p/a | 2026-08-07\n- js | /p/b | 2026-08-01\n";
         let list = entries(content);
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].topic, "rust");
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn entries_skips_malformed_lines() {
-        let content = "## Kayıtlar\n- bozuk satır boru yok\n- rust | /p/a | 2026-08-07\n";
+        let content = "## Records\n- bozuk satır boru yok\n- rust | /p/a | 2026-08-07\n";
         assert_eq!(entries(content).len(), 1);
     }
 
@@ -211,7 +211,7 @@ mod tests {
         std::fs::write(pdir.join("yeni-konu.md"), "içerik").unwrap();
         std::fs::write(pdir.join("bos.md"), "  ").unwrap(); // empty → not listed
         let index = format!(
-            "## Kayıtlar\n- eski-konu | {p} | 2026-08-01\n- yeni-konu | {p} | 2026-08-07\n- baska-proje-konu | /tmp/baska | 2026-08-06\n",
+            "## Records\n- eski-konu | {p} | 2026-08-01\n- yeni-konu | {p} | 2026-08-07\n- baska-proje-konu | /tmp/baska | 2026-08-06\n",
             p = base.display()
         );
         let t = local_topics(&base, &index);

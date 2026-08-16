@@ -390,8 +390,8 @@ mod tests {
     }
 
     const PROFILE: &str = "# Öğrenci Profili — Ada\n\n## Kim\n- test";
-    const PROGRESS: &str = "# rust — İlerleme\n## Seviye\n- Orta: ownership oturdu\n## Geri çağırma soruları\n- Soru 1? — cevap\n- Soru 2? — cevap\n- Soru 3? — cevap\n";
-    const CURRICULUM: &str = "# rust haritası\n- Ownership: oturdu\n- Borrowing: görüldü\n- Lifetimes: görülmedi\n- Traits: görülmedi\n";
+    const PROGRESS: &str = "# rust — Progress\n## Level\n- Orta: ownership settled\n## Recall questions\n- Soru 1? — cevap\n- Soru 2? — cevap\n- Soru 3? — cevap\n";
+    const CURRICULUM: &str = "# rust haritası\n- Ownership: settled\n- Borrowing: seen\n- Lifetimes: not seen\n- Traits: not seen\n";
 
     #[test]
     fn extract_name_reads_h1_after_dash() {
@@ -402,13 +402,13 @@ mod tests {
 
     #[test]
     fn extract_level_reads_first_line_of_section() {
-        assert_eq!(extract_level(PROGRESS), Some("Orta: ownership oturdu".to_string()));
+        assert_eq!(extract_level(PROGRESS), Some("Orta: ownership settled".to_string()));
         assert_eq!(extract_level("# boş"), None);
     }
 
     #[test]
     fn curriculum_percent_counts_non_unseen() {
-        // 4 items have a status, 2 are `görülmedi` → 50%
+        // 4 items have a status, 2 are `not seen` → 50%
         assert_eq!(curriculum_percent(CURRICULUM), Some(50));
         assert_eq!(curriculum_percent("# durum yok"), None);
     }
@@ -416,25 +416,25 @@ mod tests {
     #[test]
     fn next_unseen_returns_first_unseen_item_text() {
         assert_eq!(next_unseen(CURRICULUM), Some("Lifetimes".to_string()));
-        assert_eq!(next_unseen("- Hepsi: oturdu"), None);
+        assert_eq!(next_unseen("- Hepsi: settled"), None);
     }
 
     #[test]
     fn state_matching_is_exact_segment_not_substring() {
-        // Madde METNİNDE durum kelimesi geçiyor — sayılmamalı/karışmamalı.
-        let c = "- oturdu kelimesi konulu makale: görülmedi\n- borrow: oturdu\n";
+        // Item TEXT contains a state word — must not be counted/confused with it.
+        let c = "- makale hakkında settled: not seen\n- borrow: settled\n";
         assert_eq!(curriculum_percent(c), Some(50)); // 1/2 seen
-        assert_eq!(next_unseen(c).as_deref(), Some("oturdu kelimesi konulu makale"));
+        assert_eq!(next_unseen(c).as_deref(), Some("makale hakkında settled"));
     }
 
     #[test]
     fn state_matching_uses_trailing_segment_not_item_text_word() {
-        // Madde metni "görülmedi" içeriyor ama GERÇEK durum "oturdu" (settled/seen).
-        // Eski contains-mantığı bunu not-seen sayardı; map_state_of trailing segmenti okur.
-        let c = "- görülmedi durumunda karar: oturdu\n- Lifetimes: görülmedi\n";
-        // İlk madde seen (oturdu), ikinci not-seen → 1/2 = %50.
+        // Item text contains "not seen" but the REAL state is "settled" (seen).
+        // The old contains-logic would have miscounted this as not-seen; map_state_of reads the trailing segment.
+        let c = "- not seen decision result: settled\n- Lifetimes: not seen\n";
+        // First item is seen (settled), second is not-seen → 1/2 = 50%.
         assert_eq!(curriculum_percent(c), Some(50));
-        // next_unseen ilk maddeyi ATLAMALI, gerçekten not-seen olan ikinciyi döndürmeli.
+        // next_unseen must SKIP the first item, return the truly not-seen second one.
         assert_eq!(next_unseen(c).as_deref(), Some("Lifetimes"));
     }
 
@@ -447,15 +447,15 @@ mod tests {
     #[test]
     fn due_count_counts_due_and_untagged_skips_future() {
         let p = "\
-# rust — İlerleme
+# rust — Progress
 
-## Geri çağırma soruları
+## Recall questions
 - Borrow checker ne yapar? — sahipliği derlemede doğrular | due: 2026-08-14 | ivl: 3
 - Trait nedir? — davranış sözleşmesi | due: 2026-08-15 | ivl: 1
 - Lifetime nedir? — referans ömrü | due: 2026-09-01 | ivl: 35
 - Eski format soru — cevap
 
-## Hata günlüğü
+## Error log
 - typo | 1 | due: 2026-08-01 gibi görünen ama başka bölümde
 ";
         // past + today + untagged = 3; future (09-01) and other-section lines don't count
@@ -467,9 +467,9 @@ mod tests {
     #[test]
     fn due_questions_selects_and_orders_oldest_due_first() {
         let p = "\
-# rust — İlerleme
+# rust — Progress
 
-## Geri çağırma soruları
+## Recall questions
 - B sorusu — cevap | due: 2026-08-15 | ivl: 1
 - A sorusu — cevap | due: 2026-08-14 | ivl: 3
 - Eski format soru — cevap
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn due_questions_caps_at_three_but_due_count_stays_uncapped() {
         let p = "\
-## Geri çağırma soruları
+## Recall questions
 - S1 — c | due: 2026-08-10 | ivl: 1
 - S2 — c | due: 2026-08-11 | ivl: 1
 - S3 — c | due: 2026-08-12 | ivl: 1
@@ -505,10 +505,10 @@ mod tests {
     #[test]
     fn due_questions_excludes_other_section_bullets() {
         let p = "\
-## Geri çağırma soruları
+## Recall questions
 - Soru — cevap | due: 2026-08-01 | ivl: 1
 
-## Hata günlüğü
+## Error log
 - typo | 1 | due: 2026-08-01 gibi görünen ama başka bölümde
 ";
         let qs = due_questions(p, "2026-08-15");
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn due_count_matches_due_questions_len_when_three_or_fewer() {
-        let p = "## Geri çağırma soruları\n- q1 — a | due: 2026-08-01 | ivl: 1\n- q2 — a | due: 2026-08-02 | ivl: 1\n";
+        let p = "## Recall questions\n- q1 — a | due: 2026-08-01 | ivl: 1\n- q2 — a | due: 2026-08-02 | ivl: 1\n";
         assert_eq!(due_count(p, "2026-08-15"), due_questions(p, "2026-08-15").len());
     }
 
@@ -537,13 +537,13 @@ mod tests {
     #[test]
     fn welcome_shows_due_line_three_states() {
         // state 1: due questions exist → "Reviews due today: N"
-        let p_due = "## Geri çağırma soruları\n- q — a | due: 2026-01-01 | ivl: 1\n";
+        let p_due = "## Recall questions\n- q — a | due: 2026-01-01 | ivl: 1\n";
         let d = gather(None, Some(p_due), None, "rust", "opus · cli", "~/x", "2026-08-15", None);
         let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
         assert!(joined.contains("Reviews due today: 1"));
 
         // state 2: questions exist, none due → "No reviews due today"
-        let p_future = "## Geri çağırma soruları\n- q — a | due: 2099-01-01 | ivl: 90\n";
+        let p_future = "## Recall questions\n- q — a | due: 2099-01-01 | ivl: 90\n";
         let d = gather(None, Some(p_future), None, "rust", "opus · cli", "~/x", "2026-08-15", None);
         let joined = plain_lines(&render_welcome(&d, 80)).join("\n");
         assert!(joined.contains("No reviews due today"));
@@ -707,7 +707,7 @@ mod tests {
     #[test]
     fn welcome_shows_week_line() {
         // state 1: sessions this week + an unbroken streak → full line.
-        let h = "# Oturum Geçmişi\n- 2026-08-14 | rust | map 40% | settled 4\n- 2026-08-15 | rust | map 55% | settled 7\n";
+        let h = "# Session History\n- 2026-08-14 | rust | map 40% | settled 4\n- 2026-08-15 | rust | map 55% | settled 7\n";
         let d = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", Some(h));
         assert_eq!(d.week_sessions, 2);
         assert_eq!(d.streak, 2);
@@ -717,7 +717,7 @@ mod tests {
         // state 2: sessions this week but streak == 0 (entries are 2+ days before
         // `today`, so `current_streak` sees a broken run — an ADHD-unsafe "streak 0"
         // must never be rendered, only the sessions count survives).
-        let h0 = "# Oturum Geçmişi\n- 2026-08-10 | rust | map 40% | settled 4\n";
+        let h0 = "# Session History\n- 2026-08-10 | rust | map 40% | settled 4\n";
         let d0 = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", Some(h0));
         assert_eq!(d0.week_sessions, 1);
         assert_eq!(d0.streak, 0);

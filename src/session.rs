@@ -92,10 +92,10 @@ mod tests {
         for i in 0..10 {
             s.push_user(&format!("m{i}"));
         }
-        s.compact(4, "[ARA KAYIT]");
+        s.compact(4, "[CHECKPOINT]");
         let h = s.history();
         assert_eq!(h.len(), 5);
-        assert_eq!(h[0].content, serde_json::Value::String("[ARA KAYIT]".into()));
+        assert_eq!(h[0].content, serde_json::Value::String("[CHECKPOINT]".into()));
         assert_eq!(h[4].content, serde_json::Value::String("m9".into()));
     }
 
@@ -103,7 +103,7 @@ mod tests {
     fn compact_noop_when_history_short() {
         let mut s = Session::new("rust", "sistem");
         s.push_user("tek");
-        s.compact(4, "[ARA KAYIT]");
+        s.compact(4, "[CHECKPOINT]");
         assert_eq!(s.history().len(), 1);
     }
 }

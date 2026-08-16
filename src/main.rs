@@ -1911,7 +1911,7 @@ mod tests {
 
     #[test]
     fn factory_targets_includes_uncatalogued_cwd_project() {
-        let idx = "## Kayıtlar\n- rust | /p/a | 2026-08-01\n";
+        let idx = "## Records\n- rust | /p/a | 2026-08-01\n";
         // cwd project not in the catalog → still targeted
         let t = factory_targets(idx, Some(Path::new("/p/orphan")));
         assert!(t.contains(&PathBuf::from("/p/a/.usta")));
@@ -1962,7 +1962,7 @@ mod tests {
         std::fs::create_dir_all(global.join("approaches")).unwrap();
 
         // yalnız global hedefli → true
-        std::fs::write(global.join("approaches/rust.md"), "yaklaşım\n## Hedef\nsınav").unwrap();
+        std::fs::write(global.join("approaches/rust.md"), "yaklaşım\n## Goal\nsınav").unwrap();
         assert!(topic_has_goal(&project, &global, "rust"));
 
         // override VAR ama hedefsiz → override kazanır → false
@@ -1970,7 +1970,7 @@ mod tests {
         assert!(!topic_has_goal(&project, &global, "rust"));
 
         // override hedefli → true
-        std::fs::write(project.join(".usta/approaches/rust.md"), "## Hedef\nCEFR B2").unwrap();
+        std::fs::write(project.join(".usta/approaches/rust.md"), "## Goal\nCEFR B2").unwrap();
         assert!(topic_has_goal(&project, &global, "rust"));
 
         // hiç dosya yok → false
@@ -2098,9 +2098,9 @@ mod tests {
     }
 
     #[test]
-    fn slugify_blank_input_falls_back_to_genel() {
-        assert_eq!(slugify_topic("   "), "genel");
-        assert_eq!(slugify_topic(""), "genel");
+    fn slugify_blank_input_falls_back_to_general() {
+        assert_eq!(slugify_topic("   "), "general");
+        assert_eq!(slugify_topic(""), "general");
     }
 
     #[test]
@@ -2170,7 +2170,7 @@ mod tests {
     #[test]
     fn render_stats_omits_missing_settled_segment() {
         // Entry has a map percentage but no settled count (e.g. curriculum exists
-        // but has no items in "oturdu"/"derinleşildi" state yet) — the "settled X → Y"
+        // but has no items in "settled"/"deepened" state yet) — the "settled X → Y"
         // segment must be omitted entirely, not rendered as "None" or a dangling arrow,
         // while the "map X% → Y%" segment still renders normally.
         let entry = history::Entry {
@@ -2707,7 +2707,7 @@ mod tests {
         let c = std::fs::read_to_string(base.join("USER.md")).unwrap();
         assert_eq!(c.matches("- gamification:").count(), 1);
         assert!(c.contains("## Kim")); // diğer içerik korunur
-        assert!(c.contains("## Tercihler"));
+        assert!(c.contains("## Preferences"));
         assert!(c.ends_with('\n')); // trailing newline korunur (line-replace path)
         set_game_pref(&base, false).unwrap();
         assert!(!game_pref(&base));
@@ -2725,7 +2725,7 @@ mod tests {
         // Before flush: preference is on.
         std::fs::write(
             base.join("USER.md"),
-            "# Öğrenci Profili\n\n## Kim\n- Anil\n\n## Tercihler\n- gamification: on\n",
+            "# Öğrenci Profili\n\n## Kim\n- Anil\n\n## Preferences\n- gamification: on\n",
         )
         .unwrap();
         let before = read_game_pref(&base);
@@ -2754,7 +2754,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(
             base.join("USER.md"),
-            "# Öğrenci Profili\n\n## Tercihler\n- gamification: on\n",
+            "# Öğrenci Profili\n\n## Preferences\n- gamification: on\n",
         )
         .unwrap();
         let before = read_game_pref(&base);
@@ -2763,7 +2763,7 @@ mod tests {
         // Model flipped the value to off.
         std::fs::write(
             base.join("USER.md"),
-            "# Öğrenci Profili\n\n## Tercihler\n- gamification: off\n",
+            "# Öğrenci Profili\n\n## Preferences\n- gamification: off\n",
         )
         .unwrap();
 
@@ -2808,7 +2808,7 @@ mod tests {
         assert_eq!(game_streak_line(&base, "2026-08-16"), None);
 
         // game ON, but no history file (or empty) → None.
-        std::fs::write(base.join("USER.md"), "# Öğrenci Profili\n\n## Tercihler\n- gamification: on\n").unwrap();
+        std::fs::write(base.join("USER.md"), "# Öğrenci Profili\n\n## Preferences\n- gamification: on\n").unwrap();
         std::fs::remove_file(base.join("learner/history.md")).unwrap();
         assert_eq!(game_streak_line(&base, "2026-08-16"), None);
 
