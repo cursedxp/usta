@@ -436,7 +436,11 @@ pub fn render_welcome_identity(
 fn map_bar(pct: u8) -> String {
     let pct = pct.min(100);
     let filled = ((pct as f32) * 12.0 / 100.0).round() as usize;
-    let filled = filled.min(12);
+    // Mirror of the low-end guard below: rounding alone maps 96-99% to a full
+    // 12/12 bar (round(96 * 12 / 100) == 12), which reads as "done" next to a
+    // number that isn't 100. A full bar means 100% and nothing else. (No
+    // `.min(12)` needed first — `pct <= 100` already bounds `filled` at 12.)
+    let filled = if pct < 100 && filled >= 12 { 11 } else { filled };
     let filled = if pct > 0 && filled == 0 { 1 } else { filled };
     format!("{}{}", "▓".repeat(filled), "░".repeat(12 - filled))
 }
@@ -505,7 +509,16 @@ fn solo_box(title: &str, rows: Vec<Vec<Span<'static>>>, width: u16) -> Text<'sta
 // Wired into run.rs (v0.21.0): the `resumed` branch calls this instead of
 // `render_welcome`, replacing the second identity-carrying frame that used
 // to print right after the one ask_topic already showed.
-pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
+///
+/// Returns `None` when every row would drop — i.e. there's genuinely nothing
+/// to show (a topic upserted at OPEN but never reaching its first CLOSING
+/// flush: no `last_session`, `level`, `map_percent`, `next_item` or due
+/// count). Rendering `solo_box` anyway would print an empty two-line frame
+/// (top+bottom border, no content) — dead weight on screen, since the
+/// `resuming: <topic>` notice printed moments earlier by the caller already
+/// says everything true at this point. Callers must skip printing the panel
+/// entirely on `None` rather than substitute a placeholder box.
+pub fn render_resume(d: &WelcomeData, width: u16) -> Option<Text<'static>> {
     let total = (width as usize).clamp(60, 100);
     let inner = total - 2;
     // Label column is "  " (2) + pad(label,12) (12) + " " (1) = 15 chars;
@@ -544,7 +557,17 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
             (None, None) => unreachable!("guarded by the outer if"),
         };
         let wrapped = wrap(&value_text, value_w);
-        let single_line = wrapped.len() <= 1;
+        // `wrapped` is computed from `wrap`, which collapses whitespace runs
+        // (it splits on `split_whitespace`). But when this row IS single-line,
+        // it's rendered from `mixed`'s RAW spans (below), not from `wrapped` —
+        // so the fit decision must be based on the width that is ACTUALLY
+        // rendered (`value_text`, which preserves whatever whitespace `level`
+        // came with), not on `wrapped.len()`. Otherwise a raw string with
+        // doubled internal spaces (e.g. from an LLM-written bullet —
+        // `extract_level` only trims the ends) can collapse to something that
+        // fits while the raw text that's actually printed does not, and the
+        // row silently overflows `value_w`.
+        let single_line = value_text.width() <= value_w;
         for (i, line) in wrapped.into_iter().enumerate() {
             if i == 0 {
                 let mut row = vec![Span::raw("  "), Span::styled(pad(label, 12), dim), Span::raw(" ")];
@@ -606,10 +629,18 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
         ]);
     }
 
+    // Finding 1: nothing to show — skip the panel entirely rather than print
+    // an empty top+bottom-border frame. See the doc comment above for when
+    // this is reachable (topic upserted at OPEN, never reaching CLOSING; or
+    // any closing flush that failed).
+    if rows.is_empty() {
+        return None;
+    }
+
     // Trailing space is deliberate — see solo_box's "NOTE: title is
     // intentionally NOT trimmed" comment for why it must survive.
     let title = format!("Continuing · {} ", d.topic);
-    solo_box(&title, rows, width)
+    Some(solo_box(&title, rows, width))
 }
 
 /// Pick the welcome render for the topic-entry point (run.rs, `had_topic_arg
@@ -623,9 +654,14 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
 /// them twice within a few rows — that duplicate-box bug is exactly what this
 /// dispatch exists to prevent, so the resume path instead gets the compact,
 /// identity-free continuation panel.
-pub fn render_for_entry(had_topic_arg: bool, d: &WelcomeData, width: u16) -> Text<'static> {
+///
+/// Returns `None` only on the resume path when `render_resume` has nothing to
+/// show (see its doc comment) — the full-mode box (`had_topic_arg = true`)
+/// always has identity content, so that arm always returns `Some`. Callers
+/// must skip printing on `None` rather than substitute a placeholder.
+pub fn render_for_entry(had_topic_arg: bool, d: &WelcomeData, width: u16) -> Option<Text<'static>> {
     if had_topic_arg {
-        render_welcome(d, width)
+        Some(render_welcome(d, width))
     } else {
         render_resume(d, width)
     }
@@ -1181,7 +1217,7 @@ mod tests {
     #[test]
     fn render_resume_lines_have_equal_display_width() {
         let d = full_resume_data();
-        let t = render_resume(&d, 80);
+        let t = render_resume(&d, 80).unwrap();
         let lines = plain_lines(&t);
         assert!(lines.len() >= 3);
         let w = lines[0].width();
@@ -1192,14 +1228,14 @@ mod tests {
     #[test]
     fn render_resume_orange_discipline() {
         let d = full_resume_data();
-        let t = render_resume(&d, 80);
+        let t = render_resume(&d, 80).unwrap();
         assert!(orange_element_count(&t) <= 2, "resume orange > 2: {t:#?}");
     }
 
     #[test]
     fn render_resume_has_no_identity() {
         let d = full_resume_data();
-        let joined = plain_lines(&render_resume(&d, 80)).join("\n");
+        let joined = plain_lines(&render_resume(&d, 80).unwrap()).join("\n");
         assert!(!joined.contains("██"));
         assert!(!joined.contains("Welcome back"));
         assert!(!joined.contains("opus · cli"));
@@ -1210,7 +1246,7 @@ mod tests {
     #[test]
     fn render_resume_title_names_the_topic() {
         let d = full_resume_data();
-        let lines = plain_lines(&render_resume(&d, 80));
+        let lines = plain_lines(&render_resume(&d, 80).unwrap());
         assert!(lines[0].contains("Continuing · kaynak-ingest"), "top border: {}", lines[0]);
     }
 
@@ -1220,7 +1256,7 @@ mod tests {
         d.map_percent = None;
         d.due_count = 0;
         d.level = None;
-        let joined = plain_lines(&render_resume(&d, 80)).join("\n");
+        let joined = plain_lines(&render_resume(&d, 80).unwrap()).join("\n");
         assert!(joined.contains("Last session"));
         assert!(joined.contains("Up next"));
         assert!(!joined.contains("Map"));
@@ -1240,7 +1276,7 @@ mod tests {
         let long_item = "Async trait objects and pinning semantics in tokio task spawning and scheduling";
         let mut d = full_resume_data();
         d.next_item = Some(long_item.to_string());
-        let lines = plain_lines(&render_resume(&d, 80));
+        let lines = plain_lines(&render_resume(&d, 80).unwrap());
         let joined = lines.join(" ");
         assert!(!joined.contains('…'), "next_item was truncated: {lines:#?}");
         for word in long_item.split(' ') {
@@ -1262,7 +1298,7 @@ mod tests {
         let mut d = full_resume_data();
         d.topic = "async-trait-objects-and-pinning-semantics".to_string(); // 41 chars
         for width in [60u16, 70, 80, 90, 100] {
-            let lines = plain_lines(&render_resume(&d, width));
+            let lines = plain_lines(&render_resume(&d, width).unwrap());
             let w = lines[0].width();
             assert!(
                 lines.iter().all(|l| l.width() == w),
@@ -1283,7 +1319,7 @@ mod tests {
             "Intermediate — deep dive into async trait objects, pinning, and Send/Sync bounds for task schedulers"
                 .to_string(),
         );
-        let t = render_resume(&d, 60);
+        let t = render_resume(&d, 60).unwrap();
         let lines = plain_lines(&t);
         let w = lines[0].width();
         assert!(lines.iter().all(|l| l.width() == w), "hizasız satır: {lines:#?}");
@@ -1322,7 +1358,7 @@ mod tests {
         // was printed earlier on this path, so the full-mode box (which
         // carries the logo/greeting/model/dir) must be what's shown.
         let d = full_resume_data();
-        let t = render_for_entry(true, &d, 80);
+        let t = render_for_entry(true, &d, 80).expect("full-mode box always has identity content");
         let joined = plain_lines(&t).join("\n");
         assert!(joined.contains("██"), "missing logo block: {joined}");
         assert!(joined.contains("Welcome back"), "missing greeting: {joined}");
@@ -1337,7 +1373,7 @@ mod tests {
         // — that absence is the entire point of the fix this dispatcher
         // guards, so it's asserted directly rather than inferred.
         let d = full_resume_data();
-        let t = render_for_entry(false, &d, 80);
+        let t = render_for_entry(false, &d, 80).expect("resume data is present, panel must render");
         let lines = plain_lines(&t);
         assert!(
             lines[0].contains("Continuing · kaynak-ingest"),
@@ -1348,5 +1384,125 @@ mod tests {
         assert!(!joined.contains("██"), "logo block leaked into resume panel: {joined}");
         assert!(!joined.contains("Welcome back"), "greeting leaked into resume panel: {joined}");
         assert!(!joined.contains("opus · cli"), "model line leaked into resume panel: {joined}");
+    }
+
+    // --- TDD probes for the final review's REQUIRED findings ---------------
+
+    fn empty_resume_data(topic: &str) -> WelcomeData {
+        WelcomeData {
+            version: env!("CARGO_PKG_VERSION"),
+            name: None,
+            model: "opus · cli".to_string(),
+            dir: "~/x".to_string(),
+            topic: topic.to_string(),
+            level: None,
+            map_percent: None,
+            next_item: None,
+            drill_count: 0,
+            due_count: 0,
+            first_session: true,
+            week_sessions: 0,
+            streak: 0,
+            last_session: None,
+        }
+    }
+
+    // Finding 1 (IMPORTANT): a resumed topic with no recorded data (opened once,
+    // never closed, or a closing flush that failed) must not render an empty
+    // two-line box (just top+bottom border, nothing between). Before the fix
+    // `render_resume` had no way to signal "nothing to show" — it always
+    // returned a `Text`, so `solo_box` was called with an empty `rows` and
+    // printed exactly that empty frame. Fix: `render_resume` (and the
+    // `render_for_entry` dispatcher) now return `Option<Text>`, `None` when
+    // every row would drop — callers skip printing entirely, since the
+    // `resuming: <topic>` notice printed moments earlier already says
+    // everything true at this point.
+    #[test]
+    fn render_resume_no_data_returns_none_not_an_empty_box() {
+        let d = empty_resume_data("rust");
+        assert!(render_resume(&d, 80).is_none(), "expected no panel when there's no data to show, got a frame");
+    }
+
+    #[test]
+    fn render_for_entry_no_data_resume_returns_none() {
+        let d = empty_resume_data("rust");
+        assert!(render_for_entry(false, &d, 80).is_none());
+    }
+
+    // Finding 2 (IMPORTANT): row 1's single-line decision is based on `wrap`'s
+    // collapsed-whitespace width, but the single-line row is built from `mixed`,
+    // whose spans carry the RAW (uncollapsed) `level` string. A level string
+    // with doubled internal spaces (extract_level only trims the ends) can land
+    // in the band `collapsed <= value_w < raw`, where the row is judged to fit
+    // but actually overflows by the difference. Reproduces the reviewer's
+    // repro at width 60 with a doubled-space level string.
+    #[test]
+    fn render_resume_row1_fit_decision_matches_actually_rendered_width() {
+        let mut d = full_resume_data();
+        d.last_session = Some("2 days ago".to_string());
+        d.level = Some("aaaa  bbbb  cccc  dddd  x".to_string()); // raw 25, collapsed 22
+        let t = render_resume(&d, 60).expect("data present, panel must render");
+        let lines = plain_lines(&t);
+        let w = lines[0].width();
+        assert!(lines.iter().all(|l| l.width() == w), "hizasız satır (row1 fit/render width mismatch): {lines:#?}");
+    }
+
+    // Finding 4: `map_bar` must reserve a full 12/12 bar for 100% only — the
+    // doc comment reasons carefully about the low end (1% must show >= 1 filled
+    // cell) but the high end was unguarded, so `round(96 * 12 / 100) == 12`
+    // renders a visually-full bar next to "96%".
+    #[test]
+    fn render_resume_bar_full_only_at_100_percent() {
+        assert_eq!(map_bar(96).matches('▓').count(), 11, "96% must not render a full bar");
+        assert_eq!(map_bar(99).matches('▓').count(), 11, "99% must not render a full bar");
+        assert_eq!(map_bar(100).matches('▓').count(), 12);
+    }
+
+    // Finding 5a: constraint 4 says the resume panel's edges line up with the
+    // frame printed above it (identity welcome or full-mode welcome) — nothing
+    // pinned that cross-frame invariant. Covers the interesting widths: below
+    // the clamp floor (20), right at/around the floor (60, 61), a mid-range
+    // value (79, 80), and at/above the ceiling (100, 140) — the clamp is
+    // `clamp(60, 100)`, so the out-of-range ones matter most.
+    #[test]
+    fn all_three_renderers_agree_on_line_width_for_same_input_width() {
+        for width in [20u16, 60, 61, 79, 80, 100, 140] {
+            let d_full = gather(Some(PROFILE), Some(PROGRESS), Some(CURRICULUM), "rust", "opus · cli", "~/x", "2026-08-15", None);
+            let welcome_lines = plain_lines(&render_welcome(&d_full, width));
+            let welcome_box = &welcome_lines[..welcome_lines.len() - 1]; // drop appended help hint
+            let welcome_w = welcome_box[0].width();
+
+            let local = vec!["rust".to_string()];
+            let identity_t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &local, &[], false, width, 0, 0);
+            let identity_lines = plain_lines(&identity_t);
+            let identity_box = &identity_lines[..identity_lines.len() - 1];
+            let identity_w = identity_box[0].width();
+
+            let resume_t = render_resume(&full_resume_data(), width).expect("full resume data always renders");
+            let resume_lines = plain_lines(&resume_t);
+            let resume_w = resume_lines[0].width();
+
+            assert_eq!(welcome_w, identity_w, "welcome vs identity width mismatch at width={width}");
+            assert_eq!(welcome_w, resume_w, "welcome vs resume width mismatch at width={width}");
+        }
+    }
+
+    // Finding 5b: the existing orange-discipline test only catches
+    // over-brightening (too many BRAND spans) — a silent drop of the panel's
+    // DIM labels to plain style would pass it undetected. Pin the DIM modifier
+    // directly on each label span.
+    #[test]
+    fn render_resume_labels_carry_dim_modifier() {
+        let d = full_resume_data();
+        let t = render_resume(&d, 80).unwrap();
+        for label in ["Last session", "Map", "Up next", "Reviews"] {
+            let span = t
+                .lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .find(|s| s.content.trim() == label)
+                .unwrap_or_else(|| panic!("label '{label}' not found in resume panel"));
+            assert!(span.style.add_modifier.contains(Modifier::DIM), "label '{label}' missing DIM: {:?}", span.style);
+        }
     }
 }
