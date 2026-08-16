@@ -10,6 +10,16 @@ pub const STATE_DEEPENED: &str = "derinleşildi";
 /// Order matters: index 0 is the "unseen" state, 1.. are the seen states.
 pub const STATES: [&str; 4] = [STATE_NOT_SEEN, STATE_SEEN, STATE_SETTLED, STATE_DEEPENED];
 
+/// Extract the map state of a `- <item>: <state>` line (optional `| due: …` tail).
+/// Exact segment match — never a substring scan ("seen" ⊂ "not seen").
+pub fn map_state_of(line: &str) -> Option<&'static str> {
+    let line = line.trim();
+    if !line.starts_with("- ") { return None; }
+    let head = line.split(" | ").next().unwrap_or(line); // drop `| due:` tail
+    let state = head.rsplit(':').next()?.trim();
+    STATES.iter().find(|s| **s == state).copied()
+}
+
 // Bare section names (used with the `section()` helpers, no `## ` prefix).
 pub const S_LEVEL: &str = "Seviye";
 pub const S_RECALL: &str = "Geri çağırma soruları";

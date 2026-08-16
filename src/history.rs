@@ -182,8 +182,7 @@ pub fn settled_count(curriculum: &str) -> Option<usize> {
         curriculum
             .lines()
             .filter(|l| {
-                l.starts_with("- ")
-                    && (l.contains(tokens::STATE_SETTLED) || l.contains(tokens::STATE_DEEPENED))
+                matches!(tokens::map_state_of(l), Some(s) if s == tokens::STATE_SETTLED || s == tokens::STATE_DEEPENED)
             })
             .count(),
     )
@@ -239,6 +238,12 @@ mod tests {
         let c = "- a: oturdu\n- b: görüldü\n- c: derinleşildi\n- d: görülmedi\n";
         assert_eq!(settled_count(c), Some(2));
         assert_eq!(settled_count(""), Some(0));
+    }
+
+    #[test]
+    fn settled_count_ignores_state_words_in_item_text() {
+        let c = "- oturdu üstüne makale: görülmedi\n- b: oturdu\n- c: derinleşildi | due: 2026-01-01\n";
+        assert_eq!(settled_count(c), Some(2));
     }
 
     #[test]

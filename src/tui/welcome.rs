@@ -61,14 +61,15 @@ pub fn extract_level(progress: &str) -> Option<String> {
         .map(String::from)
 }
 
-const STATUSES: [&str; 4] = tokens::STATES;
-
 /// Map percentage from the count of status-bearing lines: non-`tokens::STATE_NOT_SEEN` / total.
 pub fn curriculum_percent(curriculum: &str) -> Option<u8> {
     let (mut total, mut seen) = (0u32, 0u32);
     for line in curriculum.lines() {
-        if line.contains(tokens::STATE_NOT_SEEN) { total += 1; }
-        else if STATUSES[1..].iter().any(|s| line.contains(s)) { total += 1; seen += 1; }
+        match tokens::map_state_of(line) {
+            Some(s) if s == tokens::STATE_NOT_SEEN => total += 1,
+            Some(_) => { total += 1; seen += 1; }
+            None => {}
+        }
     }
     if total == 0 { return None; }
     Some(((seen * 100) / total) as u8)
@@ -76,8 +77,9 @@ pub fn curriculum_percent(curriculum: &str) -> Option<u8> {
 
 /// Text of the first `tokens::STATE_NOT_SEEN` item — list marker and status suffix stripped.
 pub fn next_unseen(curriculum: &str) -> Option<String> {
-    let line = curriculum.lines().find(|l| l.contains(tokens::STATE_NOT_SEEN))?;
-    let text = line.split(tokens::STATE_NOT_SEEN).next()?
+    let line = curriculum.lines().find(|l| tokens::map_state_of(l) == Some(tokens::STATE_NOT_SEEN))?;
+    let head = line.trim().split(" | ").next().unwrap_or(line.trim());
+    let text = head.rsplit_once(':')?.0
         .trim()
         .trim_start_matches(['-', '*', ' '])
         .trim_end_matches([':', '—', '-', '·', '|', ' ']);
@@ -415,6 +417,14 @@ mod tests {
     fn next_unseen_returns_first_unseen_item_text() {
         assert_eq!(next_unseen(CURRICULUM), Some("Lifetimes".to_string()));
         assert_eq!(next_unseen("- Hepsi: oturdu"), None);
+    }
+
+    #[test]
+    fn state_matching_is_exact_segment_not_substring() {
+        // Madde METNİNDE durum kelimesi geçiyor — sayılmamalı/karışmamalı.
+        let c = "- oturdu kelimesi konulu makale: görülmedi\n- borrow: oturdu\n";
+        assert_eq!(curriculum_percent(c), Some(50)); // 1/2 seen
+        assert_eq!(next_unseen(c).as_deref(), Some("oturdu kelimesi konulu makale"));
     }
 
     #[test]
