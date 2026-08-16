@@ -462,13 +462,15 @@ fn flush_target(name: &str, project_root: &Path, global: &Path, topic: &str) -> 
     }
 }
 
-async fn flush_progress(
+async fn flush_core(
     backend: &mut Backend,
-    session: &Session,
+    topic: &str,
+    system: &str,
+    history: &[Message],
     project_root: &Path,
     record_history: bool,
 ) -> Result<()> {
-    if session.history().is_empty() {
+    if history.is_empty() {
         return Ok(());
     }
     ui::notice("summarizing session — writing files…");
@@ -485,21 +487,21 @@ async fn flush_progress(
     };
     let dummy_global = PathBuf::new();
     let global_for_paths = global.as_deref().unwrap_or(&dummy_global);
-    let p_path = flush_target("progress", project_root, global_for_paths, &session.topic).unwrap();
-    let a_path = flush_target("approach", project_root, global_for_paths, &session.topic).unwrap();
-    let c_path = flush_target("curriculum", project_root, global_for_paths, &session.topic).unwrap();
+    let p_path = flush_target("progress", project_root, global_for_paths, topic).unwrap();
+    let a_path = flush_target("approach", project_root, global_for_paths, topic).unwrap();
+    let c_path = flush_target("curriculum", project_root, global_for_paths, topic).unwrap();
     let prj_path =
-        flush_target("project", project_root, global_for_paths, &session.topic).unwrap();
+        flush_target("project", project_root, global_for_paths, topic).unwrap();
     let ppg_path =
-        flush_target("project-progress", project_root, global_for_paths, &session.topic).unwrap();
+        flush_target("project-progress", project_root, global_for_paths, topic).unwrap();
     let pr_path = global
         .as_ref()
-        .map(|g| flush_target("profile", project_root, g, &session.topic).unwrap());
+        .map(|g| flush_target("profile", project_root, g, topic).unwrap());
 
     let read = |p: &Path| std::fs::read_to_string(p).ok();
-    let mut history = session.history().to_vec();
-    history.push(Message::user(progress::closing_prompt(
-        &session.topic,
+    let mut msgs = history.to_vec();
+    msgs.push(Message::user(progress::closing_prompt(
+        topic,
         read(&p_path).as_deref(),
         read(&a_path).as_deref(),
         read(&c_path).as_deref(),
@@ -507,7 +509,7 @@ async fn flush_progress(
         read(&prj_path).as_deref(),
         read(&ppg_path).as_deref(),
     )));
-    let reply = ask_usta(backend, &session.system, &history).await?;
+    let reply = ask_usta(backend, system, &msgs).await?;
     let files = progress::split_files(&reply.text);
     if files.is_empty() {
         anyhow::bail!("model produced no files — nothing was written");
@@ -555,7 +557,7 @@ async fn flush_progress(
     // write, it's just logged as a warning (the catalog is a comfort layer, not the memory itself).
     match &global {
         Some(g) => {
-            if let Err(e) = index::record(g, &session.topic, project_root, &today()) {
+            if let Err(e) = index::record(g, topic, project_root, &today()) {
                 ui::warn(&format!("catalog could not be updated: {e}"));
             }
 
@@ -567,7 +569,7 @@ async fn flush_progress(
                 let cur = std::fs::read_to_string(&c_path).ok();
                 let map = cur.as_deref().and_then(crate::tui::welcome::curriculum_percent);
                 let settled = cur.as_deref().and_then(history::settled_count);
-                let line = history::record_line(&today(), &session.topic, map, settled);
+                let line = history::record_line(&today(), topic, map, settled);
                 if let Err(e) = history::append(g, &line) {
                     ui::warn(&format!("history could not be updated: {e}"));
                 }
@@ -577,6 +579,23 @@ async fn flush_progress(
     }
 
     Ok(())
+}
+
+async fn flush_progress(
+    backend: &mut Backend,
+    session: &Session,
+    project_root: &Path,
+    record_history: bool,
+) -> Result<()> {
+    flush_core(
+        backend,
+        &session.topic,
+        &session.system,
+        session.history(),
+        project_root,
+        record_history,
+    )
+    .await
 }
 
 /// If the threshold is exceeded: interim flush → reload the system prompt with
