@@ -11,7 +11,11 @@ use crate::tokens;
 
 /// Companion (file-watch feedback) slash command. Slash lines never reach the LLM.
 #[derive(Debug, PartialEq)]
-pub(crate) enum WatchCmd { On, Off, Toggle }
+pub(crate) enum WatchCmd {
+    On,
+    Off,
+    Toggle,
+}
 
 pub(crate) fn parse_watch_command(line: &str) -> Option<WatchCmd> {
     // Case-insensitive: /WATCH OFF, /Watch also work (forgiving slash commands).
@@ -39,7 +43,11 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
 
 /// Gamification slash command (`/game`). Slash lines never reach the LLM.
 #[derive(Debug)]
-pub(crate) enum GameCmd { On, Off, Status }
+pub(crate) enum GameCmd {
+    On,
+    Off,
+    Status,
+}
 
 pub(crate) fn parse_game_command(line: &str) -> Option<GameCmd> {
     let t = line.trim();
@@ -103,12 +111,25 @@ pub(crate) fn game_on_turn(rules: &str) -> String {
 pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
     let path = global.join("USER.md");
     let content = std::fs::read_to_string(&path).unwrap_or_default();
-    let value = if on { "- gamification: on" } else { "- gamification: off" };
-    let new = if content.lines().any(|l| l.trim().starts_with("- gamification:")) {
+    let value = if on {
+        "- gamification: on"
+    } else {
+        "- gamification: off"
+    };
+    let new = if content
+        .lines()
+        .any(|l| l.trim().starts_with("- gamification:"))
+    {
         let had_trailing_newline = content.ends_with('\n');
         let mut rebuilt = content
             .lines()
-            .map(|l| if l.trim().starts_with("- gamification:") { value } else { l })
+            .map(|l| {
+                if l.trim().starts_with("- gamification:") {
+                    value
+                } else {
+                    l
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n");
         if had_trailing_newline && !rebuilt.ends_with('\n') {
@@ -121,7 +142,11 @@ pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
             &format!("{}\n{value}", tokens::H_PREFERENCES),
         )
     } else {
-        format!("{}\n\n{}\n{value}\n", content.trim_end(), tokens::H_PREFERENCES)
+        format!(
+            "{}\n\n{}\n{value}\n",
+            content.trim_end(),
+            tokens::H_PREFERENCES
+        )
     };
     progress::write_atomic(&path, &new)
 }
@@ -196,11 +221,19 @@ mod tests {
         std::fs::create_dir_all(global.join("approaches")).unwrap();
 
         // yalnız global hedefli → true
-        std::fs::write(global.join("approaches/rust.md"), "yaklaşım\n## Goal\nsınav").unwrap();
+        std::fs::write(
+            global.join("approaches/rust.md"),
+            "yaklaşım\n## Goal\nsınav",
+        )
+        .unwrap();
         assert!(topic_has_goal(&project, &global, "rust"));
 
         // override VAR ama hedefsiz → override kazanır → false
-        std::fs::write(project.join(".usta/approaches/rust.md"), "yaklaşım hedefsiz").unwrap();
+        std::fs::write(
+            project.join(".usta/approaches/rust.md"),
+            "yaklaşım hedefsiz",
+        )
+        .unwrap();
         assert!(!topic_has_goal(&project, &global, "rust"));
 
         // override hedefli → true
@@ -238,7 +271,10 @@ mod tests {
     #[test]
     fn parse_game_command_variants() {
         assert!(matches!(parse_game_command("/game on"), Some(GameCmd::On)));
-        assert!(matches!(parse_game_command(" /game OFF "), Some(GameCmd::Off)));
+        assert!(matches!(
+            parse_game_command(" /game OFF "),
+            Some(GameCmd::Off)
+        ));
         assert!(matches!(parse_game_command("/game"), Some(GameCmd::Status)));
         assert!(parse_game_command("/game x").is_none());
         assert!(parse_game_command("/gamer").is_none());
@@ -264,7 +300,11 @@ mod tests {
         let base = std::env::temp_dir().join(format!("usta_game_pref_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("USER.md"), "# Öğrenci Profili\n\n## Kim\n- Anil\n").unwrap();
+        std::fs::write(
+            base.join("USER.md"),
+            "# Öğrenci Profili\n\n## Kim\n- Anil\n",
+        )
+        .unwrap();
 
         assert!(!game_pref(&base)); // default off
         set_game_pref(&base, true).unwrap();
@@ -374,7 +414,11 @@ mod tests {
         assert_eq!(game_streak_line(&base, "2026-08-16"), None);
 
         // game ON, but no history file (or empty) → None.
-        std::fs::write(base.join("USER.md"), "# Öğrenci Profili\n\n## Preferences\n- gamification: on\n").unwrap();
+        std::fs::write(
+            base.join("USER.md"),
+            "# Öğrenci Profili\n\n## Preferences\n- gamification: on\n",
+        )
+        .unwrap();
         std::fs::remove_file(base.join("learner/history.md")).unwrap();
         assert_eq!(game_streak_line(&base, "2026-08-16"), None);
 

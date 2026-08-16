@@ -128,10 +128,21 @@ mod tests {
     #[test]
     fn parse_reset_profile_flag_both_spellings() {
         let args = |s: &str| vec!["usta".to_string(), "reset".to_string(), s.to_string()];
-        assert_eq!(parse_command(&args("--profile")).unwrap(), Command::Reset(ResetTarget::Profile));
-        assert_eq!(parse_command(&args("--profil")).unwrap(), Command::Reset(ResetTarget::Profile));
+        assert_eq!(
+            parse_command(&args("--profile")).unwrap(),
+            Command::Reset(ResetTarget::Profile)
+        );
+        assert_eq!(
+            parse_command(&args("--profil")).unwrap(),
+            Command::Reset(ResetTarget::Profile)
+        );
         // Regression: topic and factory unchanged.
-        assert_eq!(parse_command(&args("--factory")).unwrap(), Command::Reset(ResetTarget::Factory));
-        assert!(matches!(parse_command(&args("rust")).unwrap(), Command::Reset(ResetTarget::Topic(t)) if t == "rust"));
+        assert_eq!(
+            parse_command(&args("--factory")).unwrap(),
+            Command::Reset(ResetTarget::Factory)
+        );
+        assert!(
+            matches!(parse_command(&args("rust")).unwrap(), Command::Reset(ResetTarget::Topic(t)) if t == "rust")
+        );
     }
 }

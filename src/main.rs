@@ -34,7 +34,7 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 
-use crate::cli::{Command, ResetTarget, parse_command};
+use crate::cli::{parse_command, Command, ResetTarget};
 use crate::lifecycle::{build_session, flush_core, flush_progress, lock_path, today};
 use crate::plain::{resolve_topic, run_plain_loop};
 use crate::setup::{
@@ -110,28 +110,48 @@ async fn main() -> Result<()> {
         if !tty {
             // pipe/script: EXACT existing behavior — warn only, no LLM calls, no delete
             for p in &stale {
-                ui::warn(&format!("half-finished session record found (may not have been flushed): {}", p.display()));
+                ui::warn(&format!(
+                    "half-finished session record found (may not have been flushed): {}",
+                    p.display()
+                ));
             }
         } else {
             // List the stale records (dim), then ask ONCE: recover (default) or delete.
             for p in &stale {
                 ui::notice(&format!("unflushed session record: {}", p.display()));
             }
-            if confirm_recover(&format!("recover {} unflushed session(s)? [Y/n] ", stale.len())) {
+            if confirm_recover(&format!(
+                "recover {} unflushed session(s)? [Y/n] ",
+                stale.len()
+            )) {
                 for p in &stale {
                     let Some(topic) = transcript::topic_from_record(p) else {
-                        ui::warn(&format!("unrecognized session record name, leaving as-is: {}", p.display()));
+                        ui::warn(&format!(
+                            "unrecognized session record name, leaving as-is: {}",
+                            p.display()
+                        ));
                         continue;
                     };
                     match transcript::read_history(p) {
-                        Err(e) => ui::warn(&format!("could not read session record ({e}) — leaving as-is: {}", p.display())),
+                        Err(e) => ui::warn(&format!(
+                            "could not read session record ({e}) — leaving as-is: {}",
+                            p.display()
+                        )),
                         Ok(history) if history.iter().filter(|m| m.role == "user").count() == 0 => {
                             // nothing to recover — mark done silently so the noise stops
                             let _ = transcript::mark_done(p);
                         }
                         Ok(history) => {
-                            ui::notice(&format!("recovering unflushed session: {} — writing files…", p.display()));
-                            let system = brain::load_system_prompt(&global, Some(&project_root), &topic, &today());
+                            ui::notice(&format!(
+                                "recovering unflushed session: {} — writing files…",
+                                p.display()
+                            ));
+                            let system = brain::load_system_prompt(
+                                &global,
+                                Some(&project_root),
+                                &topic,
+                                &today(),
+                            );
                             match flush_core(&mut backend, &topic, &system, &history, &project_root, true).await {
                                 Ok(()) => {
                                     let _ = transcript::mark_done(p);
@@ -235,7 +255,10 @@ async fn main() -> Result<()> {
     };
 
     if let Err(e) = flush_progress(&mut backend, &session, &project_root, true).await {
-        ui::warn(&format!("progress could not be updated: {e} — raw record left on disk: {}", recorder.path().display()));
+        ui::warn(&format!(
+            "progress could not be updated: {e} — raw record left on disk: {}",
+            recorder.path().display()
+        ));
     } else if session.history().is_empty() {
         // Empty session: no file was ever created, nothing to mark.
     } else if let Err(e) = transcript::mark_done(recorder.path()) {

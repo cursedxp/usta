@@ -118,7 +118,9 @@ pub(crate) async fn flush_core(
     let global = match config::global_root() {
         Ok(g) => Some(g),
         Err(e) => {
-            ui::warn(&format!("global root could not be resolved — profile will be skipped this session: {e}"));
+            ui::warn(&format!(
+                "global root could not be resolved — profile will be skipped this session: {e}"
+            ));
             None
         }
     };
@@ -127,10 +129,8 @@ pub(crate) async fn flush_core(
     let p_path = flush_target("progress", project_root, global_for_paths, topic).unwrap();
     let a_path = flush_target("approach", project_root, global_for_paths, topic).unwrap();
     let c_path = flush_target("curriculum", project_root, global_for_paths, topic).unwrap();
-    let prj_path =
-        flush_target("project", project_root, global_for_paths, topic).unwrap();
-    let ppg_path =
-        flush_target("project-progress", project_root, global_for_paths, topic).unwrap();
+    let prj_path = flush_target("project", project_root, global_for_paths, topic).unwrap();
+    let ppg_path = flush_target("project-progress", project_root, global_for_paths, topic).unwrap();
     let pr_path = global
         .as_ref()
         .map(|g| flush_target("profile", project_root, g, topic).unwrap());
@@ -186,7 +186,9 @@ pub(crate) async fn flush_core(
         match restore_game_pref(g, game_pref_before) {
             Ok(true) => ui::notice("gamification preference restored"),
             Ok(false) => {}
-            Err(e) => ui::warn(&format!("gamification preference could not be restored: {e}")),
+            Err(e) => ui::warn(&format!(
+                "gamification preference could not be restored: {e}"
+            )),
         }
     }
 
@@ -204,7 +206,9 @@ pub(crate) async fn flush_core(
             // compacts K times would count as K+1 sessions (spec: one line per closing flush).
             if record_history {
                 let cur = std::fs::read_to_string(&c_path).ok();
-                let map = cur.as_deref().and_then(crate::tui::welcome::curriculum_percent);
+                let map = cur
+                    .as_deref()
+                    .and_then(crate::tui::welcome::curriculum_percent);
                 let settled = cur.as_deref().and_then(history::settled_count);
                 let line = history::record_line(&today(), topic, map, settled);
                 if let Err(e) = history::append(g, &line) {
@@ -253,7 +257,9 @@ pub(crate) async fn maybe_compact(
     }
     ui::notice("context filling up — taking an interim checkpoint…");
     if let Err(e) = flush_progress(backend, session, project_root, false).await {
-        ui::warn(&format!("interim checkpoint failed, compaction postponed: {e}"));
+        ui::warn(&format!(
+            "interim checkpoint failed, compaction postponed: {e}"
+        ));
         return;
     }
     match config::global_root() {
@@ -337,7 +343,12 @@ mod tests {
     #[test]
     fn flush_target_rejects_unknown_name() {
         assert_eq!(
-            flush_target("bilinmeyen", Path::new("/proje"), Path::new("/glob"), "rust"),
+            flush_target(
+                "bilinmeyen",
+                Path::new("/proje"),
+                Path::new("/glob"),
+                "rust"
+            ),
             None
         );
     }

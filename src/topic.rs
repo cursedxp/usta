@@ -97,7 +97,11 @@ pub(crate) enum TopicChoice {
 /// Deterministic selection rules — order follows spec §3/K1's table. `None` =
 /// swallow the input (empty + no topic to resume). No LLM; sentences return
 /// `New`, K2 (slug_system) kicks in there.
-pub(crate) fn interpret_topic_input(raw: &str, local: &[String], project_known: bool) -> Option<TopicChoice> {
+pub(crate) fn interpret_topic_input(
+    raw: &str,
+    local: &[String],
+    project_known: bool,
+) -> Option<TopicChoice> {
     let raw = raw.trim();
     // 1-2: empty Enter.
     if raw.is_empty() {
@@ -120,7 +124,11 @@ pub(crate) fn interpret_topic_input(raw: &str, local: &[String], project_known: 
     }
     // 5: short resume pattern (substring after deasciify).
     if !local.is_empty() && raw.split_whitespace().count() <= 4 {
-        let d: String = raw.chars().map(deasciify).collect::<String>().to_lowercase();
+        let d: String = raw
+            .chars()
+            .map(deasciify)
+            .collect::<String>()
+            .to_lowercase();
         const RESUME_WORDS: &[&str] = &["devam", "kaldigimiz", "kaldigim", "continue", "resume"];
         if RESUME_WORDS.iter().any(|w| d.contains(w)) {
             return Some(TopicChoice::Resume(local[0].clone()));
@@ -152,9 +160,30 @@ pub fn slugify_topic(input: &str) -> String {
     // Filler words, compared against their deasciified (ç→c…) form — kept out
     // of the slug, so "ben rust ile bir todo yapmak istiyorum" → "rust-todo".
     const STOPWORDS: &[&str] = &[
-        "ben", "bir", "ile", "ve", "icin", "bu", "su", "yapmak", "yapmayi",
-        "istiyorum", "ogrenmek", "ogreniyorum", "istiyor", "bana", "de", "da",
-        "the", "a", "an", "to", "learn", "want", "make", "build",
+        "ben",
+        "bir",
+        "ile",
+        "ve",
+        "icin",
+        "bu",
+        "su",
+        "yapmak",
+        "yapmayi",
+        "istiyorum",
+        "ogrenmek",
+        "ogreniyorum",
+        "istiyor",
+        "bana",
+        "de",
+        "da",
+        "the",
+        "a",
+        "an",
+        "to",
+        "learn",
+        "want",
+        "make",
+        "build",
     ];
     let words: Vec<String> = input
         .split_whitespace()
@@ -185,7 +214,10 @@ mod tests {
 
     #[test]
     fn slugify_hyphenates_short_phrase_and_deasciifies() {
-        assert_eq!(slugify_topic("temel Linux güvenliği"), "temel-linux-guvenligi");
+        assert_eq!(
+            slugify_topic("temel Linux güvenliği"),
+            "temel-linux-guvenligi"
+        );
         assert_eq!(slugify_topic("todo app"), "todo-app");
     }
 
@@ -218,7 +250,10 @@ mod tests {
     #[test]
     fn finalize_slug_uses_model_reply_then_slugifies() {
         // Model returns a hyphenated slug → hyphens are preserved, slugify guarantees it.
-        assert_eq!(finalize_slug("ben golang öğrenmek istiyorum", "golang-web"), "golang-web");
+        assert_eq!(
+            finalize_slug("ben golang öğrenmek istiyorum", "golang-web"),
+            "golang-web"
+        );
         // If the model returns noisy output it still gets slugified.
         assert_eq!(finalize_slug("x", "Rust Todo"), "rust-todo");
     }
@@ -226,7 +261,10 @@ mod tests {
     #[test]
     fn finalize_slug_falls_back_to_raw_when_model_gives_genel() {
         // If the model says "general", derive a local slug from the raw input instead.
-        assert_eq!(finalize_slug("temel linux güvenliği", "general"), "temel-linux-guvenligi");
+        assert_eq!(
+            finalize_slug("temel linux güvenliği", "general"),
+            "temel-linux-guvenligi"
+        );
     }
 
     #[test]
@@ -277,15 +315,21 @@ mod tests {
     #[test]
     fn interpret_empty_resumes_latest_or_swallows() {
         let local = vec!["son-konu".to_string(), "eski".to_string()];
-        assert!(matches!(interpret_topic_input("", &local, false), Some(TopicChoice::Resume(t)) if t == "son-konu"));
+        assert!(
+            matches!(interpret_topic_input("", &local, false), Some(TopicChoice::Resume(t)) if t == "son-konu")
+        );
         assert!(interpret_topic_input("  ", &[], false).is_none()); // no topic → swallow
     }
 
     #[test]
     fn interpret_digit_selects_from_list_out_of_range_is_new() {
         let local = vec!["a".to_string(), "b".to_string()];
-        assert!(matches!(interpret_topic_input("2", &local, false), Some(TopicChoice::Resume(t)) if t == "b"));
-        assert!(matches!(interpret_topic_input("5", &local, false), Some(TopicChoice::New(r)) if r == "5"));
+        assert!(
+            matches!(interpret_topic_input("2", &local, false), Some(TopicChoice::Resume(t)) if t == "b")
+        );
+        assert!(
+            matches!(interpret_topic_input("5", &local, false), Some(TopicChoice::New(r)) if r == "5")
+        );
     }
 
     #[test]
@@ -301,8 +345,17 @@ mod tests {
     #[test]
     fn interpret_resume_phrases_short_input_only() {
         let local = vec!["son-konu".to_string()];
-        for s in ["devam", "devam edelim", "kaldığımız yerden devam", "continue", "resume"] {
-            assert!(matches!(interpret_topic_input(s, &local, false), Some(TopicChoice::Resume(t)) if t == "son-konu"), "{s}");
+        for s in [
+            "devam",
+            "devam edelim",
+            "kaldığımız yerden devam",
+            "continue",
+            "resume",
+        ] {
+            assert!(
+                matches!(interpret_topic_input(s, &local, false), Some(TopicChoice::Resume(t)) if t == "son-konu"),
+                "{s}"
+            );
         }
         // >4 words → goes to the LLM/new-topic flow (K2 catches it).
         assert!(matches!(
@@ -310,13 +363,18 @@ mod tests {
             Some(TopicChoice::New(_))
         ));
         // Resume pattern but no topic exists → new topic.
-        assert!(matches!(interpret_topic_input("devam", &[], false), Some(TopicChoice::New(_))));
+        assert!(matches!(
+            interpret_topic_input("devam", &[], false),
+            Some(TopicChoice::New(_))
+        ));
     }
 
     #[test]
     fn interpret_other_input_is_new() {
         let local = vec!["son-konu".to_string()];
-        assert!(matches!(interpret_topic_input("docker compose", &local, false), Some(TopicChoice::New(r)) if r == "docker compose"));
+        assert!(
+            matches!(interpret_topic_input("docker compose", &local, false), Some(TopicChoice::New(r)) if r == "docker compose")
+        );
     }
 
     #[test]
@@ -325,7 +383,10 @@ mod tests {
             interpret_topic_input("", &[], true),
             Some(TopicChoice::Suggest)
         ));
-        assert!(matches!(interpret_topic_input("  ", &[], true), Some(TopicChoice::Suggest)));
+        assert!(matches!(
+            interpret_topic_input("  ", &[], true),
+            Some(TopicChoice::Suggest)
+        ));
     }
 
     #[test]

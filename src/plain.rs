@@ -12,7 +12,9 @@ use rustyline::DefaultEditor;
 use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::feedback;
-use crate::file_feedback::{FileFeedback, handle_file_change, is_silent_skip, seed_mentor_baseline};
+use crate::file_feedback::{
+    handle_file_change, is_silent_skip, seed_mentor_baseline, FileFeedback,
+};
 use crate::help;
 use crate::index;
 use crate::input;
@@ -21,8 +23,8 @@ use crate::progress;
 use crate::session::Session;
 use crate::setup::confirm;
 use crate::slash::{
-    GameCmd, apply_watch, game_on_turn, game_pref, game_streak_line, is_exam_command,
-    parse_game_command, parse_watch_command, set_game_pref, topic_has_goal,
+    apply_watch, game_on_turn, game_pref, game_streak_line, is_exam_command, parse_game_command,
+    parse_watch_command, set_game_pref, topic_has_goal, GameCmd,
 };
 use crate::tokens;
 use crate::topic::{finalize_slug, interpret_topic_input, slug_system, slugify_topic, TopicChoice};
@@ -58,7 +60,11 @@ pub(crate) async fn resolve_topic(
         std::fs::read_to_string(global.join("learner/index.md")).unwrap_or_default();
     let local = index::local_topics(project_root, &index_content);
     if !local.is_empty() {
-        println!("saved: {} — Enter = continue with {}", local.join(", "), local[0]);
+        println!(
+            "saved: {} — Enter = continue with {}",
+            local.join(", "),
+            local[0]
+        );
     }
     let mut rl = DefaultEditor::new()?;
     // The new-topic confirmation loop lives only here (plain path): a rejection
@@ -101,7 +107,10 @@ pub(crate) async fn resolve_topic(
                 }
                 // First session (no topics saved yet) → confirmation exempt. Otherwise ask.
                 if local.is_empty()
-                    || confirm(&format!("Open new topic '{slug}'? [y/N] "), &["e", "evet", "y", "yes"])?
+                    || confirm(
+                        &format!("Open new topic '{slug}'? [y/N] "),
+                        &["e", "evet", "y", "yes"],
+                    )?
                 {
                     return Ok((slug, Some(raw)));
                 }
@@ -159,16 +168,30 @@ pub(crate) async fn run_plain_loop(
     if has_progress {
         let td = today();
         let gs = game_streak_line(global, &td);
-        let progress_content = std::fs::read_to_string(progress::progress_path(project_root, topic)).unwrap_or_default();
+        let progress_content =
+            std::fs::read_to_string(progress::progress_path(project_root, topic))
+                .unwrap_or_default();
         let due = crate::tui::welcome::due_questions(&progress_content, &td);
         let has_questions = crate::tui::welcome::drill_count(&progress_content) > 0;
-        let opening = progress::opening_prompt(topic, profile_generic, project_known, gs.as_deref(), &due, has_questions);
+        let opening = progress::opening_prompt(
+            topic,
+            profile_generic,
+            project_known,
+            gs.as_deref(),
+            &due,
+            has_questions,
+        );
         session.push_user(&opening);
         recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
                 let (clean, show_topic) = visual::extract_show_marker(&reply.text);
-                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
+                print_reply(
+                    &clean,
+                    reply.web,
+                    reply.context_tokens,
+                    backend.context_window(),
+                );
                 recorder.assistant(&clean);
                 session.push_assistant(clean);
                 trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
@@ -183,13 +206,24 @@ pub(crate) async fn run_plain_loop(
         }
         let mats = crate::materials::scan(project_root);
         let material_digest = crate::materials::combined_digests(&mats);
-        let onboarding = progress::onboarding_prompt(topic, intro, profile_generic, project_known, material_digest.as_deref());
+        let onboarding = progress::onboarding_prompt(
+            topic,
+            intro,
+            profile_generic,
+            project_known,
+            material_digest.as_deref(),
+        );
         session.push_user(&onboarding);
         recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
                 let (clean, show_topic) = visual::extract_show_marker(&reply.text);
-                print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
+                print_reply(
+                    &clean,
+                    reply.web,
+                    reply.context_tokens,
+                    backend.context_window(),
+                );
                 recorder.assistant(&clean);
                 session.push_assistant(clean);
                 trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
@@ -370,7 +404,13 @@ fn print_reply(text: &str, web: bool, context_tokens: Option<u64>, window: u64) 
 /// `[[show: ...]]` marker (Görev 4) — both get the SAME guarantees: isolated
 /// mini-session, `backend.reset_session()` on every exit path (success, error,
 /// invalid JSON), and the same "try /show again" notice on bad JSON.
-async fn run_visual_generation(backend: &mut Backend, project_root: &Path, topic: &str, concept: &str, request: &str) {
+async fn run_visual_generation(
+    backend: &mut Backend,
+    project_root: &Path,
+    topic: &str,
+    concept: &str,
+    request: &str,
+) {
     match ask_usta(backend, &visual::visual_system(), &[Message::user(request)]).await {
         Ok(reply) => {
             let json = progress::clean_markdown_reply(&reply.text);
@@ -392,7 +432,11 @@ async fn run_visual_generation(backend: &mut Backend, project_root: &Path, topic
                             ui::notice(&format!(
                                 "visual saved: {}{}",
                                 path.display(),
-                                if opened { "" } else { " (open it in your browser)" }
+                                if opened {
+                                    ""
+                                } else {
+                                    " (open it in your browser)"
+                                }
                             ));
                         }
                         Err(e) => ui::warn(&format!("error: {e}")),
@@ -418,7 +462,10 @@ async fn trigger_auto_visual(
     show_topic: Option<String>,
 ) {
     let Some(t) = show_topic else { return };
-    if let Some(req) = crate::visual::show_request(Some(t.clone()), crate::visual::last_assistant_text(session).as_deref()) {
+    if let Some(req) = crate::visual::show_request(
+        Some(t.clone()),
+        crate::visual::last_assistant_text(session).as_deref(),
+    ) {
         ui::notice(&format!("visualizing: {t}…"));
         run_visual_generation(backend, project_root, topic, &t, &req).await;
     }

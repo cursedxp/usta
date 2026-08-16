@@ -49,7 +49,9 @@ fn section<'a>(md: &'a str, header: &str) -> Option<&'a str> {
 pub fn extract_name(profile: &str) -> Option<String> {
     let h1 = profile.lines().find(|l| l.starts_with("# "))?;
     let name = h1.rsplit(['—', '-']).next()?.trim();
-    if name.is_empty() || name.contains("Profil") || name.starts_with('#') { return None; }
+    if name.is_empty() || name.contains("Profil") || name.starts_with('#') {
+        return None;
+    }
     Some(name.to_string())
 }
 
@@ -68,23 +70,36 @@ pub fn curriculum_percent(curriculum: &str) -> Option<u8> {
     for line in curriculum.lines() {
         match tokens::map_state_of(line) {
             Some(s) if s == tokens::STATE_NOT_SEEN => total += 1,
-            Some(_) => { total += 1; seen += 1; }
+            Some(_) => {
+                total += 1;
+                seen += 1;
+            }
             None => {}
         }
     }
-    if total == 0 { return None; }
+    if total == 0 {
+        return None;
+    }
     Some(((seen * 100) / total) as u8)
 }
 
 /// Text of the first `tokens::STATE_NOT_SEEN` item — list marker and status suffix stripped.
 pub fn next_unseen(curriculum: &str) -> Option<String> {
-    let line = curriculum.lines().find(|l| tokens::map_state_of(l) == Some(tokens::STATE_NOT_SEEN))?;
+    let line = curriculum
+        .lines()
+        .find(|l| tokens::map_state_of(l) == Some(tokens::STATE_NOT_SEEN))?;
     let head = line.trim().split(" | ").next().unwrap_or(line.trim());
-    let text = head.rsplit_once(':')?.0
+    let text = head
+        .rsplit_once(':')?
+        .0
         .trim()
         .trim_start_matches(['-', '*', ' '])
         .trim_end_matches([':', '—', '-', '·', '|', ' ']);
-    if text.is_empty() { None } else { Some(text.to_string()) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
 }
 
 /// Number of items in the `tokens::S_RECALL` section.
@@ -100,7 +115,9 @@ pub fn drill_count(progress: &str) -> usize {
 /// that need the count (`due_count`) or a capped preview (`due_questions`)
 /// derive from this single scan. Sort is stable: equal dates keep file order.
 fn due_items(progress: &str, today: &str) -> Vec<(String, String)> {
-    let Some(s) = section(progress, tokens::S_RECALL) else { return Vec::new() };
+    let Some(s) = section(progress, tokens::S_RECALL) else {
+        return Vec::new();
+    };
     let mut items: Vec<(String, String)> = Vec::new();
     for l in s.lines().map(str::trim).filter(|l| l.starts_with('-')) {
         match l.find("due: ") {
@@ -129,7 +146,11 @@ pub fn due_count(progress: &str, today: &str) -> usize {
 /// the shell-selected drill list handed to `progress::opening_prompt` so the
 /// model no longer has to filter/sort `due:` dates itself.
 pub fn due_questions(progress: &str, today: &str) -> Vec<String> {
-    due_items(progress, today).into_iter().take(3).map(|(_, line)| line).collect()
+    due_items(progress, today)
+        .into_iter()
+        .take(3)
+        .map(|(_, line)| line)
+        .collect()
 }
 
 /// Relative phrasing for the newest history entry of `topic`, EXCLUDING the
@@ -138,7 +159,11 @@ pub fn due_questions(progress: &str, today: &str) -> Vec<String> {
 /// (clock skew) collapses to `today` rather than printing a negative count.
 /// ADHD-safe: the phrasing is a neutral timestamp at every distance — no
 /// streak-zero, no "it has been a while" (SPEC §"ADHD-safe rules").
-pub fn last_session_ago(entries: &[crate::history::Entry], topic: &str, today: &str) -> Option<String> {
+pub fn last_session_ago(
+    entries: &[crate::history::Entry],
+    topic: &str,
+    today: &str,
+) -> Option<String> {
     let today = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").ok()?;
     let newest = entries
         .iter()
@@ -161,8 +186,14 @@ pub fn last_session_ago(entries: &[crate::history::Entry], topic: &str, today: &
 /// (never a "This week" line — see `week_line`).
 #[allow(clippy::too_many_arguments)]
 pub fn gather(
-    profile: Option<&str>, progress: Option<&str>, curriculum: Option<&str>,
-    topic: &str, model: &str, dir: &str, today: &str, history: Option<&str>,
+    profile: Option<&str>,
+    progress: Option<&str>,
+    curriculum: Option<&str>,
+    topic: &str,
+    model: &str,
+    dir: &str,
+    today: &str,
+    history: Option<&str>,
 ) -> WelcomeData {
     let (week_sessions, streak, last_session) = match history {
         Some(h) => {
@@ -196,12 +227,16 @@ pub fn gather(
 /// Truncate to visible width, add `…` if it overflows. Padding calculations
 /// also use unicode-width — byte counting misaligns Turkish characters.
 pub fn fit(s: &str, max: usize) -> String {
-    if s.width() <= max { return s.to_string(); }
+    if s.width() <= max {
+        return s.to_string();
+    }
     let mut out = String::new();
     let mut w = 0usize;
     for ch in s.chars() {
         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if w + cw > max.saturating_sub(1) { break; }
+        if w + cw > max.saturating_sub(1) {
+            break;
+        }
         out.push(ch);
         w += cw;
     }
@@ -239,7 +274,11 @@ pub fn wrap(s: &str, max: usize) -> Vec<String> {
             }
             continue;
         }
-        let extra = if current.is_empty() { word_w } else { current_w + 1 + word_w };
+        let extra = if current.is_empty() {
+            word_w
+        } else {
+            current_w + 1 + word_w
+        };
         if extra > max && !current.is_empty() {
             lines.push(std::mem::take(&mut current));
             current.push_str(word);
@@ -268,7 +307,9 @@ fn week_line(sessions: u32, streak: u32) -> Option<String> {
         return None;
     }
     if streak > 0 {
-        Some(format!("This week: {sessions} session(s) · streak {streak} day(s)"))
+        Some(format!(
+            "This week: {sessions} session(s) · streak {streak} day(s)"
+        ))
     } else {
         Some(format!("This week: {sessions} session(s)"))
     }
@@ -283,16 +324,18 @@ fn pad(s: &str, w: usize) -> String {
 /// greeting + model + directory, right column is Learning Status (spec §5).
 pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
-    let inner = total - 2;                      // borders
+    let inner = total - 2; // borders
     let left_w = 34usize;
-    let right_w = inner - left_w - 3;           // " │ " separator
+    let right_w = inner - left_w - 3; // " │ " separator
 
     let greet = match &d.name {
         Some(n) => format!("Welcome back, {n}!"),
         None => "Welcome back!".to_string(),
     };
     let mut left: Vec<(String, bool)> = vec![(String::new(), false)];
-    for l in LOGO { left.push((format!("  {l}"), true)); }
+    for l in LOGO {
+        left.push((format!("  {l}"), true));
+    }
     left.push((String::new(), false));
     left.push((format!("  {}", fit(&greet, left_w - 2)), false));
     left.push((format!("  {}", fit(&d.model, left_w - 2)), false));
@@ -314,7 +357,9 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
         for l in wrap(&konu, right_w) {
             right.push((l, Style::default()));
         }
-        if let Some(p) = d.map_percent { right.push((format!("Map: {p}%"), Style::default())); }
+        if let Some(p) = d.map_percent {
+            right.push((format!("Map: {p}%"), Style::default()));
+        }
         right.push(("─".repeat(right_w), Style::default()));
         right.push(("Up next".to_string(), Style::default()));
         if let Some(n) = &d.next_item {
@@ -323,7 +368,10 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
             }
         }
         if d.due_count > 0 {
-            right.push((format!("Reviews due today: {}", d.due_count), Style::default()));
+            right.push((
+                format!("Reviews due today: {}", d.due_count),
+                Style::default(),
+            ));
         } else if d.drill_count > 0 {
             right.push(("No reviews due today".to_string(), Style::default()));
         }
@@ -369,7 +417,9 @@ pub fn render_welcome_identity(
         None => "Hello!".to_string(),
     };
     let mut left: Vec<(String, bool)> = vec![(String::new(), false)];
-    for l in LOGO { left.push((format!("  {l}"), true)); }
+    for l in LOGO {
+        left.push((format!("  {l}"), true));
+    }
     left.push((String::new(), false));
     left.push((format!("  {}", fit(&greet, left_w - 2)), false));
     left.push((format!("  {}", fit(model, left_w - 2)), false));
@@ -440,7 +490,11 @@ fn map_bar(pct: u8) -> String {
     // 12/12 bar (round(96 * 12 / 100) == 12), which reads as "done" next to a
     // number that isn't 100. A full bar means 100% and nothing else. (No
     // `.min(12)` needed first — `pct <= 100` already bounds `filled` at 12.)
-    let filled = if pct < 100 && filled >= 12 { 11 } else { filled };
+    let filled = if pct < 100 && filled >= 12 {
+        11
+    } else {
+        filled
+    };
     let filled = if pct > 0 && filled == 0 { 1 } else { filled };
     format!("{}{}", "▓".repeat(filled), "░".repeat(12 - filled))
 }
@@ -541,21 +595,22 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Option<Text<'static>> {
     // wrap can't cleanly preserve which fragment (rel vs level) a given
     // wrapped word came from.
     if d.last_session.is_some() || d.level.is_some() {
-        let (label, value_text, mixed): (&str, String, Option<Vec<Span<'static>>>) = match (&d.last_session, &d.level) {
-            (Some(rel), Some(level)) => (
-                "Last session",
-                format!("{rel} · Level {level}"),
-                Some(vec![
-                    Span::styled(rel.clone(), plain),
-                    Span::styled(" · ".to_string(), dim),
-                    Span::styled("Level ".to_string(), dim),
-                    Span::styled(level.clone(), plain),
-                ]),
-            ),
-            (Some(rel), None) => ("Last session", rel.clone(), None),
-            (None, Some(level)) => ("Level", level.clone(), None),
-            (None, None) => unreachable!("guarded by the outer if"),
-        };
+        let (label, value_text, mixed): (&str, String, Option<Vec<Span<'static>>>) =
+            match (&d.last_session, &d.level) {
+                (Some(rel), Some(level)) => (
+                    "Last session",
+                    format!("{rel} · Level {level}"),
+                    Some(vec![
+                        Span::styled(rel.clone(), plain),
+                        Span::styled(" · ".to_string(), dim),
+                        Span::styled("Level ".to_string(), dim),
+                        Span::styled(level.clone(), plain),
+                    ]),
+                ),
+                (Some(rel), None) => ("Last session", rel.clone(), None),
+                (None, Some(level)) => ("Level", level.clone(), None),
+                (None, None) => unreachable!("guarded by the outer if"),
+            };
         let wrapped = wrap(&value_text, value_w);
         // `wrapped` is computed from `wrap`, which collapses whitespace runs
         // (it splits on `split_whitespace`). But when this row IS single-line,
@@ -570,7 +625,11 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Option<Text<'static>> {
         let single_line = value_text.width() <= value_w;
         for (i, line) in wrapped.into_iter().enumerate() {
             if i == 0 {
-                let mut row = vec![Span::raw("  "), Span::styled(pad(label, 12), dim), Span::raw(" ")];
+                let mut row = vec![
+                    Span::raw("  "),
+                    Span::styled(pad(label, 12), dim),
+                    Span::raw(" "),
+                ];
                 match (single_line, &mixed) {
                     (true, Some(spans)) => row.extend(spans.clone()),
                     _ => row.push(Span::styled(line, plain)),
@@ -671,7 +730,8 @@ pub fn render_for_entry(had_topic_arg: bool, d: &WelcomeData, width: u16) -> Opt
 /// box — NOT inside the box, so the box's equal-width line logic stays intact.
 fn with_help_hint(mut t: Text<'static>) -> Text<'static> {
     let dim = Style::default().add_modifier(Modifier::DIM);
-    t.lines.push(Line::from(Span::styled(crate::help::HELP_HINT, dim)));
+    t.lines
+        .push(Line::from(Span::styled(crate::help::HELP_HINT, dim)));
     t
 }
 
@@ -679,11 +739,16 @@ fn with_help_hint(mut t: Text<'static>) -> Text<'static> {
 /// `left`: (text, is-logo). `right`: (text, style) — row 0 is also automatically
 /// wrapped in a bold+orange title style (even if the row's own style is empty),
 /// other rows are printed with whatever style they carry (e.g. DIM).
-fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<(String, Style)>, width: u16) -> Text<'static> {
+fn render_box(
+    version: &str,
+    left: Vec<(String, bool)>,
+    right: Vec<(String, Style)>,
+    width: u16,
+) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
-    let inner = total - 2;                      // borders
+    let inner = total - 2; // borders
     let left_w = 34usize;
-    let right_w = inner - left_w - 3;           // " │ " separator
+    let right_w = inner - left_w - 3; // " │ " separator
 
     let rows = left.len().max(right.len());
     let title = format!(" Usta v{version} ");
@@ -691,7 +756,11 @@ fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<(String, Styl
     // 5 chars, the closing "╮" is 1 char, 6 total fixed; since inner = total-2,
     // 6-2=4 remains. The "5 +" formula from the briefing left the line 1 char
     // short (breaking the equal-width test).
-    let top = format!("╭─── {}{}╮", title.trim(), "─".repeat(inner.saturating_sub(4 + title.trim().width())));
+    let top = format!(
+        "╭─── {}{}╮",
+        title.trim(),
+        "─".repeat(inner.saturating_sub(4 + title.trim().width()))
+    );
     let bottom = format!("╰{}╯", "─".repeat(inner));
 
     let mut lines: Vec<Line> = vec![Line::from(top)];
@@ -700,11 +769,17 @@ fn render_box(version: &str, left: Vec<(String, bool)>, right: Vec<(String, Styl
         let (rtxt, rtxt_style) = right.get(i).cloned().unwrap_or_default();
         let lspan = Span::styled(
             pad(&ltxt, left_w),
-            if is_logo { theme::brand() } else { Style::default() },
+            if is_logo {
+                theme::brand()
+            } else {
+                Style::default()
+            },
         );
         let rstyle = if i == 0 && !rtxt.is_empty() {
             theme::brand().add_modifier(Modifier::BOLD)
-        } else { rtxt_style };
+        } else {
+            rtxt_style
+        };
         lines.push(Line::from(vec![
             Span::raw("│"),
             lspan,

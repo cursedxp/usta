@@ -1,6 +1,9 @@
 //! Visual explainer (/show): embedded HTML skeleton (player shell) + vendored
 //! anime.js tween layer + model-produced scene JSON. The model writes ONLY the
-//! scene array; the shell validates and injects it.
+//! scene array; the shell validates and injects it. Also carries `show_request`
+//! (resolves an explicit `/show` argument against the last assistant reply) and
+//! `last_assistant_text` (session-history lookup for that fallback) — moved here
+//! from `main.rs` in the module split (Task 8) since both are `/show`-specific.
 
 use anyhow::{bail, Context, Result};
 
@@ -99,7 +102,11 @@ pub fn visual_system() -> String {
 }
 
 /// Target file: `.usta/visuals/<topic>/<timestamp>-<concept-slug>.html`.
-pub fn visual_path(project_root: &std::path::Path, topic: &str, concept: &str) -> std::path::PathBuf {
+pub fn visual_path(
+    project_root: &std::path::Path,
+    topic: &str,
+    concept: &str,
+) -> std::path::PathBuf {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
     let slug = crate::topic::slugify_topic(concept);
     project_root
@@ -135,7 +142,11 @@ pub fn prune_visuals(dir: &std::path::Path, keep: usize) {
 
 /// Best-effort browser open; false = caller should just print the path.
 pub fn open_in_browser(path: &std::path::Path) -> bool {
-    let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
     std::process::Command::new(cmd)
         .arg(path)
         .stdout(std::process::Stdio::null())
@@ -211,7 +222,11 @@ pub fn extract_show_marker(reply: &str) -> (String, Option<String>) {
     let Some(topic) = match_marker_line(last) else {
         return (reply.to_string(), None);
     };
-    let kept: Vec<&str> = lines.iter().filter(|l| match_marker_line(l).is_none()).copied().collect();
+    let kept: Vec<&str> = lines
+        .iter()
+        .filter(|l| match_marker_line(l).is_none())
+        .copied()
+        .collect();
     let clean = kept.join("\n").trim_end().to_string();
     if clean.trim().is_empty() {
         return (format!("(visual explainer: {topic})"), Some(topic));
@@ -273,13 +288,28 @@ mod tests {
     fn build_injects_anime_and_scenes_into_full_document() {
         let html = build_visual_html(SAMPLE).unwrap();
         assert!(html.contains("<!doctype html>") || html.contains("<!DOCTYPE html>"));
-        assert!(html.contains("anime.js v3.2.2"), "vendored anime.js (with MIT header) must be inlined");
+        assert!(
+            html.contains("anime.js v3.2.2"),
+            "vendored anime.js (with MIT header) must be inlined"
+        );
         assert!(html.contains("\"caption\":\"A request travels\""));
-        assert!(!html.contains(PLACEHOLDER_ANIME), "anime placeholder must be consumed");
-        assert!(!html.contains("/*__SCENES__*/"), "scenes placeholder must be consumed");
+        assert!(
+            !html.contains(PLACEHOLDER_ANIME),
+            "anime placeholder must be consumed"
+        );
+        assert!(
+            !html.contains("/*__SCENES__*/"),
+            "scenes placeholder must be consumed"
+        );
         // rough.js (vendored Görev 2): MIT header inlined, placeholder consumed.
-        assert!(html.contains("rough.js v4.6.6"), "vendored rough.js (with MIT header) must be inlined");
-        assert!(!html.contains(PLACEHOLDER_ROUGH), "rough placeholder must be consumed");
+        assert!(
+            html.contains("rough.js v4.6.6"),
+            "vendored rough.js (with MIT header) must be inlined"
+        );
+        assert!(
+            !html.contains(PLACEHOLDER_ROUGH),
+            "rough placeholder must be consumed"
+        );
     }
 
     #[test]
@@ -305,20 +335,41 @@ mod tests {
     fn skeleton_is_selfcontained_player() {
         assert!(SKELETON.contains(PLACEHOLDER_SCENES));
         assert!(SKELETON.contains(PLACEHOLDER_ANIME));
-        assert!(SKELETON.contains(PLACEHOLDER_ROUGH), "skeleton missing /*__ROUGH__*/ placeholder");
+        assert!(
+            SKELETON.contains(PLACEHOLDER_ROUGH),
+            "skeleton missing /*__ROUGH__*/ placeholder"
+        );
         assert_eq!(SKELETON.matches(PLACEHOLDER_SCENES).count(), 1);
         assert_eq!(SKELETON.matches(PLACEHOLDER_ANIME).count(), 1);
         assert_eq!(SKELETON.matches(PLACEHOLDER_ROUGH).count(), 1);
         assert!(SKELETON.contains("prefers-color-scheme"));
-        for marker in ["id=\"prev\"", "id=\"play\"", "id=\"next\"", "id=\"caption\"", "<svg"] {
+        for marker in [
+            "id=\"prev\"",
+            "id=\"play\"",
+            "id=\"next\"",
+            "id=\"caption\"",
+            "<svg",
+        ] {
             assert!(SKELETON.contains(marker), "skeleton missing {marker}");
         }
         // Görev 2 (frozen design tokens): Excalifont embedded as data-URI @font-face, no
         // network loads — verify the marker text and license note are present in-source.
-        assert!(SKELETON.contains("@font-face"), "skeleton missing @font-face");
-        assert!(SKELETON.contains("Excalifont"), "skeleton missing Excalifont font-family");
-        assert!(SKELETON.contains("data:font/woff2;base64,"), "font must be embedded as data-URI, not linked");
-        assert!(SKELETON.contains("OFL-1.1"), "skeleton missing OFL-1.1 license note for the embedded font");
+        assert!(
+            SKELETON.contains("@font-face"),
+            "skeleton missing @font-face"
+        );
+        assert!(
+            SKELETON.contains("Excalifont"),
+            "skeleton missing Excalifont font-family"
+        );
+        assert!(
+            SKELETON.contains("data:font/woff2;base64,"),
+            "font must be embedded as data-URI, not linked"
+        );
+        assert!(
+            SKELETON.contains("OFL-1.1"),
+            "skeleton missing OFL-1.1 license note for the embedded font"
+        );
         // Offline guarantee: no external loads at runtime. (Plain `http://` cannot be
         // asserted away — the SVG namespace URI legitimately contains it.)
         assert!(!SKELETON.contains("<script src"));
@@ -384,8 +435,14 @@ mod tests {
         let html = build_visual_html(TORTURE).unwrap();
         let p = std::env::temp_dir().join("usta-visual-torture.html");
         assert!(html.contains("A note lands directly on top of the root node"));
-        assert!(html.contains("Root moves"), "move-retarget torture scene must be present");
-        assert!(html.contains("explaining note is removed"), "remove-cascade torture scene must be present");
+        assert!(
+            html.contains("Root moves"),
+            "move-retarget torture scene must be present"
+        );
+        assert!(
+            html.contains("explaining note is removed"),
+            "remove-cascade torture scene must be present"
+        );
         std::fs::write(&p, html).unwrap();
         println!("torture: {}", p.display());
     }
@@ -404,24 +461,50 @@ mod tests {
     fn parse_show_variants() {
         assert_eq!(parse_show_command("/show"), Some(None));
         assert_eq!(parse_show_command("  /show  "), Some(None));
-        assert_eq!(parse_show_command("/show tcp handshake"), Some(Some("tcp handshake".to_string())));
-        assert_eq!(parse_show_command("/show  dns  "), Some(Some("dns".to_string())));
+        assert_eq!(
+            parse_show_command("/show tcp handshake"),
+            Some(Some("tcp handshake".to_string()))
+        );
+        assert_eq!(
+            parse_show_command("/show  dns  "),
+            Some(Some("dns".to_string()))
+        );
         assert_eq!(parse_show_command("/showx"), None);
         assert_eq!(parse_show_command("show"), None);
         assert_eq!(parse_show_command("/watch"), None);
         // Case-insensitive command token; argument casing preserved.
         assert_eq!(parse_show_command("/Show"), Some(None));
-        assert_eq!(parse_show_command("/SHOW DNS Kaydı"), Some(Some("DNS Kaydı".to_string())));
+        assert_eq!(
+            parse_show_command("/SHOW DNS Kaydı"),
+            Some(Some("DNS Kaydı".to_string()))
+        );
     }
 
     #[test]
     fn visual_system_carries_schema_and_pedagogy() {
         let s = visual_system();
-        for needle in ["JSON array", "caption", "\"op\"", "node", "arrow", "packet",
-                       "6-12 scenes", "ONE idea", "same language as the user", "800", "450",
-                       "8px grid", "focal point", "3 words", "NO OVERLAP", "clear space",
-                       "\"detail\"", "most scenes should not have it", "safety net",
-                       "stay attached"] {
+        for needle in [
+            "JSON array",
+            "caption",
+            "\"op\"",
+            "node",
+            "arrow",
+            "packet",
+            "6-12 scenes",
+            "ONE idea",
+            "same language as the user",
+            "800",
+            "450",
+            "8px grid",
+            "focal point",
+            "3 words",
+            "NO OVERLAP",
+            "clear space",
+            "\"detail\"",
+            "most scenes should not have it",
+            "safety net",
+            "stay attached",
+        ] {
             assert!(s.contains(needle), "visual_system missing: {needle}");
         }
         // The model must NOT be told to write files or HTML.
@@ -431,7 +514,11 @@ mod tests {
 
     #[test]
     fn visual_path_shape() {
-        let p = visual_path(std::path::Path::new("/proj"), "rust", "How ownership works!");
+        let p = visual_path(
+            std::path::Path::new("/proj"),
+            "rust",
+            "How ownership works!",
+        );
         let s = p.to_string_lossy();
         assert!(s.starts_with("/proj/.usta/visuals/rust/"));
         assert!(s.ends_with(".html") && s.contains("how-ownership-works"));
@@ -590,7 +677,8 @@ mod tests {
     // --- prune_visuals (Görev 5) ----------------------------------------
 
     fn temp_visuals_dir(name: &str) -> std::path::PathBuf {
-        let base = std::env::temp_dir().join(format!("usta_visual_test_{name}_{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("usta_visual_test_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         base
@@ -632,7 +720,8 @@ mod tests {
 
     #[test]
     fn prune_visuals_nonexistent_dir_does_not_panic() {
-        let dir = std::env::temp_dir().join(format!("usta_visual_test_missing_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("usta_visual_test_missing_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         prune_visuals(&dir, 10); // must not panic
     }

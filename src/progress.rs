@@ -18,7 +18,9 @@ pub fn progress_path(project_root: &Path, topic: &str) -> PathBuf {
 
 /// Topic-specific approach file: `.usta/approaches/<topic>.md`.
 pub fn approach_path(project_root: &Path, topic: &str) -> PathBuf {
-    project_root.join(".usta/approaches").join(format!("{topic}.md"))
+    project_root
+        .join(".usta/approaches")
+        .join(format!("{topic}.md"))
 }
 
 /// The topic's curriculum map: `.usta/learner/curriculum/<topic>.md`.
@@ -363,10 +365,8 @@ pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
         let _ = std::fs::copy(path, &bak);
     }
     let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, content)
-        .with_context(|| format!("failed to write: {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("failed to move: {}", path.display()))?;
+    std::fs::write(&tmp, content).with_context(|| format!("failed to write: {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("failed to move: {}", path.display()))?;
     Ok(())
 }
 

@@ -64,13 +64,23 @@ pub(crate) fn is_exercise_path(project_root: &Path, path: &Path) -> bool {
 pub(crate) fn is_silent_skip(e: &anyhow::Error) -> bool {
     e.chain()
         .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .any(|io_err| matches!(io_err.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData))
+        .any(|io_err| {
+            matches!(
+                io_err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+            )
+        })
 }
 
 /// Build the injected user-turn for a watched-file change. Exercise files get
 /// an exercise-review frame (assignment comparison, hint ladder, no solutions);
 /// everything else keeps the original project-feedback wording VERBATIM.
-pub(crate) fn feedback_frame(is_exercise: bool, path_display: &str, body: &str, is_diff: bool) -> String {
+pub(crate) fn feedback_frame(
+    is_exercise: bool,
+    path_display: &str,
+    body: &str,
+    is_diff: bool,
+) -> String {
     match (is_exercise, is_diff) {
         (false, false) => format!(
             "[File saved: {path_display}]\n{body}\n\nGive project-grounded, Socratic feedback on this change."
@@ -152,8 +162,16 @@ pub(crate) async fn handle_file_change(
     let (clean, show_topic) = visual::extract_show_marker(&reply.text);
     recorder.assistant(&clean);
     session.push_assistant(clean.clone());
-    let display_reply = backend::Reply { text: clean, web: reply.web, context_tokens: reply.context_tokens };
-    Ok(FileFeedback::Yanit { tokens, reply: display_reply, show_topic })
+    let display_reply = backend::Reply {
+        text: clean,
+        web: reply.web,
+        context_tokens: reply.context_tokens,
+    };
+    Ok(FileFeedback::Yanit {
+        tokens,
+        reply: display_reply,
+        show_topic,
+    })
 }
 
 #[cfg(test)]
@@ -163,13 +181,31 @@ mod tests {
     #[test]
     fn is_exercise_path_detects_exercises_dir() {
         let root = Path::new("/tmp/proj");
-        assert!(is_exercise_path(root, Path::new("/tmp/proj/exercises/a.md")));
-        assert!(is_exercise_path(root, Path::new("/tmp/proj/exercises/gtm/brief.md")));
-        assert!(!is_exercise_path(root, Path::new("/tmp/proj/src/exercises.rs")));
-        assert!(!is_exercise_path(root, Path::new("/tmp/proj/mentor/PROJECT.md")));
+        assert!(is_exercise_path(
+            root,
+            Path::new("/tmp/proj/exercises/a.md")
+        ));
+        assert!(is_exercise_path(
+            root,
+            Path::new("/tmp/proj/exercises/gtm/brief.md")
+        ));
+        assert!(!is_exercise_path(
+            root,
+            Path::new("/tmp/proj/src/exercises.rs")
+        ));
+        assert!(!is_exercise_path(
+            root,
+            Path::new("/tmp/proj/mentor/PROJECT.md")
+        ));
         // watcher may hand a path the root-strip doesn't cover — component scan fallback
-        assert!(is_exercise_path(root, Path::new("/other/place/exercises/x.md")));
-        assert!(!is_exercise_path(root, Path::new("/other/place/src/lib.rs")));
+        assert!(is_exercise_path(
+            root,
+            Path::new("/other/place/exercises/x.md")
+        ));
+        assert!(!is_exercise_path(
+            root,
+            Path::new("/other/place/src/lib.rs")
+        ));
     }
 
     #[test]
@@ -183,7 +219,10 @@ mod tests {
     fn is_silent_skip_true_for_wrapped_invalid_data() {
         // Binary content (an image dropped into the project) → read_to_string
         // fails with InvalidData. Not the user's business — silent, like NotFound.
-        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, "stream did not contain valid UTF-8");
+        let io_err = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        );
         let e = anyhow::Error::new(io_err).context("reading watched file");
         assert!(is_silent_skip(&e));
     }

@@ -22,6 +22,25 @@
 1. **Test modülü şişkinliği** (`welcome.rs`, `progress.rs`) — üretim kodu makul, dosyayı testler büyütüyor. Rust'ta `#[cfg(test)] mod tests` aynı dosyada yaşar; bu idiomatik, kendi başına kir değil. Ama `#[path]` ile ayrı dosyaya alınabilir, private erişim ve sıfır release maliyeti korunarak.
 2. **Gerçek modül yokluğu** (`main.rs`) — ~1980 satır üretim kodu, en az yedi ayrı sorumluluk. Asıl iş burada.
 
+### Ulaşılan (Task 9 sonrası, `wc -l src/*.rs src/tui/*.rs`)
+
+| dosya | satır | not |
+|---|---|---|
+| `src/main.rs` | 272 | `mod` bloğu + `use` bloğu + `MAX_FEEDBACK_BATCH` + `main()` — plandaki kısıt aynen |
+| `src/setup.rs` | 574 | Task 7'nin ~527 üretimi + Task 9'da `#[cfg(test)]` yönlendirmesi; test gövdesi `setup_tests.rs`'e taşındı |
+| `src/setup_tests.rs` | 529 | yeni — Task 1'in `#[path]` deseniyle |
+| `src/tui/run.rs` | 1185 | **600 bütçesini hâlâ aşıyor** — bu planın kapsamı dışında (plan yalnız `main.rs`'i kapsıyordu); kendi başına ayrı bir bölme geçişinin adayı |
+| `src/tui/welcome_tests.rs` | 1117 | test dosyası, bütçe dışı |
+| `src/tui/welcome.rs` | 797 | Task 1 üretim kısmı + Task 8'de eklenen `show_request`/`last_assistant_text` |
+| `src/visual.rs` | 739 | Task 2 + Task 8 taşımaları + üstbilgi güncellemesi |
+| `src/progress.rs` / `src/progress_tests.rs` | 375 / 404 | Task 1 |
+| `src/brain.rs` | 487 | dokunulmadı |
+| `src/backend.rs` | 466 | dokunulmadı |
+
+Toplam (tüm `src/*.rs` + `src/tui/*.rs`): 12743 satır. Artış, `cargo fmt`'in bu planın taşıdığı dosyalarda uzun satırları sarmasından geliyor — davranış değişmedi (372/372 test, tek clippy uyarısı `plain.rs`'te, `cargo build` temiz).
+
+`src/tui/run.rs` dışında, 600 satır bütçesini aşan başka bir modül kalmadı.
+
 ## Sert kısıt: paylaşılan öğeler
 
 `tui/run.rs` **27**, `visual.rs` **1** öğeyi doğrudan `crate::<isim>` ile çağırıyor. Bunlar taşındığında hem yeni modülde en az `pub(crate)` olmalı, hem de çağıran taraftaki `use` yolları güncellenmeli. Tam liste:
