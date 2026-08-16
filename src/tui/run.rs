@@ -673,7 +673,7 @@ pub async fn run(
     let mut files = feedback::FileMemory::new();
     // Mentor docs are already in the system prompt — baseline them so an
     // unchanged re-save is a Skip, not a redundant full re-send (FIX: first-sight seed).
-    crate::seed_mentor_baseline(&mut files, project_root);
+    crate::file_feedback::seed_mentor_baseline(&mut files, project_root);
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
 
@@ -917,10 +917,10 @@ pub async fn run(
                     }
                 } else {
                     for path in batch {
-                        match crate::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
-                            Ok(crate::FileFeedback::Sessiz) => {}
-                            Ok(crate::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
-                            Ok(crate::FileFeedback::Yanit { tokens, reply, show_topic }) => {
+                        match crate::file_feedback::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
+                            Ok(crate::file_feedback::FileFeedback::Sessiz) => {}
+                            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
+                            Ok(crate::file_feedback::FileFeedback::Yanit { tokens, reply, show_topic }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
                                 let w = current_width(&tui);
                                 page_reply(&mut tui, &reply.text, w)?;
@@ -930,7 +930,7 @@ pub async fn run(
                             // Same silent-skip classes as the plain path (main.rs):
                             // vanished temp file (NotFound) or binary content
                             // (InvalidData) — no noise for either.
-                            Err(e) if crate::is_silent_skip(&e) => {}
+                            Err(e) if crate::file_feedback::is_silent_skip(&e) => {}
                             Err(e) => page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
