@@ -428,6 +428,17 @@ mod tests {
     }
 
     #[test]
+    fn state_matching_uses_trailing_segment_not_item_text_word() {
+        // Madde metni "görülmedi" içeriyor ama GERÇEK durum "oturdu" (settled/seen).
+        // Eski contains-mantığı bunu not-seen sayardı; map_state_of trailing segmenti okur.
+        let c = "- görülmedi durumunda karar: oturdu\n- Lifetimes: görülmedi\n";
+        // İlk madde seen (oturdu), ikinci not-seen → 1/2 = %50.
+        assert_eq!(curriculum_percent(c), Some(50));
+        // next_unseen ilk maddeyi ATLAMALI, gerçekten not-seen olan ikinciyi döndürmeli.
+        assert_eq!(next_unseen(c).as_deref(), Some("Lifetimes"));
+    }
+
+    #[test]
     fn drill_count_counts_section_bullets() {
         assert_eq!(drill_count(PROGRESS), 3);
         assert_eq!(drill_count("# soru yok"), 0);
