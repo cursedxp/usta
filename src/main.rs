@@ -255,6 +255,9 @@ async fn run_plain_loop(
     let mut input_rx = input::spawn("❯ ", ready_rx);
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
+    // Mentor docs are already in the system prompt — baseline them so an
+    // unchanged re-save is a Skip, not a redundant full re-send (FIX: first-sight seed).
+    seed_mentor_baseline(&mut files, project_root);
 
     // Opening drill: if progress exists from previous sessions, Usta speaks first,
     // warming up with 2-3 recall questions (testing effect — USTA.md rule).
@@ -1733,6 +1736,23 @@ pub(crate) fn feedback_frame(is_exercise: bool, path_display: &str, body: &str, 
         (true, true) => format!(
             "[Exercise submission changed: {path_display}]\nChange (unified diff):\n{body}\n\nReview the revision AS AN EXERCISE iteration: did it address your previous feedback? Move one rung down the hint ladder only if they're stuck — never hand over the solution."
         ),
+    }
+}
+
+/// Seed FileMemory with the mentor docs (`mentor/PROJECT.md`, `mentor/PROGRESS.md`)
+/// that are ALREADY embedded in the system prompt at session start. Without this,
+/// an unchanged re-save of one of these files is a "first sight" for the watcher —
+/// it would re-send the whole file to the LLM, wasting a turn and doubling context.
+/// After seeding, an unchanged save is a `Skip`, and an edit is a `Diff` (fark),
+/// not full content. Missing files are silently skipped.
+pub(crate) fn seed_mentor_baseline(files: &mut feedback::FileMemory, project_root: &Path) {
+    for path in [
+        progress::project_md_path(project_root),
+        progress::project_progress_path(project_root),
+    ] {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            files.seed(&path, content);
+        }
     }
 }
 

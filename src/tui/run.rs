@@ -671,6 +671,9 @@ pub async fn run(
 
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
+    // Mentor docs are already in the system prompt — baseline them so an
+    // unchanged re-save is a Skip, not a redundant full re-send (FIX: first-sight seed).
+    crate::seed_mentor_baseline(&mut files, project_root);
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
 

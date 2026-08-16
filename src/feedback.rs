@@ -37,6 +37,15 @@ impl FileMemory {
         }
     }
 
+    /// Pre-load baseline content for a file WITHOUT producing feedback.
+    /// Used at session start to register mentor docs that are already embedded
+    /// in the system prompt: a later unchanged re-save then observes as `Skip`
+    /// (not a redundant `FirstSight` that re-sends the whole file to the LLM),
+    /// and an edited save observes as a `Diff` instead of full content.
+    pub fn seed(&mut self, path: &Path, content: String) {
+        self.seen.insert(path.to_path_buf(), content);
+    }
+
     /// Observe newly saved content, produce the LLM payload, update memory.
     pub fn observe(&mut self, path: &Path, current: String) -> ChangePayload {
         if current.len() > MAX_FILE_BYTES {
@@ -108,6 +117,44 @@ mod tests {
         assert!(matches!(
             m.observe(Path::new("big.rs"), big),
             ChangePayload::Skip
+        ));
+    }
+
+    #[test]
+    fn seeded_unchanged_content_is_skipped_not_first_sight() {
+        // Baseline seeded at session start (mentor doc already in system prompt):
+        // saving the file unchanged must NOT re-send full content.
+        let mut m = FileMemory::new();
+        m.seed(Path::new("mentor/PROJECT.md"), "spec govdesi\n".into());
+        assert!(matches!(
+            m.observe(Path::new("mentor/PROJECT.md"), "spec govdesi\n".into()),
+            ChangePayload::Skip
+        ));
+    }
+
+    #[test]
+    fn seeded_then_edited_content_yields_diff_not_first_sight() {
+        // Editing a seeded file surfaces a diff (fark), never full content.
+        let mut m = FileMemory::new();
+        m.seed(Path::new("mentor/PROJECT.md"), "eski hedef\n".into());
+        match m.observe(Path::new("mentor/PROJECT.md"), "yeni hedef\n".into()) {
+            ChangePayload::Diff(d) => {
+                assert!(d.contains("-eski hedef"));
+                assert!(d.contains("+yeni hedef"));
+            }
+            _ => panic!("seed sonrası değişiklik Diff olmalı (FirstSight değil)"),
+        }
+    }
+
+    #[test]
+    fn unseeded_file_still_first_sights() {
+        // Regression lock: a file that was never seeded keeps the original
+        // FirstSight-on-first-save behavior.
+        let mut m = FileMemory::new();
+        m.seed(Path::new("mentor/PROJECT.md"), "seeded\n".into());
+        assert!(matches!(
+            m.observe(Path::new("src/other.rs"), "brand new\n".into()),
+            ChangePayload::FirstSight(_)
         ));
     }
 
