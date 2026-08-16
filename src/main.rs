@@ -2753,7 +2753,8 @@ mod tests {
     fn new_topic_confirm_msg_names_slug_and_keys() {
         let m = new_topic_confirm_msg("rust-cli");
         assert!(m.contains("rust-cli"));
-        assert!(m.contains("[e"));
+        assert!(m.contains("[y"));
+        assert!(!m.contains("[e")); // e silently accepted, never advertised
     }
 
     #[test]
