@@ -577,7 +577,7 @@ pub async fn run(
                             &mut tui,
                             &editor,
                             &mut events,
-                            &format!("start with '{slug}'? [E/h]"),
+                            &format!("start with '{slug}'? [y/N]"),
                         )
                         .await?
                         {
