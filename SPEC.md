@@ -49,7 +49,7 @@
 
 ## 4.5 Launch / Usage
 
-- **`usta`** (no args) → if missing, the global + project `.usta/` is **set up automatically** (bootstrap), then it asks for the topic (in a TTY) or falls back to `general` (piped; `genel` is still accepted as a legacy topic-name alias).
+- **`usta`** (no args) → if missing, the global + project `.usta/` is **set up automatically** (bootstrap), then it asks for the topic (in a TTY) or falls back to `general` (piped; when the model returns `general` or `genel`, the slug is re-derived from the raw input instead).
 - **`usta start <topic>`** → the topic is given explicitly (slugified: `"JavaScript Basics"` → `javascript`). A shortcut.
 - **`usta init`** → optional; only sets up (without starting), writes per-file state. No longer required.
 - Topic = the learning title / filing key (`progress/<topic>.md`). **What you build** lives in `mentor/PROJECT.md` (Usta writes it before the introduction, the user can hand-edit it); Usta looks there first, and asks if it isn't there. The project's status is in `mentor/PROGRESS.md` (Done/In Progress/Next + append-only Decisions).
