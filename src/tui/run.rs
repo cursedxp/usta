@@ -264,7 +264,7 @@ async fn ask_live(
     }
 }
 
-/// TUI sibling of main.rs's `run_visual_generation` — same guarantees: isolated
+/// TUI sibling of plain.rs's `run_visual_generation` — same guarantees: isolated
 /// mini-session, `backend.reset_session()` on every exit path (success, cancel,
 /// error, invalid JSON), Esc-cancellable via `ask_live`, same "try /show again"
 /// notice on bad JSON. Shared by the explicit `/show <topic>` command and the
@@ -784,7 +784,7 @@ pub async fn run(
         }
     }
 
-    // Opening drill / intro (the TUI counterpart of main.rs's plain path). If the
+    // Opening drill / intro (the TUI counterpart of plain.rs's plain path). If the
     // profile is still the embedded generic template (or doesn't exist at all),
     // Usta doesn't know the user yet — a short introduction instruction is added
     // to the opening turn (spec Ç3a).
@@ -1032,9 +1032,9 @@ pub async fn run(
                                 crate::lifecycle::maybe_compact(backend, &mut session, project_root, tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
-                            // Same silent-skip classes as the plain path (main.rs):
-                            // vanished temp file (NotFound) or binary content
-                            // (InvalidData) — no noise for either.
+                            // Same silent-skip classes as the plain path (plain.rs) /
+                            // is_silent_skip (file_feedback.rs): vanished temp file
+                            // (NotFound) or binary content (InvalidData) — no noise for either.
                             Err(e) if crate::file_feedback::is_silent_skip(&e) => {}
                             Err(e) => page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }

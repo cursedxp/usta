@@ -191,7 +191,7 @@ pub fn closing_prompt(
 
 /// Opening-drill turn: if progress exists, Usta speaks first at the start of the
 /// session and asks a recall question (testing effect — TEACHING.md "Opening Drill" rule).
-/// Where it hooks into main.rs: Task 3 (opening-drill trigger).
+/// Where it hooks into plain.rs: Task 3 (opening-drill trigger).
 ///
 /// `due`/`has_questions` are shell-selected: the shell already scanned the progress
 /// file's `due:` tails (`welcome::due_questions` / `welcome::drill_count`), sorted and
@@ -248,7 +248,7 @@ pub fn opening_prompt(
 }
 
 /// Mock-exam session turn (`/exam`, goal-mode only — gated by `topic_has_goal` in
-/// main.rs before this is injected). Suspends the hint ladder/teaching for the
+/// plain.rs before this is injected). Suspends the hint ladder/teaching for the
 /// duration of the exam; scoring + gap recording happens at closing (SPEC §9).
 pub fn exam_prompt(topic: &str) -> String {
     format!(

@@ -280,7 +280,7 @@ pub(crate) fn today() -> String {
 }
 
 /// Session filename stamp — local time.
-pub(crate) fn now_stamp() -> String {
+fn now_stamp() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 

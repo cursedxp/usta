@@ -13,7 +13,7 @@
 | dosya | toplam | üretim | test |
 |---|---|---|---|
 | `src/main.rs` | 3045 | ~1980 | ~1065 |
-| `src/tui/welcome.rs` | 1508 | ~720 | ~788 |
+| `src/tui/welcome.rs` | 1520 | ~720 | ~788 |
 | `src/tui/run.rs` | 1051 | ~957 | ~94 |
 | `src/progress.rs` | 767 | ~373 | ~394 |
 
@@ -31,7 +31,7 @@
 | `src/setup_tests.rs` | 529 | yeni — Task 1'in `#[path]` deseniyle |
 | `src/tui/run.rs` | 1185 | **600 bütçesini hâlâ aşıyor** — bu planın kapsamı dışında (plan yalnız `main.rs`'i kapsıyordu); kendi başına ayrı bir bölme geçişinin adayı |
 | `src/tui/welcome_tests.rs` | 1117 | test dosyası, bütçe dışı |
-| `src/tui/welcome.rs` | 797 | Task 1 üretim kısmı + Task 8'de eklenen `show_request`/`last_assistant_text` |
+| `src/tui/welcome.rs` | 797 | Task 1 üretim kısmı; fonksiyon seti base ile HEAD arasında birebir aynı — 1520→797 arası büyüme yalnız `cargo fmt`'in satır sarmasından geliyor. **600 bütçesini aşıyor** — bu planın kapsamı dışında (plan yalnız `main.rs`'i kapsıyordu, bu dosyaya hiç dokunmadı); `run.rs` gibi kendi başına ayrı bir bölme geçişinin adayı |
 | `src/visual.rs` | 739 | Task 2 + Task 8 taşımaları + üstbilgi güncellemesi |
 | `src/progress.rs` / `src/progress_tests.rs` | 375 / 404 | Task 1 |
 | `src/brain.rs` | 487 | dokunulmadı |
@@ -39,7 +39,7 @@
 
 Toplam (tüm `src/*.rs` + `src/tui/*.rs`): 12743 satır. Artış, `cargo fmt`'in bu planın taşıdığı dosyalarda uzun satırları sarmasından geliyor — davranış değişmedi (372/372 test, tek clippy uyarısı `plain.rs`'te, `cargo build` temiz).
 
-`src/tui/run.rs` dışında, 600 satır bütçesini aşan başka bir modül kalmadı.
+`src/tui/run.rs` (1185) ve `src/tui/welcome.rs` (797, 100% üretim kodu — test modülü Task 1'de `welcome_tests.rs`'e taşındığı için düşülecek bir şey yok) 600 satır bütçesini aşıyor; ikisi de bu planın kapsamı dışında kalıyor (plan yalnız `main.rs`'i kapsıyordu) ve kendi başlarına ayrı bölme geçişlerinin adayı.
 
 ## Sert kısıt: paylaşılan öğeler
 
