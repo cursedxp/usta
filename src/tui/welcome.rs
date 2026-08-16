@@ -90,21 +90,42 @@ pub fn drill_count(progress: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// All due bullets from the `## Geri çağırma soruları` section, paired with a
+/// sort key (the `due:` date, or `""` for a legacy/untagged bullet so it sorts
+/// first — a bullet with no tail is treated as due now). No cap here — callers
+/// that need the count (`due_count`) or a capped preview (`due_questions`)
+/// derive from this single scan. Sort is stable: equal dates keep file order.
+fn due_items(progress: &str, today: &str) -> Vec<(String, String)> {
+    let Some(s) = section(progress, "Geri çağırma soruları") else { return Vec::new() };
+    let mut items: Vec<(String, String)> = Vec::new();
+    for l in s.lines().map(str::trim).filter(|l| l.starts_with('-')) {
+        match l.find("due: ") {
+            None => items.push((String::new(), l.to_string())), // legacy → due now
+            Some(i) => {
+                let date: String = l[i + 5..].chars().take(10).collect();
+                if date.as_str() <= today {
+                    items.push((date, l.to_string()));
+                }
+            }
+        }
+    }
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    items
+}
+
 /// Count recall questions due today or earlier. A bullet without a
 /// `| due: YYYY-MM-DD` tail is legacy format and counts as due (it gets its
 /// tail at the next closing flush). ISO date strings compare lexicographically.
+/// NOT capped — the welcome box shows the real count ("Reviews due today: N").
 pub fn due_count(progress: &str, today: &str) -> usize {
-    let Some(s) = section(progress, "Geri çağırma soruları") else { return 0 };
-    s.lines()
-        .filter(|l| l.trim().starts_with('-'))
-        .filter(|l| match l.find("due: ") {
-            None => true, // legacy, no schedule tail → due now
-            Some(i) => {
-                let date: String = l[i + 5..].chars().take(10).collect();
-                date.as_str() <= today
-            }
-        })
-        .count()
+    due_items(progress, today).len()
+}
+
+/// The due bullets themselves (see `due_count`), oldest due first, capped at 3 —
+/// the shell-selected drill list handed to `progress::opening_prompt` so the
+/// model no longer has to filter/sort `due:` dates itself.
+pub fn due_questions(progress: &str, today: &str) -> Vec<String> {
+    due_items(progress, today).into_iter().take(3).map(|(_, line)| line).collect()
 }
 
 /// Build WelcomeData from file contents — everything is Option, missing = field skipped.
@@ -419,6 +440,65 @@ mod tests {
         assert_eq!(due_count(p, "2026-08-15"), 3);
         assert_eq!(due_count(p, "2026-08-13"), 1); // only untagged counts as due
         assert_eq!(due_count("# bos", "2026-08-15"), 0);
+    }
+
+    #[test]
+    fn due_questions_selects_and_orders_oldest_due_first() {
+        let p = "\
+# rust — İlerleme
+
+## Geri çağırma soruları
+- B sorusu — cevap | due: 2026-08-15 | ivl: 1
+- A sorusu — cevap | due: 2026-08-14 | ivl: 3
+- Eski format soru — cevap
+- Gelecek soru — cevap | due: 2026-09-01 | ivl: 35
+";
+        let qs = due_questions(p, "2026-08-15");
+        // legacy/untagged sorts first (empty key = due now), then 08-14, then 08-15;
+        // the future (09-01) bullet is excluded entirely.
+        assert_eq!(qs.len(), 3);
+        assert!(qs[0].starts_with("- Eski format soru"));
+        assert!(qs[1].starts_with("- A sorusu"));
+        assert!(qs[2].starts_with("- B sorusu"));
+        assert!(qs.iter().all(|q| !q.contains("Gelecek soru")));
+    }
+
+    #[test]
+    fn due_questions_caps_at_three_but_due_count_stays_uncapped() {
+        let p = "\
+## Geri çağırma soruları
+- S1 — c | due: 2026-08-10 | ivl: 1
+- S2 — c | due: 2026-08-11 | ivl: 1
+- S3 — c | due: 2026-08-12 | ivl: 1
+- S4 — c | due: 2026-08-13 | ivl: 1
+";
+        let qs = due_questions(p, "2026-08-15");
+        assert_eq!(qs.len(), 3);
+        assert!(qs[0].contains("S1"));
+        assert!(qs[1].contains("S2"));
+        assert!(qs[2].contains("S3"));
+        assert_eq!(due_count(p, "2026-08-15"), 4); // count is NOT truncated
+    }
+
+    #[test]
+    fn due_questions_excludes_other_section_bullets() {
+        let p = "\
+## Geri çağırma soruları
+- Soru — cevap | due: 2026-08-01 | ivl: 1
+
+## Hata günlüğü
+- typo | 1 | due: 2026-08-01 gibi görünen ama başka bölümde
+";
+        let qs = due_questions(p, "2026-08-15");
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].contains("Soru"));
+        assert!(qs.iter().all(|q| !q.contains("typo")));
+    }
+
+    #[test]
+    fn due_count_matches_due_questions_len_when_three_or_fewer() {
+        let p = "## Geri çağırma soruları\n- q1 — a | due: 2026-08-01 | ivl: 1\n- q2 — a | due: 2026-08-02 | ivl: 1\n";
+        assert_eq!(due_count(p, "2026-08-15"), due_questions(p, "2026-08-15").len());
     }
 
     #[test]

@@ -263,8 +263,12 @@ async fn run_plain_loop(
     // warming up with 2-3 recall questions (testing effect — USTA.md rule).
     let project_known = progress::project_md_path(project_root).exists();
     if has_progress {
-        let gs = game_streak_line(global, &today());
-        let opening = progress::opening_prompt(topic, profile_generic, project_known, gs.as_deref());
+        let td = today();
+        let gs = game_streak_line(global, &td);
+        let progress_content = std::fs::read_to_string(progress::progress_path(project_root, topic)).unwrap_or_default();
+        let due = crate::tui::welcome::due_questions(&progress_content, &td);
+        let has_questions = crate::tui::welcome::drill_count(&progress_content) > 0;
+        let opening = progress::opening_prompt(topic, profile_generic, project_known, gs.as_deref(), &due, has_questions);
         session.push_user(&opening);
         recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {

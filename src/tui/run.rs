@@ -718,7 +718,10 @@ pub async fn run(
     let project_known = progress::project_md_path(project_root).exists();
     let opening = if has_progress {
         let gs = crate::game_streak_line(global, today);
-        progress::opening_prompt(&topic, profile_generic, project_known, gs.as_deref())
+        let progress_content = read(progress::progress_path(project_root, &topic)).unwrap_or_default();
+        let due = welcome::due_questions(&progress_content, today);
+        let has_questions = welcome::drill_count(&progress_content) > 0;
+        progress::opening_prompt(&topic, profile_generic, project_known, gs.as_deref(), &due, has_questions)
     } else {
         for note in crate::materials::convert_pdfs(project_root) {
             page_notice(&mut tui, &note)?;

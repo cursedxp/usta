@@ -176,11 +176,19 @@ pub fn closing_prompt(
 /// Opening-drill turn: if progress exists, Usta speaks first at the start of the
 /// session and asks a recall question (testing effect — TEACHING.md "Opening Drill" rule).
 /// Where it hooks into main.rs: Task 3 (opening-drill trigger).
+///
+/// `due`/`has_questions` are shell-selected: the shell already scanned the progress
+/// file's `due:` tails (`welcome::due_questions` / `welcome::drill_count`), sorted and
+/// capped them — date filtering/sorting is pure and deterministic, so it doesn't belong
+/// in a model instruction. This function only decides HOW to phrase the turn for the
+/// three possible shapes of that shell-computed state.
 pub fn opening_prompt(
     topic: &str,
     profile_generic: bool,
     project_known: bool,
     game_streak: Option<&str>,
+    due: &[String],
+    has_questions: bool,
 ) -> String {
     let meet_block = if profile_generic { MEET_BLOCK } else { "" };
     let project_block = if project_known {
@@ -191,15 +199,26 @@ pub fn opening_prompt(
     } else {
         ""
     };
+    let drill_block = if !due.is_empty() {
+        let items = due.join("\n");
+        format!(
+            "ASK me these due recall questions, one at a time; don't answer them \
+             yourself:\n{items}\nKeep it short: a 2-minute warm-up, then we move to \
+             today's work."
+        )
+    } else if has_questions {
+        "Say exactly one sentence: 'no reviews due today', skip the drill and move \
+         straight to today's work."
+            .to_string()
+    } else {
+        "If progress has no questions, come up with 2 small recall questions suited \
+         to my level. Keep it short: a 2-minute warm-up, then we move to today's \
+         work."
+            .to_string()
+    };
     let base = format!(
         "[SESSION OPENING — RECALL DRILL]\n{meet_block}\
-         Topic: {topic}. Pick ONLY questions from your progress file whose `due:` date is \
-         today or earlier (TODAY is in your system prompt; a bullet without a `due:` tail \
-         counts as due) — at most 3, oldest due first — and ASK me; don't answer them \
-         yourself. If NO question is due, say exactly one sentence: 'no reviews due \
-         today', skip the drill and move straight to today's work. Keep \
-         it short: a 2-minute warm-up, then we move to today's work. If progress has no \
-         questions, come up with 2 small recall questions suited to my level. When the \
+         Topic: {topic}. {drill_block} When the \
          drill is done, say one sentence from the map: where we are, what's next (your \
          curriculum file is in the system prompt). If your progress file has an `## Açık \
          egzersiz` section, remind me in ONE sentence after the drill: open exercise: \
@@ -521,10 +540,10 @@ mod tests {
 
     #[test]
     fn opening_prompt_mentions_project_pointer_when_known() {
-        let s = opening_prompt("rust", false, true, None);
+        let s = opening_prompt("rust", false, true, None, &[], false);
         assert!(s.contains("mentor/PROGRESS.md"));
         assert!(s.contains("Sırada"));
-        let s = opening_prompt("rust", false, false, None);
+        let s = opening_prompt("rust", false, false, None, &[], false);
         assert!(!s.contains("mentor/PROGRESS.md"));
     }
 
@@ -579,7 +598,8 @@ mod tests {
 
     #[test]
     fn opening_prompt_embeds_topic_and_asks_to_quiz() {
-        let s = opening_prompt("rust", false, false, None);
+        let due = vec!["- q — a | due: 2026-08-01 | ivl: 1".to_string()];
+        let s = opening_prompt("rust", false, false, None, &due, true);
         assert!(s.contains("rust"));
         assert!(s.contains("RECALL DRILL"));
         assert!(s.contains("ASK"));
@@ -604,7 +624,7 @@ mod tests {
 
     #[test]
     fn opening_prompt_mentions_curriculum_position() {
-        let s = opening_prompt("rust", false, false, None);
+        let s = opening_prompt("rust", false, false, None, &[], false);
         assert!(s.contains("map"));
     }
 
@@ -624,16 +644,38 @@ mod tests {
 
     #[test]
     fn opening_prompt_reminds_open_exercise() {
-        let s = opening_prompt("rust", false, false, None);
+        let s = opening_prompt("rust", false, false, None, &[], false);
         assert!(s.contains("open exercise"));
     }
 
     #[test]
-    fn opening_prompt_drills_only_due_questions() {
-        let s = opening_prompt("rust", false, false, None);
-        assert!(s.contains("due"));
+    fn opening_prompt_asks_due_list_when_due_present() {
+        // The shell already selected/sorted/capped these — opening_prompt just phrases
+        // the turn around them, no filtering instruction should remain.
+        let due = vec![
+            "- Borrow checker ne yapar? — sahipliği derlemede doğrular | due: 2026-08-14 | ivl: 3".to_string(),
+            "- Trait nedir? — davranış sözleşmesi | due: 2026-08-15 | ivl: 1".to_string(),
+        ];
+        let s = opening_prompt("rust", false, false, None, &due, true);
+        assert!(s.contains("Borrow checker ne yapar?"));
+        assert!(s.contains("Trait nedir?"));
+        assert!(!s.contains("Pick ONLY"));
+        assert!(!s.contains("oldest due first"));
+        assert!(!s.contains("today or earlier"));
+    }
+
+    #[test]
+    fn opening_prompt_says_no_reviews_when_due_empty_but_questions_exist() {
+        let s = opening_prompt("rust", false, false, None, &[], true);
         assert!(s.contains("no reviews due today"));
-        assert!(s.contains("oldest due first"));
+        assert!(!s.contains("come up with 2 small recall questions"));
+    }
+
+    #[test]
+    fn opening_prompt_invents_questions_when_no_questions_exist() {
+        let s = opening_prompt("rust", false, false, None, &[], false);
+        assert!(s.contains("come up with 2 small recall questions"));
+        assert!(!s.contains("no reviews due today"));
     }
 
     #[test]
@@ -643,16 +685,16 @@ mod tests {
         assert!(on.contains("1-2 questions"));
         assert!(!onboarding_prompt("rust", None, false, false, None).contains("[PROFILE EMPTY]"));
 
-        let op = opening_prompt("rust", true, false, None);
+        let op = opening_prompt("rust", true, false, None, &[], false);
         assert!(op.contains("[PROFILE EMPTY]"));
-        assert!(!opening_prompt("rust", false, false, None).contains("[PROFILE EMPTY]"));
+        assert!(!opening_prompt("rust", false, false, None, &[], false).contains("[PROFILE EMPTY]"));
     }
 
     #[test]
     fn opening_prompt_carries_game_streak_block() {
-        let s = opening_prompt("rust", false, false, Some("streak: 3 day(s) (longest 6)"));
+        let s = opening_prompt("rust", false, false, Some("streak: 3 day(s) (longest 6)"), &[], false);
         assert!(s.contains("[GAME] streak: 3 day(s) (longest 6)"));
-        let s = opening_prompt("rust", false, false, None);
+        let s = opening_prompt("rust", false, false, None, &[], false);
         assert!(!s.contains("[GAME]"));
     }
 
