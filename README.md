@@ -112,7 +112,8 @@ Rust is only the shell: CLI, LLM client, file watcher (`notify`), `cargo check` 
 ```
 ~/.config/usta/          # GLOBAL brain (set up once, shared across all projects)
   USTA.md                #   core behavior + pedagogy rules
-  SOUL.md / TEACHING.md  #   persona + pedagogy (incl. gamification, exercises, material rules)
+  SOUL.md / TEACHING.md  #   persona + pedagogy (exercises + core teaching loop)
+  GOAL.md / GAMIFICATION.md / MATERIAL.md / PREDICTION.md  #   conditionally loaded (goal set · game on · materials/ present · Cargo project)
   USER.md                #   who you are (your learning style + preferences) — living document
   learner/index.md       #   ## Records — topic | project | date catalog
   learner/history.md     #   session history — powers `usta stats` + streaks
@@ -137,6 +138,6 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-v0.18 · Rust 2021 · 284 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+v0.19 · Rust 2021 · 319 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Next up: prebuilt binaries + Homebrew tap (deliberately deferred until "everyone can use it" matters). Further ideas: streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.

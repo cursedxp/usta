@@ -190,8 +190,8 @@ Roadmap #8: opt-in oyunlaştırma — ADHD beyni için görünür dopamin döng�
 - **Toggle + kalıcılık:** `/game on|off` USER.md `## Tercihler` bölümüne `- gamification: on|off` satırını yazar (kabuk-yönetimli `set_game_pref` — idempotent, dosyanın diğer içeriğini bozmaz). `/game` (argümansız) = durum bildirimi, **LLM'e gitmez**. On/Off `/exam` ile aynı enjeksiyon desenini kullanır: satır `[GAME MODE ON/OFF]` bilgi turuyla değiştirilip normal ask akışına bırakılır → model TEACHING.md kurallarını o noktadan itibaren uygular.
 - **Anlatıyı model yapar, kabuk saymaz:** XP müfredat durumlarından (görüldü 10 · oturdu 25 · derinleşildi 50) + süreç puanlarından (oturum +5, tahmin +2, egzersiz teslimi +10 — doğruluktan bağımsız) türetilir; seviye eşikleri 0/100/250/500/1000/2000 (Çırak → Usta); rozetler gap kapanışı / ilk egzersiz / 7-gün streak / ilk boss; `/exam` = boss fight.
 - **Açılış [GAME] beslemesi:** oyun açıkken kabuk açılış turuna `history.md`'den tek satır ekler (`game_streak_line`): streak>0 → `streak: N day(s) (longest M)`; kırık seri → yalnız `longest streak: M day(s)`. **ADHD-safe kod garantisi:** `streak: 0` yapısal olarak üretilemez (test-kilitli) — bir prompt kuralı değil, kabuk garantisi.
-- **Kapanış koruması:** `closing_prompt` profil kuralına tek cümle — `## Tercihler` bölümü kabuk-yönetimli, olduğu gibi korunur. **Kabuk restore garantisi:** "kabuk-yönetimli" artık yalnız prompt-korumalı değil — kapanış flush'ında kabuk `- gamification:` satırının disk durumunu yazımdan ÖNCE yakalar, profil yazıldıktan SONRA model KEEP kuralını ihmal edip satırı düşürmüş veya değerini çevirmişse (`restore_game_pref`) tercihi geri yazar; kullanıcı hiç toggle etmemişse (satır yok) dokunmaz.
-- **Kural evi: TEACHING.md `## Gamification`** (embedded, pedagoji katmanı — GOAL.md değil; yalnız `- gamification: on` iken aktif, kapalıyken tek oyun kelimesi yok). DOZ: kilometre taşında tek satır, her mesajda skor YOK. Overjustification bekçisi: puan süreçte, ceza mekaniği yok.
+- **Kapanış koruması:** prompt'taki KEEP-cümlesi (`## Tercihler` bölümünü koru talimatı) v0.19'da kaldırıldı — tek güvence artık kabuk restore garantisi (bkz. §4.20). **Kabuk restore garantisi:** kapanış flush'ında kabuk `- gamification:` satırının disk durumunu yazımdan ÖNCE yakalar, profil yazıldıktan SONRA model satırı düşürmüş veya değerini çevirmişse (`restore_game_pref`) tercihi geri yazar; kullanıcı hiç toggle etmemişse (satır yok) dokunmaz.
+- **Kural evi: GAMIFICATION.md** (embedded, koşullu yüklenen dosya — v0.19'dan beri TEACHING.md'nin içinde değil; yalnız `- gamification: on` iken kabukça yüklenir, kapalıyken tek oyun kelimesi prompt'ta yok — bkz. §4.20). DOZ: kilometre taşında tek satır, her mesajda skor YOK. Overjustification bekçisi: puan süreçte, ceza mekaniği yok.
 - **Kapsam dışı:** kabuğun XP hesabı/persist'i, lider tablosu, görsel rozet, ayrı oyun-veri dosyası (seviye müfredattan türetilir — idempotent).
 
 Tasarım detayı: `docs/superpowers/specs/2026-08-15-gamification-design.md`.
@@ -219,6 +219,27 @@ Onaylı tasarım sistemi (Claude Design projesi) koda uygulandı — davranış 
 - **Exam kartı kabukta DEĞİL:** GOAL.md `## Mock Exams`'a format kuralı eklendi (`── Question N/M ──` başlık, `●○` ilerleme, kırılım tablosu) — model çizer, kabuk parse etmez ("ince kabuk"). Game satırı glif notu TEACHING.md DOZ kuralına (`▸`).
 
 Tasarım detayı: `docs/superpowers/specs/2026-08-16-tui-design-apply-design.md`.
+
+## 4.20 Prompt Diyeti (v0.19)
+
+Bağlayıcı ilke: kabukla deterministik çözülebilen hiçbir şey prompt'a yazılmaz; koşulu kabuk bilen bir bölüm koşulsuz yüklenmez.
+
+- **Koşullu brain tablosu:**
+
+  | Dosya | Koşul |
+  |---|---|
+  | GOAL.md | konu approach'ında `## Hedef` var |
+  | GAMIFICATION.md | USER.md'de `- gamification: on` |
+  | MATERIAL.md | `materials/` altında ≥1 `.md`/`.txt`/`.pdf` |
+  | PREDICTION.md | proje kökünde `Cargo.toml` |
+
+  GAMIFICATION.md, MATERIAL.md, PREDICTION.md TEACHING.md'den **birebir** taşındı (içerik değişmedi) — tek fark yükleme koşulu artık kabukta (`brain::load_system_prompt`). Koşul false iken dosyanın içeriği prompt'ta hiç yok (önceden TEACHING.md'nin parçası olarak her oturumda gidiyordu).
+- **Due-seçimi kabukta:** vadeli geri çağırma sorularının seçimi model işi değil — `welcome::due_questions(progress, today)` seçer (vade ≤ bugün veya etiketsiz-legacy; en eski önce, legacy önce; en fazla 3). `due_count` aynı taramanın kapaksız (uncapped) uzunluğu — tek kaynak. `opening_prompt` artık filtreleme talimatı taşımıyor, kabuğun seçtiği maddeleri gömer (veya soru varken hiçbiri vadeli değilse "bugün tekrar yok" atlaması; "2 küçük geri çağırma sorusu üret" kuralı yalnız progress'te hiç soru yokken hayatta kalır). Kapanıştaki due:/ivl: üretim kuralları değişmedi — aritmetik bilinçli olarak modelde kalıyor (ayrı iş; roadmap #10 spaced-rep aritmetiği ile karışmaz).
+- **Mid-session boşluk:** `/game on` bilgi turu artık kabuğun global dizinden okuduğu GAMIFICATION.md kural metnini gömer (`game_on_turn`; dosya okunamazsa kısa fallback metin) — model açılıştan sonra da kuralları öğrenmiş olur. `/game off` değişmedi.
+- **Ölü cümle temizliği:** `closing_prompt`'taki "KEEP the '## Tercihler' section... shell-managed" cümlesi kaldırıldı — kabuğun `restore_game_pref` garantisi zaten yeterli, prompt'ta tekrar söylemeye gerek yok.
+- **Global brain sync:** üç yeni dosya Code-owned → mevcut `write_global_defaults` senkronizasyonu bunları otomatik dağıtır.
+
+Tasarım detayı: `docs/superpowers/specs/2026-08-16-prompt-diet-design.md`.
 
 ## 5. Akış (bir öğrenme oturumu)
 
