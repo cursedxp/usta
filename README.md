@@ -84,6 +84,8 @@ usta start gtm            # could be rust, gtm, anything
 
 Practice: Usta assigns exercises into `exercises/` — write, save, get reviewed. No solutions handed over.
 
+In-session commands: `/watch on|off` (file feedback) · `/show [topic]` (animated visual explainer) · `/exam` (goal mode: mock exam) · `/game on|off` (gamification) · `/help` · `/quit`.
+
 ### Project context: the `mentor/` folder
 
 Every project gets a visible `mentor/` folder next to `.usta/`:
@@ -110,18 +112,23 @@ Rust is only the shell: CLI, LLM client, file watcher (`notify`), `cargo check` 
 ```
 ~/.config/usta/          # GLOBAL brain (set up once, shared across all projects)
   USTA.md                #   core behavior + pedagogy rules
-  USER.md                #   who you are (your learning style) — living document, see below
+  SOUL.md / TEACHING.md  #   persona + pedagogy (incl. gamification, exercises, material rules)
+  USER.md                #   who you are (your learning style + preferences) — living document
   learner/index.md       #   ## Records — topic | project | date catalog
+  learner/history.md     #   session history — powers `usta stats` + streaks
   approaches/            #   software.md, _default.md — approach per domain
 
 <project>/mentor/        # PROJECT docs (visible, user-facing — yours to edit)
   PROJECT.md             #   what you're building, why, scale, stack, non-goals
   PROGRESS.md            #   project state (done/doing/next) + append-only decision log
+<project>/exercises/     # your exercise deliverables — saving triggers review
+<project>/materials/     # your book/course notes — curriculum anchors to them
 
 <project>/.usta/         # PROJECT internals (per project)
-  learner/progress/<topic>.md      #   level, gaps, recall questions, error log
-  learner/curriculum/<topic>.md    #   web-researched curriculum map (status-tagged)
+  learner/progress/<topic>.md      #   level, gaps, recall questions (with due dates), error log
+  learner/curriculum/<topic>.md    #   web-researched curriculum map (status-tagged, source refs)
   approaches/<topic>.md            #   Usta's derived topic-specific approach (living document)
+  sessions/                        #   live session transcripts (crash-safe)
 ```
 
 Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren't overwritten by the scaffold — to refresh them: `rm ~/.config/usta/USTA.md ~/.config/usta/approaches/_default.md` + run `usta` once; or `usta reset --factory`.)
@@ -130,6 +137,6 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-Rust 2021 · 265 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md).
+v0.18 · Rust 2021 · 284 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-Roadmap ideas: streaming, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
+Next up: prebuilt binaries + Homebrew tap (deliberately deferred until "everyone can use it" matters). Further ideas: streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
