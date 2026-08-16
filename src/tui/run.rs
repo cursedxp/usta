@@ -717,7 +717,7 @@ pub async fn run(
     // to the opening turn (spec Ç3a).
     let profile_generic = read(global.join("USER.md"))
         .as_deref()
-        .map(crate::profile_is_generic)
+        .map(crate::setup::profile_is_generic)
         .unwrap_or(true);
     let project_known = progress::project_md_path(project_root).exists();
     let opening = if has_progress {
