@@ -146,8 +146,7 @@ pub fn closing_prompt(
          concept X' is progress's job; 'likes to learn from examples' goes in profile. \
          KEEP the valid information already in the current profile (the user may have \
          hand-edited it), ~1 page cap, merge duplicates. If nothing changed, don't \
-         generate this file at all. KEEP the '## Tercihler' section (e.g. '- \
-         gamification: on') exactly as-is — it is shell-managed.\n\
+         generate this file at all.\n\
          - `project` is the USER-FACING project definition, written to `mentor/PROJECT.md` \
          at the project root. Generate it ONLY when (a) the file doesn't exist yet and a \
          concrete project was discussed this session, or (b) the project definition \
@@ -696,13 +695,6 @@ mod tests {
         assert!(s.contains("[GAME] streak: 3 day(s) (longest 6)"));
         let s = opening_prompt("rust", false, false, None, &[], false);
         assert!(!s.contains("[GAME]"));
-    }
-
-    #[test]
-    fn closing_prompt_protects_tercihler_section() {
-        let s = closing_prompt("rust", None, None, None, None, None, None);
-        assert!(s.contains("## Tercihler"));
-        assert!(s.contains("shell-managed"));
     }
 
     #[test]
