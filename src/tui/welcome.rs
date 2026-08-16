@@ -33,6 +33,10 @@ pub struct WelcomeData {
     pub first_session: bool,
     pub week_sessions: u32,
     pub streak: u32,
+    // Data layer only (this task doesn't render it yet) — the resume
+    // continuation panel's rendering wires this field up in a later task.
+    #[allow(dead_code)]
+    pub last_session: Option<String>,
 }
 
 /// Body from a `## {header}` heading up to the next `## `.
@@ -131,6 +135,29 @@ pub fn due_questions(progress: &str, today: &str) -> Vec<String> {
     due_items(progress, today).into_iter().take(3).map(|(_, line)| line).collect()
 }
 
+/// Relative phrasing for the newest history entry of `topic`, EXCLUDING the
+/// session being opened right now (its line is appended at close, not at open).
+/// `0` → `today`, `1` → `yesterday`, `n` → `n days ago`. A future-dated entry
+/// (clock skew) collapses to `today` rather than printing a negative count.
+/// ADHD-safe: the phrasing is a neutral timestamp at every distance — no
+/// streak-zero, no "it has been a while" (SPEC §"ADHD-safe rules").
+pub fn last_session_ago(entries: &[crate::history::Entry], topic: &str, today: &str) -> Option<String> {
+    let today = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").ok()?;
+    let newest = entries
+        .iter()
+        .filter(|e| e.topic == topic)
+        .filter_map(|e| chrono::NaiveDate::parse_from_str(&e.date, "%Y-%m-%d").ok())
+        .max()?;
+    let days = (today - newest).num_days();
+    Some(if days <= 0 {
+        "today".to_string()
+    } else if days == 1 {
+        "yesterday".to_string()
+    } else {
+        format!("{days} days ago")
+    })
+}
+
 /// Build WelcomeData from file contents — everything is Option, missing = field skipped.
 /// `history`: raw `learner/history.md` content (global, not topic-scoped) — `None`
 /// means no history file exists yet, which renders as 0 sessions / 0 streak
@@ -140,12 +167,16 @@ pub fn gather(
     profile: Option<&str>, progress: Option<&str>, curriculum: Option<&str>,
     topic: &str, model: &str, dir: &str, today: &str, history: Option<&str>,
 ) -> WelcomeData {
-    let (week_sessions, streak) = match history {
+    let (week_sessions, streak, last_session) = match history {
         Some(h) => {
             let es = crate::history::entries(h);
-            (crate::history::week_summary(&es, today).sessions, crate::history::current_streak(&es, today))
+            (
+                crate::history::week_summary(&es, today).sessions,
+                crate::history::current_streak(&es, today),
+                last_session_ago(&es, topic, today),
+            )
         }
-        None => (0, 0),
+        None => (0, 0, None),
     };
     WelcomeData {
         version: env!("CARGO_PKG_VERSION"),
@@ -161,6 +192,7 @@ pub fn gather(
         first_session: progress.is_none(),
         week_sessions,
         streak,
+        last_session,
     }
 }
 
@@ -873,5 +905,57 @@ mod tests {
         let t0 = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &[], &[], false, 80, 0, 0);
         let joined0 = plain_lines(&t0).join("\n");
         assert!(!joined0.contains("This week"));
+    }
+
+    fn mk_entry(date: &str, topic: &str) -> crate::history::Entry {
+        crate::history::Entry { date: date.to_string(), topic: topic.to_string(), map: None, settled: None }
+    }
+
+    #[test]
+    fn last_session_ago_today_yesterday_and_days() {
+        let today_e = vec![mk_entry("2026-08-15", "rust")];
+        assert_eq!(last_session_ago(&today_e, "rust", "2026-08-15"), Some("today".to_string()));
+
+        let yesterday_e = vec![mk_entry("2026-08-14", "rust")];
+        assert_eq!(last_session_ago(&yesterday_e, "rust", "2026-08-15"), Some("yesterday".to_string()));
+
+        let days_e = vec![mk_entry("2026-08-10", "rust")];
+        assert_eq!(last_session_ago(&days_e, "rust", "2026-08-15"), Some("5 days ago".to_string()));
+    }
+
+    #[test]
+    fn last_session_ago_picks_newest_not_last_line() {
+        // older date written AFTER the newer one in file/vec order — max must
+        // still win, not the last element.
+        let es = vec![mk_entry("2026-08-14", "rust"), mk_entry("2026-08-10", "rust")];
+        assert_eq!(last_session_ago(&es, "rust", "2026-08-15"), Some("yesterday".to_string()));
+    }
+
+    #[test]
+    fn last_session_ago_filters_by_topic() {
+        let es = vec![mk_entry("2026-08-15", "gtm"), mk_entry("2026-08-10", "rust")];
+        assert_eq!(last_session_ago(&es, "rust", "2026-08-15"), Some("5 days ago".to_string()));
+    }
+
+    #[test]
+    fn last_session_ago_none_without_entry() {
+        let es = vec![mk_entry("2026-08-15", "gtm")];
+        assert_eq!(last_session_ago(&es, "rust", "2026-08-15"), None);
+    }
+
+    #[test]
+    fn last_session_ago_future_date_is_today() {
+        let es = vec![mk_entry("2026-08-16", "rust")];
+        assert_eq!(last_session_ago(&es, "rust", "2026-08-15"), Some("today".to_string()));
+    }
+
+    #[test]
+    fn gather_fills_last_session() {
+        let h = "# Session History\n- 2026-08-14 | rust | map 40% | settled 4\n";
+        let d = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", Some(h));
+        assert_eq!(d.last_session.as_deref(), Some("yesterday"));
+
+        let d2 = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", None);
+        assert_eq!(d2.last_session, None);
     }
 }
