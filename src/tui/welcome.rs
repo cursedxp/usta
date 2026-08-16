@@ -33,9 +33,6 @@ pub struct WelcomeData {
     pub first_session: bool,
     pub week_sessions: u32,
     pub streak: u32,
-    // Data layer only (this task doesn't render it yet) — the resume
-    // continuation panel's rendering wires this field up in a later task.
-    #[allow(dead_code)]
     pub last_session: Option<String>,
 }
 
@@ -429,6 +426,145 @@ pub fn render_welcome_identity(
     }
 
     with_help_hint(render_box(env!("CARGO_PKG_VERSION"), left, right, width))
+}
+
+/// 12-cell progress bar: `▓` filled, `░` empty. `pct` is clamped to 0..=100.
+/// Filled count rounds to nearest cell (not floor/ceil) so 25% reads as a
+/// visually-proportional 3/12, but a non-zero percent always shows at least
+/// one filled cell — otherwise 1% would render as an all-empty bar, which
+/// reads as "0% / not started" and is a lie.
+fn map_bar(pct: u8) -> String {
+    let pct = pct.min(100);
+    let filled = ((pct as f32) * 12.0 / 100.0).round() as usize;
+    let filled = filled.min(12);
+    let filled = if pct > 0 && filled == 0 { 1 } else { filled };
+    format!("{}{}", "▓".repeat(filled), "░".repeat(12 - filled))
+}
+
+/// Draw a single-column bordered panel. `title` goes in the top border in
+/// brand+bold; each row is a span list padded to the inner width. Same width
+/// clamp as `render_box`, so the panel's edges line up with the welcome box
+/// printed above it.
+fn solo_box(title: &str, rows: Vec<Vec<Span<'static>>>, width: u16) -> Text<'static> {
+    let total = (width as usize).clamp(60, 100);
+    let inner = total - 2; // borders
+
+    // Same fixed-offset formula as render_box's top border (see that
+    // function's comment): "╭─── " (5) + "╮" (1) = 6 fixed chars, and
+    // inner already excludes the 2 side borders, so 6-2=4 remains.
+    let top = Line::from(vec![
+        Span::raw("╭─── "),
+        Span::styled(title.to_string(), theme::brand().add_modifier(Modifier::BOLD)),
+        Span::raw("─".repeat(inner.saturating_sub(4 + title.width()))),
+        Span::raw("╮"),
+    ]);
+
+    let mut lines: Vec<Line> = vec![top];
+    for row in rows {
+        let row_w: usize = row.iter().map(|s| s.content.width()).sum();
+        let mut spans = vec![Span::raw("│")];
+        spans.extend(row);
+        spans.push(Span::raw(" ".repeat(inner.saturating_sub(row_w))));
+        spans.push(Span::raw("│"));
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(format!("╰{}╯", "─".repeat(inner))));
+    Text::from(lines)
+}
+
+/// Resume mode: printed after the identity welcome when a saved topic is
+/// picked. Deliberately carries NO identity — no logo, greeting, model, cwd
+/// or week/streak line; all of those are already on screen in the identity
+/// box above, and repeating them was the bug this panel replaces. Its job is
+/// continuity: what you are picking up, when you were last here, how far
+/// along the map you are. Design: Claude Design f8cc2dc7 page 06, variant A.
+// Not wired into run.rs yet — Task 3 branches `resumed` to call this instead
+// of `render_welcome`. Until then it's only reachable from tests.
+#[allow(dead_code)]
+pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
+    let total = (width as usize).clamp(60, 100);
+    let inner = total - 2;
+    // Label column is "  " (2) + pad(label,12) (12) + " " (1) = 15 chars;
+    // the value — and any wrapped continuation line — gets what's left.
+    let value_w = inner.saturating_sub(15).max(1);
+
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let plain = Style::default();
+
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+
+    // Row 1: "Last session {rel}" (+ " · Level {level}" if both present), or
+    // just "Level {level}" if there's no last-session data. Dropped only when
+    // neither is present.
+    if d.last_session.is_some() || d.level.is_some() {
+        let (label, value): (&str, Vec<Span<'static>>) = match (&d.last_session, &d.level) {
+            (Some(rel), Some(level)) => (
+                "Last session",
+                vec![
+                    Span::styled(rel.clone(), plain),
+                    Span::styled(" · ".to_string(), dim),
+                    Span::styled("Level ".to_string(), dim),
+                    Span::styled(level.clone(), plain),
+                ],
+            ),
+            (Some(rel), None) => ("Last session", vec![Span::styled(rel.clone(), plain)]),
+            (None, Some(level)) => ("Level", vec![Span::styled(level.clone(), plain)]),
+            (None, None) => unreachable!("guarded by the outer if"),
+        };
+        let mut row = vec![Span::raw("  "), Span::styled(pad(label, 12), dim), Span::raw(" ")];
+        row.extend(value);
+        rows.push(row);
+    }
+
+    // Row 2: "Map          {bar} {p}%" — dropped when there's no curriculum data.
+    if let Some(p) = d.map_percent {
+        rows.push(vec![
+            Span::raw("  "),
+            Span::styled(pad("Map", 12), dim),
+            Span::raw(" "),
+            Span::styled(map_bar(p), dim),
+            Span::raw(" "),
+            Span::styled(format!("{p}%"), dim),
+        ]);
+    }
+
+    // Row 3: blank separator — only when there's a row 4 or 5 to separate from
+    // rows 1/2. No separator when the panel would otherwise end right after them.
+    if d.next_item.is_some() || d.due_count > 0 {
+        rows.push(Vec::new());
+    }
+
+    // Row 4: "Up next      {next_item}", wrapped (never truncated/ellipsized);
+    // continuation lines align under the value column (15-space prefix).
+    if let Some(next) = &d.next_item {
+        for (i, line) in wrap(next, value_w).into_iter().enumerate() {
+            if i == 0 {
+                rows.push(vec![
+                    Span::raw("  "),
+                    Span::styled(pad("Up next", 12), dim),
+                    Span::raw(" "),
+                    Span::styled(line, plain),
+                ]);
+            } else {
+                rows.push(vec![Span::raw(" ".repeat(15)), Span::styled(line, plain)]);
+            }
+        }
+    }
+
+    // Row 5: "Reviews      {n} due today" — dropped when nothing is due. The
+    // count is the panel's one other orange element (with the title).
+    if d.due_count > 0 {
+        rows.push(vec![
+            Span::raw("  "),
+            Span::styled(pad("Reviews", 12), dim),
+            Span::raw(" "),
+            Span::styled(d.due_count.to_string(), theme::brand()),
+            Span::styled(" due today".to_string(), plain),
+        ]);
+    }
+
+    let title = format!("Continuing · {} ", d.topic);
+    solo_box(&title, rows, width)
 }
 
 /// Append the `/help` discovery hint as a separate dim line after the bordered
@@ -957,5 +1093,95 @@ mod tests {
 
         let d2 = gather(None, None, None, "rust", "opus · cli", "~/x", "2026-08-15", None);
         assert_eq!(d2.last_session, None);
+    }
+
+    fn full_resume_data() -> WelcomeData {
+        WelcomeData {
+            version: env!("CARGO_PKG_VERSION"),
+            name: None,
+            model: "opus · cli".to_string(),
+            dir: "~/x".to_string(),
+            topic: "kaynak-ingest".to_string(),
+            level: Some("Başlangıç — sıfır noktası".to_string()),
+            map_percent: Some(25),
+            next_item: Some("URL → HTML fetch, then strip to text".to_string()),
+            drill_count: 3,
+            due_count: 3,
+            first_session: false,
+            week_sessions: 2,
+            streak: 2,
+            last_session: Some("2 days ago".to_string()),
+        }
+    }
+
+    #[test]
+    fn render_resume_lines_have_equal_display_width() {
+        let d = full_resume_data();
+        let t = render_resume(&d, 80);
+        let lines = plain_lines(&t);
+        assert!(lines.len() >= 3);
+        let w = lines[0].width();
+        assert!(lines.iter().all(|l| l.width() == w), "hizasız satır: {lines:#?}");
+        assert!(lines[0].starts_with('╭') && lines.last().unwrap().starts_with('╰'));
+    }
+
+    #[test]
+    fn render_resume_orange_discipline() {
+        let d = full_resume_data();
+        let t = render_resume(&d, 80);
+        assert!(orange_element_count(&t) <= 2, "resume orange > 2: {t:#?}");
+    }
+
+    #[test]
+    fn render_resume_has_no_identity() {
+        let d = full_resume_data();
+        let joined = plain_lines(&render_resume(&d, 80)).join("\n");
+        assert!(!joined.contains("██"));
+        assert!(!joined.contains("Welcome back"));
+        assert!(!joined.contains("opus · cli"));
+        assert!(!joined.contains("This week"));
+        assert!(!joined.contains(crate::help::HELP_HINT));
+    }
+
+    #[test]
+    fn render_resume_title_names_the_topic() {
+        let d = full_resume_data();
+        let lines = plain_lines(&render_resume(&d, 80));
+        assert!(lines[0].contains("Continuing · kaynak-ingest"), "top border: {}", lines[0]);
+    }
+
+    #[test]
+    fn render_resume_sparse_drops_rows() {
+        let mut d = full_resume_data();
+        d.map_percent = None;
+        d.due_count = 0;
+        d.level = None;
+        let joined = plain_lines(&render_resume(&d, 80)).join("\n");
+        assert!(joined.contains("Last session"));
+        assert!(joined.contains("Up next"));
+        assert!(!joined.contains("Map"));
+        assert!(!joined.contains("Reviews"));
+        assert!(!joined.contains("Level"));
+    }
+
+    #[test]
+    fn render_resume_bar_reflects_percent() {
+        assert_eq!(map_bar(25).matches('▓').count(), 3);
+        assert!(map_bar(1).matches('▓').count() >= 1);
+        assert_eq!(map_bar(100).matches('▓').count(), 12);
+    }
+
+    #[test]
+    fn render_resume_long_next_item_wraps_no_ellipsis() {
+        let long_item = "Async trait objects and pinning semantics in tokio task spawning and scheduling";
+        let mut d = full_resume_data();
+        d.next_item = Some(long_item.to_string());
+        let lines = plain_lines(&render_resume(&d, 80));
+        let joined = lines.join(" ");
+        assert!(!joined.contains('…'), "next_item was truncated: {lines:#?}");
+        for word in long_item.split(' ') {
+            assert!(joined.contains(word), "missing word '{word}' from wrapped next_item: {lines:#?}");
+        }
+        assert!(joined.contains("scheduling"));
     }
 }
