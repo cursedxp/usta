@@ -94,19 +94,31 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Set up `.usta/` silently if missing — `usta init` is no longer a mandatory
-    // pre-step, `start` bootstraps itself (see ensure_scaffold).
+    // Migration MUST run before `ensure_scaffold` — `ensure_scaffold` →
+    // `write_global_defaults` → `config::needs_sync` READS Ownership::Code
+    // files (approaches/software.md, approaches/_default.md) and may resync
+    // them with the embedded English templates. Those files are also
+    // migration-in-scope (migrate::run sweeps global `approaches/*.md`), so
+    // migration has to see them first or a legacy Turkish-token install loses
+    // its `.bak` — the scaffold would silently overwrite before migration
+    // ever runs. `global_root()` / `find_project_root()` are pure path
+    // resolution (no reads of migration-scoped file content), so it's safe to
+    // resolve both paths up front and migrate before touching the scaffold.
     let cwd = std::env::current_dir()?;
-    let had_project_root = config::find_project_root(&cwd).is_some();
+    let global = config::global_root()?;
+    let existing_project_root = config::find_project_root(&cwd);
+    let had_project_root = existing_project_root.is_some();
+    let project_usta = existing_project_root.as_deref().map(|r| r.join(".usta"));
+    run_migration(&global, project_usta.as_deref());
+
+    // Set up `.usta/` silently if missing — `usta init` is no longer a mandatory
+    // pre-step, `start` bootstraps itself (see ensure_scaffold). Global brain +
+    // project root are merged to produce the system prompt (hybrid model — see
+    // brain.rs). build_session uses this.
     let project_root = ensure_scaffold(&cwd)?;
     if !had_project_root {
         ui::notice(".usta/ set up");
     }
-
-    // Global brain + project root are merged to produce the system prompt (hybrid
-    // model — see brain.rs). build_session uses this.
-    let global = config::global_root()?;
-    run_migration(&global, Some(&project_root.join(".usta")));
 
     // File watcher — spawned ONCE (starts a thread), then passed by (&mut) into
     // the running path. Input thread + debounce state are path-specific:
@@ -2423,6 +2435,74 @@ mod tests {
         // Nothing gets rewritten when there's no change.
         let third = write_global_defaults(&base).unwrap();
         assert!(third.iter().all(|(_, wrote)| !*wrote));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Regression test for the start-path ordering fix: `run_migration` must
+    /// execute BEFORE `ensure_scaffold` (→ `write_global_defaults` →
+    /// `config::needs_sync`, which READS `Ownership::Code` files like
+    /// `approaches/software.md` and may resync them from the embedded English
+    /// template). Those files are also migration-in-scope
+    /// (`migrate::run` sweeps global `approaches/*.md`), so a legacy
+    /// Turkish-token install needs migration to see the file BEFORE the
+    /// scaffold can silently overwrite it — otherwise the original content is
+    /// lost with no `.bak`.
+    ///
+    /// This exercises the two steps in the FIXED order (`migrate::run` then
+    /// `write_global_defaults`, mirroring main()'s new ordering) and asserts
+    /// the `.bak` captures the ORIGINAL Turkish content — proof migration ran
+    /// first. It then asserts the scaffold still resynced the file afterward
+    /// (to `Ownership::Code`'s embedded content), showing the overwrite did
+    /// happen, just AFTER migration had already captured the legacy state.
+    #[test]
+    fn migration_before_scaffold_preserves_legacy_approaches_bak() {
+        let base = std::env::temp_dir().join(format!(
+            "usta_main_test_migration_before_scaffold_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("approaches")).unwrap();
+
+        let legacy = "## Tercihler\n- gamification: on\n";
+        let software_md = base.join("approaches/software.md");
+        std::fs::write(&software_md, legacy).unwrap();
+
+        // Sanity: the legacy content must differ from the embedded template,
+        // otherwise write_global_defaults wouldn't touch it and this test
+        // wouldn't prove anything about ordering.
+        let embedded = defaults::global_defaults()
+            .into_iter()
+            .find(|(rel, _, _)| *rel == "approaches/software.md")
+            .unwrap()
+            .1;
+        assert_ne!(legacy, embedded);
+
+        // Fixed order: migration first, THEN scaffold sync — matches main()'s
+        // new sequencing.
+        migrate::run(&base, None).unwrap();
+        write_global_defaults(&base).unwrap();
+
+        // `.bak` sibling path — mirrors migrate::sibling()'s append-not-swap
+        // semantics (`software.md` -> `software.md.bak`).
+        let mut bak_os = software_md.clone().into_os_string();
+        bak_os.push(".bak");
+        let bak = PathBuf::from(bak_os);
+
+        assert!(
+            bak.exists(),
+            ".bak must exist — migration must have run before the scaffold could overwrite the legacy file"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            legacy,
+            ".bak must hold the ORIGINAL Turkish content, captured before any scaffold resync"
+        );
+
+        // The scaffold DID resync the file afterward (Ownership::Code) — this
+        // is expected and fine, it just had to happen after migration.
+        let after = std::fs::read_to_string(&software_md).unwrap();
+        assert_eq!(after, embedded);
 
         let _ = std::fs::remove_dir_all(&base);
     }
