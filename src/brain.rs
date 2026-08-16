@@ -79,6 +79,22 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     read_section(&global.join("RULES.md"), "RULES.md", &mut parts);
     read_section(&global.join("TEACHING.md"), "TEACHING.md", &mut parts);
 
+    // MATERIAL and PREDICTION were split out of TEACHING.md (prompt diet):
+    // MATERIAL only matters when the project actually has files under
+    // `materials/` to anchor the curriculum to; PREDICTION only matters for a
+    // Cargo project (the compile-guess protocol needs `cargo check` results).
+    // Both conditions are checked against `project`, so with no project root
+    // (`None`) neither loads. Kept adjacent to the TEACHING.md read since
+    // these rules are teaching-layer rules that were carved out of it.
+    if let Some(p) = project {
+        if crate::materials::materials_present(p) {
+            read_section(&global.join("MATERIAL.md"), "MATERIAL.md", &mut parts);
+        }
+        if crate::check::is_cargo_project(p) {
+            read_section(&global.join("PREDICTION.md"), "PREDICTION.md", &mut parts);
+        }
+    }
+
     let project_usta: Option<PathBuf> = project.map(|p| p.join(".usta"));
 
     // GOAL is only loaded for a goal-oriented topic — saves ~1.5KB in a goalless
@@ -236,6 +252,82 @@ mod tests {
         fs::write(global.join("USER.md"), "# Profil\n\n## Tercihler\n- gamification: on\n").unwrap();
         let sys2 = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys2.contains("GAMIFICATION-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn material_loaded_only_when_materials_dir_has_files() {
+        let (global, project) = temp_pair("material");
+        fs::write(global.join("MATERIAL.md"), "MATERIAL-İÇERİK").unwrap();
+
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
+        assert!(!sys.contains("MATERIAL-İÇERİK"));
+
+        fs::create_dir_all(project.join("materials")).unwrap();
+        fs::write(project.join("materials/notes.md"), "# x").unwrap();
+        let sys2 = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
+        assert!(sys2.contains("MATERIAL-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn material_not_loaded_when_project_is_none() {
+        let (global, _project) = temp_pair("material_noproject");
+        fs::write(global.join("MATERIAL.md"), "MATERIAL-İÇERİK").unwrap();
+
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(!sys.contains("MATERIAL-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn prediction_loaded_only_when_cargo_toml_present() {
+        let (global, project) = temp_pair("prediction");
+        fs::write(global.join("PREDICTION.md"), "PREDICTION-İÇERİK").unwrap();
+
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
+        assert!(!sys.contains("PREDICTION-İÇERİK"));
+
+        fs::write(project.join("Cargo.toml"), "[package]").unwrap();
+        let sys2 = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
+        assert!(sys2.contains("PREDICTION-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn prediction_not_loaded_when_project_is_none() {
+        let (global, _project) = temp_pair("prediction_noproject");
+        fs::write(global.join("PREDICTION.md"), "PREDICTION-İÇERİK").unwrap();
+
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
+        assert!(!sys.contains("PREDICTION-İÇERİK"));
+
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn material_and_prediction_conditions_are_independent() {
+        let (global, project) = temp_pair("material_prediction_cross");
+        fs::write(global.join("MATERIAL.md"), "MATERIAL-İÇERİK").unwrap();
+        fs::write(global.join("PREDICTION.md"), "PREDICTION-İÇERİK").unwrap();
+
+        // materials/ present, no Cargo.toml → MATERIAL yes, PREDICTION no.
+        fs::create_dir_all(project.join("materials")).unwrap();
+        fs::write(project.join("materials/notes.md"), "# x").unwrap();
+        let sys = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
+        assert!(sys.contains("MATERIAL-İÇERİK"));
+        assert!(!sys.contains("PREDICTION-İÇERİK"));
+
+        // Cargo.toml present, remove materials/ → PREDICTION yes, MATERIAL no.
+        let _ = fs::remove_dir_all(project.join("materials"));
+        fs::write(project.join("Cargo.toml"), "[package]").unwrap();
+        let sys2 = load_system_prompt(&global, Some(&project), "rust", "2026-08-07");
+        assert!(sys2.contains("PREDICTION-İÇERİK"));
+        assert!(!sys2.contains("MATERIAL-İÇERİK"));
 
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }

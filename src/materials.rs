@@ -105,6 +105,19 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Lightweight existence check: is there at least one md/txt/pdf file under
+/// `materials/`? No digesting — just a presence probe, used to gate whether
+/// the Course Material teaching rules are worth loading into the prompt at
+/// all (an empty/absent `materials/` dir means those rules are dead weight).
+pub fn materials_present(project_root: &Path) -> bool {
+    let root = project_root.join("materials");
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_files(&root, &mut files);
+    files
+        .iter()
+        .any(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("md" | "txt" | "pdf")))
+}
+
 /// Join per-file digests under `=== name ===` banners, capped at TOTAL_CAP.
 pub fn combined_digests(mats: &[Material]) -> Option<String> {
     if mats.is_empty() {
@@ -290,6 +303,80 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("notes.md"), "# x").unwrap();
         assert!(convert_pdfs(&base).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn materials_present_true_for_md() {
+        let base = std::env::temp_dir().join(format!("usta_materials_present_md_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.md"), "# x").unwrap();
+        assert!(materials_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn materials_present_true_for_txt() {
+        let base = std::env::temp_dir().join(format!("usta_materials_present_txt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), "x").unwrap();
+        assert!(materials_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn materials_present_true_for_pdf() {
+        let base = std::env::temp_dir().join(format!("usta_materials_present_pdf_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
+        assert!(materials_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn materials_present_false_for_empty_dir() {
+        let base = std::env::temp_dir().join(format!("usta_materials_present_empty_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!materials_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn materials_present_false_for_only_gitkeep() {
+        let base = std::env::temp_dir().join(format!("usta_materials_present_gitkeep_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".gitkeep"), "").unwrap();
+        assert!(!materials_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn materials_present_false_without_materials_dir() {
+        let base = std::env::temp_dir().join(format!("usta_materials_present_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        assert!(!materials_present(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn materials_present_false_for_other_extension_only() {
+        let base = std::env::temp_dir().join(format!("usta_materials_present_png_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("resim.png"), "x").unwrap();
+        assert!(!materials_present(&base));
         let _ = std::fs::remove_dir_all(&base);
     }
 }
