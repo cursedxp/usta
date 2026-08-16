@@ -687,14 +687,9 @@ pub async fn run(
         }
     }
 
-    // Welcome: if the topic was known upfront (an arg was given), the
-    // full-mode learning-status box is printed — the identity welcome was
-    // never shown for this path, so this is the only frame. On resume, the
-    // identity welcome was already printed inside ask_topic, so printing the
-    // full-mode box again would repeat the logo/greeting/model/dir and the
-    // week/streak line a second time within a few rows — instead, a compact
-    // continuation panel (no identity) is printed to say what's being picked
-    // up, when it was last touched, and how far along the map it is.
+    // Welcome: dispatch between the full-mode box and the identity-free resume
+    // panel — see `welcome::render_for_entry`'s doc comment for why the two
+    // entry paths render differently.
     if had_topic_arg || resumed {
         let data = welcome::gather(
             read(global.join("USER.md")).as_deref(),
@@ -707,11 +702,7 @@ pub async fn run(
             read(global.join("learner/history.md")).as_deref(),
         );
         let w = current_width(&tui);
-        if had_topic_arg {
-            page(&mut tui, welcome::render_welcome(&data, w))?;
-        } else {
-            page(&mut tui, welcome::render_resume(&data, w))?;
-        }
+        page(&mut tui, welcome::render_for_entry(had_topic_arg, &data, w))?;
     }
 
     // Opening drill / intro (the TUI counterpart of main.rs's plain path). If the

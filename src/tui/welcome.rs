@@ -612,6 +612,25 @@ pub fn render_resume(d: &WelcomeData, width: u16) -> Text<'static> {
     solo_box(&title, rows, width)
 }
 
+/// Pick the welcome render for the topic-entry point (run.rs, `had_topic_arg
+/// || resumed` branch). The two entry paths render differently because they
+/// arrive on screen in different states: `usta start <topic>` (`had_topic_arg
+/// = true`) never printed an identity frame on its way here, so it has
+/// nothing to duplicate — the full-mode box, carrying identity plus Learning
+/// Status, is the only frame shown. A resume (`had_topic_arg = false`)
+/// already has the identity welcome on screen from `ask_topic` moments
+/// earlier, so repeating logo/greeting/model/dir/week-streak here would print
+/// them twice within a few rows — that duplicate-box bug is exactly what this
+/// dispatch exists to prevent, so the resume path instead gets the compact,
+/// identity-free continuation panel.
+pub fn render_for_entry(had_topic_arg: bool, d: &WelcomeData, width: u16) -> Text<'static> {
+    if had_topic_arg {
+        render_welcome(d, width)
+    } else {
+        render_resume(d, width)
+    }
+}
+
 /// Append the `/help` discovery hint as a separate dim line after the bordered
 /// box — NOT inside the box, so the box's equal-width line logic stays intact.
 fn with_help_hint(mut t: Text<'static>) -> Text<'static> {
@@ -1287,5 +1306,47 @@ mod tests {
             "trailing space before dash run was trimmed: {}",
             lines[0]
         );
+    }
+
+    // render_for_entry is the dispatcher run.rs uses to pick between the two
+    // welcome renderers on the `had_topic_arg || resumed` path (v0.21.0 fix).
+    // Before this extraction, the choice was an inline `if had_topic_arg {
+    // render_welcome } else { render_resume }` in run.rs's async TUI loop —
+    // untested, so an inverted or swapped condition would either silently
+    // reintroduce the duplicate-identity-box bug or show the wrong frame,
+    // and nothing would catch it. These tests pin the dispatch itself.
+
+    #[test]
+    fn render_for_entry_with_topic_arg_yields_full_box_with_identity() {
+        // `had_topic_arg = true` == `usta start <topic>`: no identity frame
+        // was printed earlier on this path, so the full-mode box (which
+        // carries the logo/greeting/model/dir) must be what's shown.
+        let d = full_resume_data();
+        let t = render_for_entry(true, &d, 80);
+        let joined = plain_lines(&t).join("\n");
+        assert!(joined.contains("██"), "missing logo block: {joined}");
+        assert!(joined.contains("Welcome back"), "missing greeting: {joined}");
+        assert!(joined.contains("opus · cli"), "missing model line: {joined}");
+    }
+
+    #[test]
+    fn render_for_entry_without_topic_arg_yields_resume_panel_no_identity() {
+        // `had_topic_arg = false` is the resume path: identity was already
+        // printed by ask_topic's identity welcome, so this panel must carry
+        // the `Continuing · <topic>` title and NONE of the identity content
+        // — that absence is the entire point of the fix this dispatcher
+        // guards, so it's asserted directly rather than inferred.
+        let d = full_resume_data();
+        let t = render_for_entry(false, &d, 80);
+        let lines = plain_lines(&t);
+        assert!(
+            lines[0].contains("Continuing · kaynak-ingest"),
+            "missing continuation title: {}",
+            lines[0]
+        );
+        let joined = lines.join("\n");
+        assert!(!joined.contains("██"), "logo block leaked into resume panel: {joined}");
+        assert!(!joined.contains("Welcome back"), "greeting leaked into resume panel: {joined}");
+        assert!(!joined.contains("opus · cli"), "model line leaked into resume panel: {joined}");
     }
 }
