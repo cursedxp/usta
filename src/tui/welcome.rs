@@ -180,6 +180,55 @@ pub fn fit(s: &str, max: usize) -> String {
     out
 }
 
+/// Greedy word-boundary wrap to visible width — unicode-width aware (same
+/// concern as `fit`'s comment: byte counting misaligns Turkish characters).
+/// Words are packed onto a line while they fit; a word wider than `max` on
+/// its own falls back to char-level splitting so no returned line ever
+/// exceeds `max` (guarantees termination — every char/word always advances
+/// the cursor). Empty input returns no lines (callers push one right-column
+/// row per returned line, so "no lines" naturally means "no rows added").
+pub fn wrap(s: &str, max: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_w = 0usize;
+
+    for word in s.split_whitespace() {
+        let word_w = word.width();
+        if word_w > max {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_w = 0;
+            }
+            for ch in word.chars() {
+                let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if current_w + cw > max && !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                    current_w = 0;
+                }
+                current.push(ch);
+                current_w += cw;
+            }
+            continue;
+        }
+        let extra = if current.is_empty() { word_w } else { current_w + 1 + word_w };
+        if extra > max && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+            current_w = word_w;
+        } else {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+            current_w = extra;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 /// `This week: N session(s) · streak M day(s)` — `None` when there were no
 /// sessions this week. A streak of 0 is NEVER rendered (ADHD-safe: a broken
 /// streak reads as demotivating noise, not useful information) — when
@@ -224,18 +273,26 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
     if d.first_session {
         right.push(("Learning Status".to_string(), Style::default()));
         right.push((String::new(), Style::default()));
-        right.push((fit("First session — let's start with an introduction.", right_w), Style::default()));
+        for l in wrap("First session — let's start with an introduction.", right_w) {
+            right.push((l, Style::default()));
+        }
     } else {
         right.push(("Learning Status".to_string(), Style::default()));
         let konu = match &d.level {
             Some(l) => format!("Topic: {} · {}", d.topic, l),
             None => format!("Topic: {}", d.topic),
         };
-        right.push((fit(&konu, right_w), Style::default()));
+        for l in wrap(&konu, right_w) {
+            right.push((l, Style::default()));
+        }
         if let Some(p) = d.map_percent { right.push((format!("Map: {p}%"), Style::default())); }
         right.push(("─".repeat(right_w), Style::default()));
         right.push(("Up next".to_string(), Style::default()));
-        if let Some(n) = &d.next_item { right.push((fit(n, right_w), Style::default())); }
+        if let Some(n) = &d.next_item {
+            for l in wrap(n, right_w) {
+                right.push((l, Style::default()));
+            }
+        }
         if d.due_count > 0 {
             right.push((format!("Reviews due today: {}", d.due_count), Style::default()));
         } else if d.drill_count > 0 {
@@ -243,7 +300,9 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
         }
     }
     if let Some(line) = week_line(d.week_sessions, d.streak) {
-        right.push((fit(&line, right_w), Style::default()));
+        for l in wrap(&line, right_w) {
+            right.push((l, Style::default()));
+        }
     }
 
     with_help_hint(render_box(d.version, left, right, width))
@@ -294,14 +353,23 @@ pub fn render_welcome_identity(
         (String::new(), Style::default()),
     ];
     if let Some(first) = local.first() {
-        right.push((fit(&format!("Enter → resume {first}"), right_w), Style::default()));
+        for l in wrap(&format!("Enter → resume {first}"), right_w) {
+            right.push((l, Style::default()));
+        }
+        // List items stay on `fit`, not `wrap` — wrapping a topic name would
+        // continue onto an unnumbered line, breaking the numbered list's
+        // visual alignment (see render_box's per-row rendering).
         for (i, t) in local.iter().take(6).enumerate() {
             right.push((fit(&format!("{}) {t}", i + 1), right_w), Style::default()));
         }
         right.push((String::new(), Style::default()));
-        right.push((fit("Type to start a new topic.", right_w), Style::default()));
+        for l in wrap("Type to start a new topic.", right_w) {
+            right.push((l, Style::default()));
+        }
         if !other.is_empty() {
-            right.push((fit(&format!("In other projects: {}", other.join(", ")), right_w), dim));
+            for l in wrap(&format!("In other projects: {}", other.join(", ")), right_w) {
+                right.push((l, dim));
+            }
         }
     } else {
         // Spec §3: the first-session message is kept EXACTLY as-is when there are no local topics,
@@ -311,15 +379,21 @@ pub fn render_welcome_identity(
         } else {
             "First session — type a topic."
         };
-        right.push((fit(first_line, right_w), Style::default()));
+        for l in wrap(first_line, right_w) {
+            right.push((l, Style::default()));
+        }
         // the previous "Registered:" line is REMOVED — replaced by the other-projects info line (if any).
         if !other.is_empty() {
             right.push((String::new(), Style::default()));
-            right.push((fit(&format!("In other projects: {}", other.join(", ")), right_w), dim));
+            for l in wrap(&format!("In other projects: {}", other.join(", ")), right_w) {
+                right.push((l, dim));
+            }
         }
     }
     if let Some(line) = week_line(week_sessions, streak) {
-        right.push((fit(&line, right_w), Style::default()));
+        for l in wrap(&line, right_w) {
+            right.push((l, Style::default()));
+        }
     }
 
     with_help_hint(render_box(env!("CARGO_PKG_VERSION"), left, right, width))
@@ -382,7 +456,7 @@ mod tests {
 
     #[test]
     fn version_aligned_with_spec() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.20.2");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.20.3");
     }
 
     fn plain_lines(t: &Text) -> Vec<String> {
@@ -584,6 +658,63 @@ mod tests {
     fn fit_truncates_by_display_width_with_ellipsis() {
         assert_eq!(fit("çğşöü-uzun-metin", 8), "çğşöü-u…");
         assert_eq!(fit("kısa", 10), "kısa");
+    }
+
+    #[test]
+    fn wrap_short_string_passes_through_as_one_line() {
+        assert_eq!(wrap("hello", 20), vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn wrap_empty_input_returns_no_lines() {
+        assert_eq!(wrap("", 10), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wrap_breaks_at_word_boundary_within_width() {
+        let s = "The quick brown fox jumps over the lazy dog";
+        let lines = wrap(s, 10);
+        assert!(lines.len() > 1, "expected multiple lines: {lines:?}");
+        assert!(lines.iter().all(|l| l.width() <= 10), "line exceeds max: {lines:?}");
+        // every original word survives, in order, none lost/duplicated
+        let rejoined = lines.join(" ");
+        assert_eq!(rejoined, s);
+    }
+
+    #[test]
+    fn wrap_oversized_single_word_falls_back_to_char_split() {
+        let s = "supercalifragilisticexpialidocious";
+        let lines = wrap(s, 5);
+        assert!(lines.len() > 1, "expected multiple lines: {lines:?}");
+        assert!(lines.iter().all(|l| l.width() <= 5), "line exceeds max: {lines:?}");
+        assert_eq!(lines.concat(), s);
+    }
+
+    #[test]
+    fn wrap_unicode_width_aware_not_byte_counting() {
+        // Turkish chars: byte-counting would misalign vs display width — reuse
+        // fit's documented concern for wrap.
+        let s = "çğşöü ıİĞÜ test kelimeler burada";
+        let lines = wrap(s, 8);
+        assert!(lines.iter().all(|l| l.width() <= 8), "line exceeds max: {lines:?}");
+    }
+
+    #[test]
+    fn render_welcome_long_next_item_wraps_full_text_no_ellipsis() {
+        let long_item = "Async trait objects and pinning semantics in tokio task spawning";
+        let curriculum = format!("# rust haritası\n- {long_item}: not seen\n");
+        let d = gather(Some(PROFILE), Some(PROGRESS), Some(&curriculum), "rust", "opus · cli", "~/x", "2026-08-15", None);
+        assert_eq!(d.next_item.as_deref(), Some(long_item));
+        let t = render_welcome(&d, 80);
+        let lines = plain_lines(&t);
+        let joined = lines.join(" ");
+        assert!(!joined.contains('…'), "next_item was truncated: {lines:#?}");
+        for word in long_item.split(' ') {
+            assert!(joined.contains(word), "missing word '{word}' from wrapped next_item: {lines:#?}");
+        }
+        // last word of the long sentence must show up somewhere — proves the
+        // tail wasn't dropped, not just the head before an ellipsis.
+        assert!(joined.contains("spawning"));
     }
 
     #[test]
