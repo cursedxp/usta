@@ -71,7 +71,7 @@ Kuralların tamamı USTA.md'de yaşar; Rust sadece tetikler (açılış turn'ü,
 
 - **`usta topics`** — global katalog listelenir: `konu | proje | son oturum`. LLM gerekmez.
 - **`usta reset <konu>`** — bulunduğun projenin o konudaki progress'i silinir (`[e/H]` onaylı), katalogdan düşülür. "Bu konuyu baştan öğreneyim" senaryosu.
-- **`usta reset --factory`** — katalogdaki TÜM projelerin `.usta/`'sı + global brain silinir; liste önce gösterilir, onay için "evet" yazılır. Katalogda olmayan eski projeler kapsam dışı (uyarı + `find` ipucu basılır).
+- **`usta reset --factory`** — katalogdaki TÜM projelerin `.usta/`'sı + global brain silinir; liste önce gösterilir, onay için "yes" veya "evet" yazılır. Katalogda olmayan eski projeler kapsam dışı (uyarı + `find` ipucu basılır).
 - **Katalog otomatik güncellenir:** kapanış flush'ı `learner/index.md` sonundaki `## Kayıtlar` bölümüne `- konu | proje-yolu | YYYY-MM-DD` upsert eder. Yan etki: index system prompt'ta olduğundan Usta tüm başlıklardan haberdardır — izolasyon bozulmaz (progress yalnız aktif konudan yüklenir).
 
 ## 4.8 Her-Konu Öğrenimi (v0.6)
@@ -305,7 +305,7 @@ usta/
 - **Pedagoji tetikleri (v0.3):** açılış drilli shell'den tetiklenir (progress boş değilse); `cargo check` sonucu LLM'e `[... SADECE SENİN GÖZÜN İÇİN ...]` bloğuyla gider — saklama/tahmin kararı USTA.md kuralında, kodda değil.
 - **Global USTA.md güncellemesi (v0.3):** scaffold var olan dosyanın üstüne yazmaz — davranış güncellemesinden sonra `rm ~/.config/usta/USTA.md` + bir kez `usta` çalıştırmak gerekir. Bilinçli kabul; dosya versiyonlama v0.4 adayı.
 - **Katalog formatı (v0.4):** `learner/index.md` sonunda `## Kayıtlar`; satır `- konu | proje-yolu | YYYY-MM-DD`; bölüm-üstü serbest metin korunur; tarih `chrono` ile yerel saat.
-- **Reset onayları (v0.4):** konu reseti `[e/H]`, factory reset kelime onayı ("evet"); stdin kapalı/boş = hayır (güvenli varsayılan). Reset komutları backend'siz çalışır.
+- **Reset onayları (v0.4):** konu reseti `[e/H]`, factory reset kelime onayı ("yes" veya "evet"); stdin kapalı/boş = hayır (güvenli varsayılan). Reset komutları backend'siz çalışır.
 - **Sunum katmanı (v0.5):** roller ikonla ayrılır — `●` (turuncu 208) Usta bloğu, `■` kullanıcı promptu, soluk `·`/`!` sistem bildirimi. Usta yanıtları termimad ile markdown render edilir; LLM beklerken spinner. TTY değilse veya `NO_COLOR` set'liyse düz çıktı (pipe/test uyumu). Davranış katmanına dokunulmadı.
 - **Konu girişi (v0.5, sonra rafine):** TTY promptunda **ret yok** — kısa yaz ya da cümleyle anlat. Kısa girdi (≤2 kelime) yerel slug'lanır (Türkçe sadeleştirme + tire; "temel Linux güvenliği" → `temel-linux-guvenligi`). **Cümle yazılırsa modele bir kısa çağrı** ne öğrenmek istediğini çıkarıp en mantıklı slug'ı seçer ("ben rust ile bir todo yapmak istiyorum" → `rust-todo`); format `slugify_topic`'le garantilenir, çağrı hatasında yerel slug'a düşülür. Seçilen slug bildirilir. Detay yine sohbette. `usta start <konu>` ve pipe davranışı değişmedi.
 - **Her-konu (v0.6):** yaklaşım dosyaları elle değil ilk-oturum tanışmasıyla üretilir; curriculum proje-lokal (`.usta/learner/curriculum/`) yaşar — §7'deki global `learner/curriculum/` yerine (izolasyon: harita da konu+proje bağlamına ait). Kapanış bölücü formatı `===DOSYA: <ad>===`.

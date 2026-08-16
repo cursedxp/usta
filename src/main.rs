@@ -1303,6 +1303,10 @@ fn remove_topic_visuals(root: &Path, topic: &str) -> Result<()> {
     }
 }
 
+/// Factory-reset confirmation prompt. Both `yes` and `evet` are accepted (see the
+/// `confirm` call below); the wording names both so the prompt matches the SPEC.
+const FACTORY_RESET_PROMPT: &str = "Everything will be permanently deleted. Type 'yes' (or 'evet') to confirm: ";
+
 /// `usta reset --factory` — deletes the `.usta/` of every project in the catalog +
 /// the global brain. The next `usta` run sets everything back up from defaults
 /// (bootstrap) — Usta starts as if it never knew the user.
@@ -1326,7 +1330,7 @@ fn run_reset_factory() -> Result<()> {
     println!("Note: old projects not in the catalog are NOT in this list.");
     println!("Check: find ~ -maxdepth 5 -name .usta -type d");
 
-    if !confirm("Everything will be permanently deleted. Type 'yes' to confirm: ", &["evet", "yes"])? {
+    if !confirm(FACTORY_RESET_PROMPT, &["evet", "yes"])? {
         println!("cancelled.");
         return Ok(());
     }
@@ -2347,6 +2351,14 @@ mod tests {
         assert_eq!(text, "");
         assert!(parse_start_suggestion("just prose, no marker").is_none());
         assert!(parse_start_suggestion("KONU:   \ntext").is_none());
+    }
+
+    #[test]
+    fn factory_reset_prompt_names_both_confirmation_words() {
+        // The prompt must mention both accepted words so it matches the SPEC and
+        // the `confirm(&["evet", "yes"])` call — neither drifts from the other.
+        assert!(FACTORY_RESET_PROMPT.contains("yes"));
+        assert!(FACTORY_RESET_PROMPT.contains("evet"));
     }
 
     #[test]
