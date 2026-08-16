@@ -280,9 +280,40 @@ async fn run_plain_loop(
                     if line.eq_ignore_ascii_case("/quit") {
                         break;
                     }
-                    // /exam: gate on goal presence (never reaches the LLM without one), then
-                    // swap the outgoing text and fall through to the normal ask flow below —
-                    // the typed "/exam" is already echoed by rustyline, no re-echo needed.
+                    // /game: toggle persists to USER.md (shell-managed). Status is a local
+                    // notice that never reaches the LLM. On/Off flip the pref + inject a
+                    // mode-switch turn (swapped below) that flows through the normal ask so
+                    // Usta applies the TEACHING.md Gamification rules from here on — same
+                    // swap-and-fall-through shape as /exam.
+                    let game_cmd = parse_game_command(&line);
+                    if let Some(cmd) = &game_cmd {
+                        match cmd {
+                            GameCmd::Status => {
+                                ui::notice(if game_pref(global) {
+                                    "gamification is on"
+                                } else {
+                                    "gamification is off"
+                                });
+                                let _ = ready_tx.send(());
+                                continue;
+                            }
+                            GameCmd::On | GameCmd::Off => {
+                                let on = matches!(cmd, GameCmd::On);
+                                if let Err(e) = set_game_pref(global, on) {
+                                    ui::notice(&format!("could not save game preference: {e}"));
+                                    let _ = ready_tx.send(());
+                                    continue;
+                                }
+                                ui::notice(if on {
+                                    "gamification on — XP, levels and badges are live"
+                                } else {
+                                    "gamification off — back to quiet mode"
+                                });
+                            }
+                        }
+                    }
+                    // /exam and /game on|off: swap the outgoing text and fall through to the
+                    // normal ask flow below — the typed command is already echoed by rustyline.
                     let line = if is_exam_command(&line) {
                         if !topic_has_goal(project_root, global, topic) {
                             ui::notice("no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction");
@@ -290,6 +321,12 @@ async fn run_plain_loop(
                             continue;
                         }
                         progress::exam_prompt(topic)
+                    } else if let Some(cmd) = game_cmd {
+                        match cmd {
+                            GameCmd::On => "[GAME MODE ON] Gamification is now ON — apply the Gamification rules from TEACHING.md from this point on.".to_string(),
+                            GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
+                            GameCmd::Status => line, // unreachable: Status returns above
+                        }
                     } else {
                         line
                     };
@@ -774,13 +811,9 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
 }
 
 /// Gamification slash command (`/game`). Slash lines never reach the LLM.
-/// NOTE: wired into the intercept loop + used by future tasks — until then
-/// only the tests below exercise these paths.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) enum GameCmd { On, Off, Status }
 
-#[allow(dead_code)]
 pub(crate) fn parse_game_command(line: &str) -> Option<GameCmd> {
     let t = line.trim();
     if t == "/game" {
@@ -796,14 +829,12 @@ pub(crate) fn parse_game_command(line: &str) -> Option<GameCmd> {
 
 /// Shell-managed preference line in USER.md (`## Tercihler` section).
 /// The closing flush is told to keep this section as-is.
-#[allow(dead_code)]
 pub(crate) fn game_pref(global: &Path) -> bool {
     std::fs::read_to_string(global.join("USER.md"))
         .map(|c| c.lines().any(|l| l.trim() == "- gamification: on"))
         .unwrap_or(false)
 }
 
-#[allow(dead_code)]
 pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
     let path = global.join("USER.md");
     let content = std::fs::read_to_string(&path).unwrap_or_default();

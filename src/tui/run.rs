@@ -767,9 +767,37 @@ pub async fn run(
                             continue;
                         }
                         if line.eq_ignore_ascii_case("/quit") { break; }
-                        // /exam: echo the literal command (not the injected prompt), gate on
-                        // goal presence, then swap the outgoing text and fall through to the
-                        // normal ask flow below — no duplicated ask/reply/compact block.
+                        // /game: toggle persists to USER.md. Status is a local notice (never
+                        // reaches the LLM). On/Off flip the pref + inject a mode-switch turn
+                        // (swapped below) that flows through the normal ask — same shape as /exam.
+                        let game_cmd = crate::parse_game_command(&line);
+                        if let Some(cmd) = &game_cmd {
+                            page_user_echo(&mut tui, &line)?;
+                            match cmd {
+                                crate::GameCmd::Status => {
+                                    page_notice(&mut tui, if crate::game_pref(global) {
+                                        "gamification is on"
+                                    } else {
+                                        "gamification is off"
+                                    })?;
+                                    continue;
+                                }
+                                crate::GameCmd::On | crate::GameCmd::Off => {
+                                    let on = matches!(cmd, crate::GameCmd::On);
+                                    if let Err(e) = crate::set_game_pref(global, on) {
+                                        page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
+                                        continue;
+                                    }
+                                    page_notice(&mut tui, if on {
+                                        "gamification on — XP, levels and badges are live"
+                                    } else {
+                                        "gamification off — back to quiet mode"
+                                    })?;
+                                }
+                            }
+                        }
+                        // /exam: echo the literal command, gate on goal presence, then swap the
+                        // outgoing text and fall through to the normal ask flow below.
                         let outgoing = if crate::is_exam_command(&line) {
                             page_user_echo(&mut tui, "/exam")?;
                             if !crate::topic_has_goal(project_root, global, &topic) {
@@ -777,6 +805,13 @@ pub async fn run(
                                 continue;
                             }
                             progress::exam_prompt(&topic)
+                        } else if let Some(cmd) = game_cmd {
+                            // literal command already echoed in the /game block above
+                            match cmd {
+                                crate::GameCmd::On => "[GAME MODE ON] Gamification is now ON — apply the Gamification rules from TEACHING.md from this point on.".to_string(),
+                                crate::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
+                                crate::GameCmd::Status => line.clone(), // unreachable: Status returns above
+                            }
                         } else {
                             // Push the submitted line to scrollback as a distinct user block.
                             page_user_echo(&mut tui, &line)?;
