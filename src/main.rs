@@ -773,6 +773,55 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
     (next, msg)
 }
 
+/// Gamification slash command (`/game`). Slash lines never reach the LLM.
+/// NOTE: wired into the intercept loop + used by future tasks — until then
+/// only the tests below exercise these paths.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) enum GameCmd { On, Off, Status }
+
+#[allow(dead_code)]
+pub(crate) fn parse_game_command(line: &str) -> Option<GameCmd> {
+    let t = line.trim();
+    if t == "/game" {
+        return Some(GameCmd::Status);
+    }
+    let rest = t.strip_prefix("/game ")?;
+    match rest.trim().to_ascii_lowercase().as_str() {
+        "on" => Some(GameCmd::On),
+        "off" => Some(GameCmd::Off),
+        _ => None,
+    }
+}
+
+/// Shell-managed preference line in USER.md (`## Tercihler` section).
+/// The closing flush is told to keep this section as-is.
+#[allow(dead_code)]
+pub(crate) fn game_pref(global: &Path) -> bool {
+    std::fs::read_to_string(global.join("USER.md"))
+        .map(|c| c.lines().any(|l| l.trim() == "- gamification: on"))
+        .unwrap_or(false)
+}
+
+#[allow(dead_code)]
+pub(crate) fn set_game_pref(global: &Path, on: bool) -> Result<()> {
+    let path = global.join("USER.md");
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let value = if on { "- gamification: on" } else { "- gamification: off" };
+    let new = if content.lines().any(|l| l.trim().starts_with("- gamification:")) {
+        content
+            .lines()
+            .map(|l| if l.trim().starts_with("- gamification:") { value } else { l })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if content.contains("## Tercihler") {
+        content.replace("## Tercihler", &format!("## Tercihler\n{value}"))
+    } else {
+        format!("{}\n\n## Tercihler\n{value}\n", content.trim_end())
+    };
+    progress::write_atomic(&path, &new)
+}
+
 /// Mock-exam slash command (`/exam`) — same exact-match pattern as `help::is_help_command`.
 pub(crate) fn is_exam_command(line: &str) -> bool {
     line.trim() == "/exam"
@@ -2248,6 +2297,37 @@ mod tests {
         assert_eq!(apply_watch(WatchCmd::Toggle, false).0, true);
         assert!(apply_watch(WatchCmd::On, false).1.contains("on"));
         assert!(apply_watch(WatchCmd::Off, true).1.contains("off"));
+    }
+
+    #[test]
+    fn parse_game_command_variants() {
+        assert!(matches!(parse_game_command("/game on"), Some(GameCmd::On)));
+        assert!(matches!(parse_game_command(" /game OFF "), Some(GameCmd::Off)));
+        assert!(matches!(parse_game_command("/game"), Some(GameCmd::Status)));
+        assert!(parse_game_command("/game x").is_none());
+        assert!(parse_game_command("/gamer").is_none());
+        assert!(parse_game_command("game on").is_none());
+    }
+
+    #[test]
+    fn game_pref_roundtrip_idempotent_preserves_user_md() {
+        let base = std::env::temp_dir().join(format!("usta_game_pref_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("USER.md"), "# Öğrenci Profili\n\n## Kim\n- Anil\n").unwrap();
+
+        assert!(!game_pref(&base)); // default off
+        set_game_pref(&base, true).unwrap();
+        assert!(game_pref(&base));
+        set_game_pref(&base, true).unwrap(); // idempotent
+        let c = std::fs::read_to_string(base.join("USER.md")).unwrap();
+        assert_eq!(c.matches("- gamification:").count(), 1);
+        assert!(c.contains("## Kim")); // diğer içerik korunur
+        assert!(c.contains("## Tercihler"));
+        set_game_pref(&base, false).unwrap();
+        assert!(!game_pref(&base));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
