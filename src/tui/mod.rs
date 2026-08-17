@@ -8,3 +8,4 @@ pub mod status;
 pub mod term;
 pub mod theme;
 pub mod welcome;
+pub mod welcome_data;

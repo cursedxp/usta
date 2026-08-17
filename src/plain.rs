@@ -171,8 +171,8 @@ pub(crate) async fn run_plain_loop(
         let progress_content =
             std::fs::read_to_string(progress::progress_path(project_root, topic))
                 .unwrap_or_default();
-        let due = crate::tui::welcome::due_questions(&progress_content, &td);
-        let has_questions = crate::tui::welcome::drill_count(&progress_content) > 0;
+        let due = crate::tui::welcome_data::due_questions(&progress_content, &td);
+        let has_questions = crate::tui::welcome_data::drill_count(&progress_content) > 0;
         let opening = progress::opening_prompt(
             topic,
             profile_generic,

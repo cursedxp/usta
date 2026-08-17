@@ -25,6 +25,7 @@ use crate::tui::status::{render_status, Status};
 use crate::tui::term::{Tui, VIEWPORT_H};
 use crate::tui::theme;
 use crate::tui::welcome;
+use crate::tui::welcome_data;
 use crate::{feedback, history, progress, ui, watcher};
 
 /// Push persistent content above the viewport (into scrollback).
@@ -405,7 +406,7 @@ async fn ask_topic(
     // go back to the entry question, the identity welcome + initial notice are
     // NOT printed again.
     if show_welcome {
-        let name = profile.and_then(welcome::extract_name);
+        let name = profile.and_then(welcome_data::extract_name);
         let width = current_width(tui);
         page(
             tui,
@@ -764,7 +765,7 @@ pub async fn run(
     // panel — see `welcome::render_for_entry`'s doc comment for why the two
     // entry paths render differently.
     if had_topic_arg || resumed {
-        let data = welcome::gather(
+        let data = welcome_data::gather(
             read(global.join("USER.md")).as_deref(),
             read(progress::progress_path(project_root, &topic)).as_deref(),
             read(progress::curriculum_path(project_root, &topic)).as_deref(),
@@ -797,8 +798,8 @@ pub async fn run(
         let gs = crate::slash::game_streak_line(global, today);
         let progress_content =
             read(progress::progress_path(project_root, &topic)).unwrap_or_default();
-        let due = welcome::due_questions(&progress_content, today);
-        let has_questions = welcome::drill_count(&progress_content) > 0;
+        let due = welcome_data::due_questions(&progress_content, today);
+        let has_questions = welcome_data::drill_count(&progress_content) > 0;
         progress::opening_prompt(
             &topic,
             profile_generic,

@@ -104,7 +104,7 @@ mod tests {
             .map(|(_, content, _)| content)
             .expect("USER.md gömülü default'larda olmalı");
         assert_eq!(
-            crate::tui::welcome::extract_name(profile),
+            crate::tui::welcome_data::extract_name(profile),
             None,
             "gömülü profil kişisel isim taşıyor — jenerik olmalı"
         );
