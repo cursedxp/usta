@@ -1,489 +1,30 @@
 //! TUI session loop: keys + watcher + LLM all in one select!. Persistent content
-//! flows into scrollback via insert_before; the bottom region is redrawn live. Spec §3.
+//! flows into scrollback via `tui/page.rs`'s `insert_before` wrapper; the bottom
+//! region is redrawn live. Spec §3. Delegates to four sibling modules split out
+//! of this one in the cleanup round: `paint` (pure text/style builders), `page`
+//! (the paging layer), `ask` (question-asking), and `entry` (topic entry +
+//! visual-generation trigger).
 //!
 //! In plain mode (ui::is_plain) this module is never used — main's branching
 //! routes the plain path to run_plain_loop. There is NO alt-screen here: only
-//! an inline viewport + insert_before, scrollback is preserved.
+//! an inline viewport, scrollback is preserved.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
+use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Widget};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::session::Session;
 use crate::transcript::Recorder;
-use crate::tui::convert::ansi_to_text;
 use crate::tui::editor::{Action, InputBox};
-use crate::tui::status::{render_status, Status};
-use crate::tui::term::{Tui, VIEWPORT_H};
-use crate::tui::theme;
+use crate::tui::status::Status;
 use crate::tui::welcome;
-use crate::{feedback, history, progress, ui, watcher};
-
-/// Push persistent content above the viewport (into scrollback).
-fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
-    let h = text.height() as u16;
-    tui.terminal.insert_before(h, |buf| {
-        Paragraph::new(text).render(buf.area, buf);
-    })?;
-    Ok(())
-}
-
-/// Print Usta's reply in the visual language: orange ● line + markdown + blank line.
-fn page_reply(tui: &mut Tui, reply: &str, width: u16) -> Result<()> {
-    let ansi = ui::render_markdown(reply, width as usize);
-    let mut t = ansi_to_text(&format!(
-        "\x1b[38;5;{}m{}\x1b[0m\n{ansi}\n",
-        theme::BRAND_IDX,
-        theme::G_BRAND
-    ));
-    t.lines.push(Line::raw(""));
-    page(tui, t)
-}
-
-/// System-notice voice, three scan-levels sharing one shape: glyph + one space +
-/// the message, color reinforcing the glyph (design tokens 02, mockup 03). The
-/// message text is never altered — only the glyph+color prefix is chosen. These
-/// pure builders are unit-tested; the `page_*` wrappers just push them to scrollback.
-/// info `·` dim (the quiet default).
-fn notice_line(msg: &str) -> Text<'static> {
-    ansi_to_text(&format!("\x1b[2m{} {msg}\x1b[0m", theme::G_INFO))
-}
-/// warning `⚠` amber — something needs noticing.
-fn warn_line(msg: &str) -> Text<'static> {
-    ansi_to_text(&format!(
-        "\x1b[38;5;{}m{} {msg}\x1b[0m",
-        theme::WARN_IDX,
-        theme::G_WARN
-    ))
-}
-/// error `✗` red — a genuine stop.
-fn error_line(msg: &str) -> Text<'static> {
-    ansi_to_text(&format!(
-        "\x1b[38;5;{}m{} {msg}\x1b[0m",
-        theme::ERROR_IDX,
-        theme::G_ERR
-    ))
-}
-
-fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, notice_line(msg))
-}
-fn page_warn(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, warn_line(msg))
-}
-fn page_error(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, error_line(msg))
-}
-
-/// Flush the notices buffered by ui::notice/ui::warn while the TUI was live,
-/// routing each to the right scan-level: a leading `⚠ ` (from ui::warn) renders
-/// as the amber warning layer; everything else is a dim `·` info line.
-fn flush_notices(tui: &mut Tui) -> Result<()> {
-    for m in ui::drain_tui_notices() {
-        match m.strip_prefix(&format!("{} ", theme::G_WARN)) {
-            Some(rest) => page_warn(tui, rest)?,
-            None => page_notice(tui, &m)?,
-        }
-    }
-    Ok(())
-}
-
-/// User block: blank separator line + orange `❯ ` prefix + NORMAL-colored text.
-/// DO NOT USE DIM — it blended into the background and became invisible on dark
-/// themes (spec S1). In multi-line submissions, continuation lines are indented
-/// 2 spaces — the pasted structure is preserved.
-fn user_echo_text(line: &str, width: u16) -> Text<'static> {
-    // Prefix is 2 columns ("❯ " / "  "); the text wraps to the width minus this
-    // allowance so a long message isn't cut off on one line (page_reply already
-    // wraps markdown — echo was getting truncated when it didn't wrap). The first
-    // VISUAL line gets ❯, the rest get 2 spaces — both multi-line paste and
-    // single-line wrap read aligned this way.
-    let inner = (width as usize).saturating_sub(2).max(1);
-    let mut lines: Vec<Line> = vec![Line::raw("")];
-    let mut first_visual = true;
-    for logical in line.split('\n') {
-        for chunk in wrap_cells(logical, inner) {
-            let prefix = if first_visual {
-                Span::styled(format!("{} ", theme::G_PROMPT), theme::brand())
-            } else {
-                Span::raw("  ")
-            };
-            lines.push(Line::from(vec![prefix, Span::raw(chunk)]));
-            first_visual = false;
-        }
-    }
-    Text::from(lines)
-}
-
-/// Split text to CELL width (unicode-width) — character-based, not word-based,
-/// consistent with the input box's `wrap_visual`. Empty input → single blank line.
-fn wrap_cells(s: &str, width: usize) -> Vec<String> {
-    use unicode_width::UnicodeWidthChar;
-    let width = width.max(1);
-    let mut rows: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut col = 0usize;
-    for ch in s.chars() {
-        let w = ch.width().unwrap_or(0).max(1);
-        if col + w > width && !cur.is_empty() {
-            rows.push(std::mem::take(&mut cur));
-            col = 0;
-        }
-        cur.push(ch);
-        col += w;
-    }
-    rows.push(cur);
-    rows
-}
-
-/// Push the user's submitted line to scrollback — wrapped to the current width.
-fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
-    let w = current_width(tui);
-    page(tui, user_echo_text(line, w))
-}
-
-/// Current terminal width — keeps wrapping correct after a resize (spec B3).
-/// Falls back to 80 if measurement fails (wrapping doesn't break, just gets narrow).
-fn current_width(tui: &Tui) -> u16 {
-    tui.terminal.size().map(|s| s.width).unwrap_or(80)
-}
-
-/// Draw the bottom region: input box (top) + status line (bottom).
-fn draw(
-    tui: &mut Tui,
-    editor: &InputBox,
-    status: &Status,
-    tokens: Option<u64>,
-    window: u64,
-    watching: Option<bool>,
-) -> Result<()> {
-    tui.terminal.draw(|f| {
-        let [box_area, status_area] =
-            Layout::vertical([Constraint::Length(VIEWPORT_H - 1), Constraint::Length(1)])
-                .areas(f.area());
-        editor.render(f, box_area);
-        f.render_widget(render_status(status, tokens, window, watching), status_area);
-    })?;
-    Ok(())
-}
-
-/// Result of ask_live: either a reply arrived or the user cancelled with double Ctrl-C.
-pub enum AskOutcome {
-    Reply(crate::backend::Reply),
-    Cancelled,
-}
-
-/// Meaning of a keypress in locked mode — pure, testable (spec B2).
-enum LockedKey {
-    /// Key to be processed by the editor (including Enter — Enter is swallowed but counts as an edit).
-    Edit,
-    /// Ctrl-C / Ctrl-D — cancel-request step.
-    CancelRequest,
-}
-
-fn classify_locked_key(k: KeyEvent) -> LockedKey {
-    use crossterm::event::KeyModifiers;
-    if k.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('d'))
-    {
-        LockedKey::CancelRequest
-    } else {
-        LockedKey::Edit
-    }
-}
-
-/// Wait for the LLM call with a live interface: spinner spins, keys are processed
-/// by the editor but Submit/Exit are LOCKED (single-turn principle) — Enter is
-/// swallowed. Can be cancelled with double Ctrl-C (or Ctrl-D): the first press
-/// lights up a hint on the status line, the second drops the future
-/// (kill_on_drop kills the child).
-async fn ask_live(
-    tui: &mut Tui,
-    editor: &mut InputBox,
-    events: &mut EventStream,
-    backend: &mut Backend,
-    system: &str,
-    history: &[Message],
-    tokens: Option<u64>,
-) -> Result<AskOutcome> {
-    let window = backend.context_window();
-    let fut = backend.complete(system, history);
-    tokio::pin!(fut);
-    let mut frame = 0usize;
-    let mut cancel_armed = false; // true after the first Ctrl-C — the counter doesn't reset (spec B2)
-    loop {
-        draw(
-            tui,
-            editor,
-            &Status::Thinking {
-                frame,
-                cancel_hint: cancel_armed,
-            },
-            tokens,
-            window,
-            None,
-        )?;
-        tokio::select! {
-            r = &mut fut => return Ok(AskOutcome::Reply(r?)),
-            Some(Ok(ev)) = events.next() => {
-                // Paste is still processed by the editor even while locked (doesn't submit).
-                if let Event::Paste(s) = &ev {
-                    editor.insert_str(s);
-                } else if let Event::Key(k) = ev {
-                    // Single Esc = instant cancel (drops fut → kill_on_drop kills the child).
-                    if matches!(k.code, KeyCode::Esc) {
-                        return Ok(AskOutcome::Cancelled);
-                    }
-                    match classify_locked_key(k) {
-                        LockedKey::CancelRequest if cancel_armed => {
-                            // fut drops → kill_on_drop kills the child (backend.rs).
-                            return Ok(AskOutcome::Cancelled);
-                        }
-                        LockedKey::CancelRequest => { cancel_armed = true; }
-                        LockedKey::Edit => {
-                            if !matches!(k.code, KeyCode::Enter) {
-                                let _ = match editor.handle_key(k) {
-                                    Action::Exit => Action::None, // never reached here (CancelRequest catches it) — safety net
-                                    other => other,
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(120)) => { frame += 1; }
-        }
-    }
-}
-
-/// TUI sibling of plain.rs's `run_visual_generation` — same guarantees: isolated
-/// mini-session, `backend.reset_session()` on every exit path (success, cancel,
-/// error, invalid JSON), Esc-cancellable via `ask_live`, same "try /show again"
-/// notice on bad JSON. Shared by the explicit `/show <topic>` command and the
-/// auto-triggered `[[show: ...]]` marker (Görev 4).
-#[allow(clippy::too_many_arguments)]
-async fn run_visual_generation(
-    tui: &mut Tui,
-    editor: &mut InputBox,
-    events: &mut EventStream,
-    backend: &mut Backend,
-    project_root: &Path,
-    topic: &str,
-    concept: &str,
-    request: &str,
-    last_tokens: Option<u64>,
-) -> Result<()> {
-    // `page_notice(...)?` must NOT be allowed to early-return here — every arm's
-    // notice Result is captured instead, so `backend.reset_session()` below always
-    // runs before any terminal-IO error is propagated (Görev 6 carry-forward fix).
-    let notice_result: Result<()> = match ask_live(
-        tui,
-        editor,
-        events,
-        backend,
-        &crate::visual::visual_system(),
-        &[Message::user(request)],
-        last_tokens,
-    )
-    .await
-    {
-        Ok(AskOutcome::Reply(reply)) => {
-            let json = crate::progress::clean_markdown_reply(&reply.text);
-            match crate::visual::build_visual_html(&json) {
-                Ok(html) => {
-                    let path = crate::visual::visual_path(project_root, topic, concept);
-                    let dir = path.parent().map(|d| d.to_path_buf());
-                    if let Some(d) = &dir {
-                        let _ = std::fs::create_dir_all(d);
-                    }
-                    match std::fs::write(&path, html) {
-                        Ok(()) => {
-                            // Görev 5: keep the last 10 visuals per topic — prune AFTER
-                            // the write, so `10` is the exact post-write count on disk.
-                            if let Some(d) = &dir {
-                                crate::visual::prune_visuals(d, 10);
-                            }
-                            let opened = crate::visual::open_in_browser(&path);
-                            page_notice(
-                                tui,
-                                &format!(
-                                    "visual saved: {}{}",
-                                    path.display(),
-                                    if opened {
-                                        ""
-                                    } else {
-                                        " (open it in your browser)"
-                                    }
-                                ),
-                            )
-                        }
-                        Err(e) => page_error(tui, &format!("error: {e}")),
-                    }
-                }
-                Err(e) => page_error(
-                    tui,
-                    &format!("visual generation failed ({e}) — try /show again"),
-                ),
-            }
-        }
-        Ok(AskOutcome::Cancelled) => page_notice(tui, "visual generation cancelled"),
-        Err(e) => page_error(tui, &format!("error: {e}")),
-    };
-    backend.reset_session(); // all paths — slug parity, ALWAYS runs (see notice_result above)
-    notice_result
-}
-
-/// After a normal reply has been displayed and recorded, run the visual flow
-/// if `[[show: ...]]` was found in it (Görev 4). No-op when `show_topic` is
-/// `None`. Reuses `show_request` with the just-pushed clean reply as context —
-/// same composition the explicit `/show <topic>` command uses.
-#[allow(clippy::too_many_arguments)]
-async fn trigger_auto_visual(
-    tui: &mut Tui,
-    editor: &mut InputBox,
-    events: &mut EventStream,
-    backend: &mut Backend,
-    session: &Session,
-    project_root: &Path,
-    topic: &str,
-    show_topic: Option<String>,
-    last_tokens: Option<u64>,
-) -> Result<()> {
-    let Some(t) = show_topic else { return Ok(()) };
-    if let Some(req) = crate::visual::show_request(
-        Some(t.clone()),
-        crate::visual::last_assistant_text(session).as_deref(),
-    ) {
-        page_notice(tui, &format!("visualizing: {t}…"))?;
-        run_visual_generation(
-            tui,
-            editor,
-            events,
-            backend,
-            project_root,
-            topic,
-            &t,
-            &req,
-            last_tokens,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-/// Prints the identity welcome and reads the topic from the input box. `None` =
-/// the user quit without giving a topic (Ctrl-C/D). Slug resolution is left to
-/// the caller. Watcher events are NOT consumed here during topic entry — only
-/// keys are listened for; events accumulated in the channel are quietly
-/// absorbed after the session is set up (see `run`).
-#[allow(clippy::too_many_arguments)]
-async fn ask_topic(
-    tui: &mut Tui,
-    editor: &mut InputBox,
-    events: &mut EventStream,
-    profile: Option<&str>,
-    model: &str,
-    dir: &str,
-    local: &[String],
-    other: &[String],
-    project_known: bool,
-    show_welcome: bool,
-    week_sessions: u32,
-    streak: u32,
-) -> Result<Option<String>> {
-    // Topic lists (project-local + other projects) are computed by the caller
-    // and passed in here — the global catalog is not read here (see `run`).
-    // `show_welcome=false`: when the new-topic confirmation is rejected and we
-    // go back to the entry question, the identity welcome + initial notice are
-    // NOT printed again.
-    if show_welcome {
-        let name = profile.and_then(welcome::extract_name);
-        let width = current_width(tui);
-        page(
-            tui,
-            welcome::render_welcome_identity(
-                name.as_deref(),
-                model,
-                dir,
-                local,
-                other,
-                project_known,
-                width,
-                week_sessions,
-                streak,
-            ),
-        )?;
-        // The "Enter = suggests" hint is only truthful on a first session with no
-        // resumable topics — when `local` is non-empty, empty Enter resumes
-        // instead (see welcome box above), so the suggest wording must not show.
-        let prompt_line = if project_known && local.is_empty() {
-            "What do you want to learn? (Enter = Usta suggests from PROJECT.md; or type a topic)"
-        } else {
-            "What do you want to learn? (a word, or describe it in a sentence)"
-        };
-        page_notice(tui, prompt_line)?;
-    }
-
-    loop {
-        draw(tui, editor, &Status::Idle, None, 0, None)?;
-        match events.next().await {
-            Some(Ok(Event::Key(k))) => {
-                // Empty Enter = resume sentinel (only when there's a topic to resume) —
-                // we catch it before the editor swallows the empty line (spec K1 rule 1).
-                // `editor.handle_key` returns `Action::None` on an empty Enter, so without
-                // this early return the key would be silently swallowed. Empty Enter also
-                // returns the sentinel when a project is known, so the Suggest flow can
-                // trigger even with no resumable topics.
-                if matches!(k.code, KeyCode::Enter)
-                    && editor.value().trim().is_empty()
-                    && (!local.is_empty() || project_known)
-                {
-                    return Ok(Some(String::new()));
-                }
-                match editor.handle_key(k) {
-                    Action::Submit(line) => return Ok(Some(line)),
-                    Action::Exit => return Ok(None),
-                    Action::None => {}
-                }
-            }
-            Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
-            Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
-            None => return Ok(None),         // stream ended — don't spin in a hot loop (spec B4)
-        }
-    }
-}
-
-/// Single-key confirmation in the TUI: print the message, wait for one key. `y`/`Y`/`e`/`E` → true, other → false.
-async fn tui_confirm(
-    tui: &mut Tui,
-    editor: &InputBox,
-    events: &mut EventStream,
-    msg: &str,
-) -> Result<bool> {
-    page_notice(tui, msg)?;
-    loop {
-        draw(tui, editor, &Status::Idle, None, 0, None)?;
-        match events.next().await {
-            Some(Ok(Event::Key(k))) => match k.code {
-                KeyCode::Char('y')
-                | KeyCode::Char('Y')
-                | KeyCode::Char('e')
-                | KeyCode::Char('E') => return Ok(true),
-                _ => return Ok(false),
-            },
-            Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
-            None => return Ok(false),        // stream ended — don't spin in a hot loop (spec B4)
-        }
-    }
-}
+use crate::tui::welcome_data;
+use crate::{feedback, history, progress, watcher};
 
 /// TUI session: topic entry (if no arg) + welcome box + drill/intro + main
 /// loop. Session/recorder are set up inside via `build_session`. Return:
@@ -558,13 +99,13 @@ pub async fn run(
             // to the entry question.
             let mut welcome_shown = false;
             loop {
-                let raw = match ask_topic(
+                let raw = match crate::tui::entry::ask_topic(
                     &mut tui,
                     &mut editor,
                     &mut events,
                     read(global.join("USER.md")).as_deref(),
                     &backend.label(),
-                    &short_dir(project_root),
+                    &crate::tui::paint::short_dir(project_root),
                     &local,
                     &other,
                     project_known,
@@ -579,13 +120,13 @@ pub async fn run(
                 };
                 welcome_shown = true;
                 if !raw.trim().is_empty() {
-                    page_user_echo(&mut tui, raw.trim())?;
+                    crate::tui::page::page_user_echo(&mut tui, raw.trim())?;
                 }
                 // Slash commands at topic entry: the hint above the prompt promises
                 // /help, so honor it here too; session-only commands get a pointer
                 // instead of silently being slugged into a topic name.
                 if crate::help::is_help_command(&raw) {
-                    page_notice(&mut tui, crate::help::help_text())?;
+                    crate::tui::page::page_notice(&mut tui, crate::help::help_text())?;
                     continue;
                 }
                 if raw.trim().eq_ignore_ascii_case("/quit") {
@@ -594,7 +135,7 @@ pub async fn run(
                 if crate::visual::parse_show_command(&raw).is_some()
                     || crate::slash::parse_watch_command(&raw).is_some()
                 {
-                    page_notice(
+                    crate::tui::page::page_notice(
                         &mut tui,
                         "that command works inside a session — pick a topic first",
                     )?;
@@ -612,7 +153,7 @@ pub async fn run(
                         // then ALWAYS reset.
                         let project_md =
                             read(progress::project_md_path(project_root)).unwrap_or_default();
-                        let outcome = ask_live(
+                        let outcome = crate::tui::ask::ask_live(
                             &mut tui,
                             &mut editor,
                             &mut events,
@@ -624,19 +165,22 @@ pub async fn run(
                         .await;
                         backend.reset_session(); // suggestion chat must not leak into the session
                         let parsed = match outcome {
-                            Ok(AskOutcome::Reply(reply)) => {
+                            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                 crate::topic::parse_start_suggestion(&reply.text)
                             }
-                            Ok(AskOutcome::Cancelled) | Err(_) => None,
+                            Ok(crate::tui::ask::AskOutcome::Cancelled) | Err(_) => None,
                         };
                         let Some((slug, text)) = parsed else {
-                            page_error(&mut tui, "suggestion failed — type a topic")?;
+                            crate::tui::page::page_error(
+                                &mut tui,
+                                "suggestion failed — type a topic",
+                            )?;
                             continue;
                         };
                         if !text.is_empty() {
-                            page_notice(&mut tui, &text)?;
+                            crate::tui::page::page_notice(&mut tui, &text)?;
                         }
-                        if tui_confirm(
+                        if crate::tui::ask::tui_confirm(
                             &mut tui,
                             &editor,
                             &mut events,
@@ -644,17 +188,17 @@ pub async fn run(
                         )
                         .await?
                         {
-                            page_notice(&mut tui, &format!("topic: {slug}"))?;
+                            crate::tui::page::page_notice(&mut tui, &format!("topic: {slug}"))?;
                             intro = Some(format!(
                                 "Usta's own opening suggestion (already shown to the user, \
                                  they accepted it — continue from its first step, don't repeat it):\n{text}"
                             ));
                             break slug;
                         }
-                        page_notice(&mut tui, "cancelled — type a topic")?;
+                        crate::tui::page::page_notice(&mut tui, "cancelled — type a topic")?;
                     }
                     Some(crate::topic::TopicChoice::Resume(t)) => {
-                        page_notice(&mut tui, &format!("resuming: {t}"))?;
+                        crate::tui::page::page_notice(&mut tui, &format!("resuming: {t}"))?;
                         resumed = true; // for the continuation panel below
                         break t;
                     }
@@ -663,7 +207,7 @@ pub async fn run(
                         let slug = if raw.split_whitespace().count() <= 2 {
                             crate::topic::slugify_topic(&raw)
                         } else {
-                            let slug = match ask_live(
+                            let slug = match crate::tui::ask::ask_live(
                                 &mut tui,
                                 &mut editor,
                                 &mut events,
@@ -674,10 +218,10 @@ pub async fn run(
                             )
                             .await
                             {
-                                Ok(AskOutcome::Reply(reply)) => {
+                                Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                     crate::topic::finalize_slug(&raw, &reply.text)
                                 }
-                                Ok(AskOutcome::Cancelled) | Err(_) => {
+                                Ok(crate::tui::ask::AskOutcome::Cancelled) | Err(_) => {
                                     crate::topic::slugify_topic(&raw)
                                 }
                             };
@@ -689,14 +233,14 @@ pub async fn run(
                         // counts as RESUME (spec K2): the notice becomes "resuming", the
                         // identity-free continuation panel is printed, NO confirmation.
                         if local.contains(&slug) {
-                            page_notice(&mut tui, &format!("resuming: {slug}"))?;
+                            crate::tui::page::page_notice(&mut tui, &format!("resuming: {slug}"))?;
                             resumed = true;
                             break slug;
                         }
                         // New-topic confirmation: only asked when there's a topic that could
                         // be resumed (spec §2) — on first-run/empty-local it opens without confirmation.
                         if local.is_empty()
-                            || tui_confirm(
+                            || crate::tui::ask::tui_confirm(
                                 &mut tui,
                                 &editor,
                                 &mut events,
@@ -704,7 +248,7 @@ pub async fn run(
                             )
                             .await?
                         {
-                            page_notice(
+                            crate::tui::page::page_notice(
                                 &mut tui,
                                 &format!("topic: {slug} — tell me the details in chat"),
                             )?;
@@ -712,7 +256,7 @@ pub async fn run(
                             break slug;
                         }
                         // Rejected → go back to the entry question (welcome is not printed again).
-                        page_notice(
+                        crate::tui::page::page_notice(
                             &mut tui,
                             "cancelled — Enter = resume, or type another topic",
                         )?;
@@ -726,7 +270,7 @@ pub async fn run(
     // writing its own lock. If rejected, no session/lock → Tui drop restores.
     let lock = crate::lifecycle::lock_path(project_root, &topic);
     if lock.exists()
-        && !tui_confirm(
+        && !crate::tui::ask::tui_confirm(
             &mut tui,
             &editor,
             &mut events,
@@ -734,7 +278,7 @@ pub async fn run(
         )
         .await?
     {
-        page_notice(&mut tui, "cancelled")?;
+        crate::tui::page::page_notice(&mut tui, "cancelled")?;
         return Ok(None);
     }
 
@@ -764,23 +308,23 @@ pub async fn run(
     // panel — see `welcome::render_for_entry`'s doc comment for why the two
     // entry paths render differently.
     if had_topic_arg || resumed {
-        let data = welcome::gather(
+        let data = welcome_data::gather(
             read(global.join("USER.md")).as_deref(),
             read(progress::progress_path(project_root, &topic)).as_deref(),
             read(progress::curriculum_path(project_root, &topic)).as_deref(),
             &topic,
             &backend.label(),
-            &short_dir(project_root),
+            &crate::tui::paint::short_dir(project_root),
             today,
             read(global.join("learner/history.md")).as_deref(),
         );
-        let w = current_width(&tui);
+        let w = crate::tui::page::current_width(&tui);
         // `None` only on the resume path with nothing recorded yet (Finding 1,
         // v0.21 review) — the `resuming: <topic>` notice already printed by the
         // topic-entry loop stands on its own; skip the panel rather than print
         // an empty frame.
         if let Some(text) = welcome::render_for_entry(had_topic_arg, &data, w) {
-            page(&mut tui, text)?;
+            crate::tui::page::page(&mut tui, text)?;
         }
     }
 
@@ -797,8 +341,8 @@ pub async fn run(
         let gs = crate::slash::game_streak_line(global, today);
         let progress_content =
             read(progress::progress_path(project_root, &topic)).unwrap_or_default();
-        let due = welcome::due_questions(&progress_content, today);
-        let has_questions = welcome::drill_count(&progress_content) > 0;
+        let due = welcome_data::due_questions(&progress_content, today);
+        let has_questions = welcome_data::drill_count(&progress_content) > 0;
         progress::opening_prompt(
             &topic,
             profile_generic,
@@ -809,7 +353,7 @@ pub async fn run(
         )
     } else {
         for note in crate::materials::convert_pdfs(project_root) {
-            page_notice(&mut tui, &note)?;
+            crate::tui::page::page_notice(&mut tui, &note)?;
         }
         let mats = crate::materials::scan(project_root);
         let material_digest = crate::materials::combined_digests(&mats);
@@ -823,7 +367,7 @@ pub async fn run(
     };
     session.push_user(&opening);
     recorder.user(&opening);
-    match ask_live(
+    match crate::tui::ask::ask_live(
         &mut tui,
         &mut editor,
         &mut events,
@@ -834,14 +378,14 @@ pub async fn run(
     )
     .await
     {
-        Ok(AskOutcome::Reply(reply)) => {
+        Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
             last_tokens = reply.context_tokens;
             let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-            let w = current_width(&tui);
-            page_reply(&mut tui, &clean, w)?;
+            let w = crate::tui::page::current_width(&tui);
+            crate::tui::page::page_reply(&mut tui, &clean, w)?;
             recorder.assistant(&clean);
             session.push_assistant(clean);
-            trigger_auto_visual(
+            crate::tui::entry::trigger_auto_visual(
                 &mut tui,
                 &mut editor,
                 &mut events,
@@ -854,11 +398,11 @@ pub async fn run(
             )
             .await?;
         }
-        Ok(AskOutcome::Cancelled) => {
+        Ok(crate::tui::ask::AskOutcome::Cancelled) => {
             backend.reset_session();
-            page_notice(&mut tui, "opening turn cancelled")?;
+            crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
         }
-        Err(e) => page_error(&mut tui, &format!("opening turn skipped: {e}"))?,
+        Err(e) => crate::tui::page::page_error(&mut tui, &format!("opening turn skipped: {e}"))?,
     }
 
     let mut watching = true;
@@ -866,8 +410,8 @@ pub async fn run(
         // Drain the buffer at the start of every iteration — notices that
         // accumulate outside maybe_compact, like a transcript write error,
         // should never be lost either.
-        flush_notices(&mut tui)?;
-        draw(
+        crate::tui::page::flush_notices(&mut tui)?;
+        crate::tui::page::draw(
             &mut tui,
             &editor,
             &Status::Idle,
@@ -892,26 +436,26 @@ pub async fn run(
                     Action::Exit => break,
                     Action::Submit(line) => {
                         if let Some(cmd) = crate::slash::parse_watch_command(&line) {
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             let (next, msg) = crate::slash::apply_watch(cmd, watching);
                             watching = next;
-                            page_notice(&mut tui, msg)?;
+                            crate::tui::page::page_notice(&mut tui, msg)?;
                             continue;
                         }
                         if crate::help::is_help_command(&line) {
-                            page_user_echo(&mut tui, &line)?;
-                            page_notice(&mut tui, crate::help::help_text())?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_notice(&mut tui, crate::help::help_text())?;
                             continue;
                         }
                         if let Some(arg) = crate::visual::parse_show_command(&line) {
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                             // Borrow care: read the last reply BEFORE any &mut session borrow.
                             let last = crate::visual::last_assistant_text(&session);
                             match crate::visual::show_request(arg, last.as_deref()) {
-                                None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
+                                None => crate::tui::page::page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
                                 Some(req) => {
-                                    run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
+                                    crate::tui::entry::run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
                                 }
                             }
                             continue;
@@ -922,10 +466,10 @@ pub async fn run(
                         // (swapped below) that flows through the normal ask — same shape as /exam.
                         let game_cmd = crate::slash::parse_game_command(&line);
                         if let Some(cmd) = &game_cmd {
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             match cmd {
                                 crate::slash::GameCmd::Status => {
-                                    page_notice(&mut tui, if crate::slash::game_pref(global) {
+                                    crate::tui::page::page_notice(&mut tui, if crate::slash::game_pref(global) {
                                         "gamification is on"
                                     } else {
                                         "gamification is off"
@@ -935,10 +479,10 @@ pub async fn run(
                                 crate::slash::GameCmd::On | crate::slash::GameCmd::Off => {
                                     let on = matches!(cmd, crate::slash::GameCmd::On);
                                     if let Err(e) = crate::slash::set_game_pref(global, on) {
-                                        page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
+                                        crate::tui::page::page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
                                         continue;
                                     }
-                                    page_notice(&mut tui, if on {
+                                    crate::tui::page::page_notice(&mut tui, if on {
                                         "gamification on — XP, levels and badges are live"
                                     } else {
                                         "gamification off — back to quiet mode"
@@ -949,9 +493,9 @@ pub async fn run(
                         // /exam: echo the literal command, gate on goal presence, then swap the
                         // outgoing text and fall through to the normal ask flow below.
                         let outgoing = if crate::slash::is_exam_command(&line) {
-                            page_user_echo(&mut tui, "/exam")?;
+                            crate::tui::page::page_user_echo(&mut tui, "/exam")?;
                             if !crate::slash::topic_has_goal(project_root, global, &topic) {
-                                page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
+                                crate::tui::page::page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
                                 continue;
                             }
                             progress::exam_prompt(&topic)
@@ -966,33 +510,33 @@ pub async fn run(
                             }
                         } else {
                             // Push the submitted line to scrollback as a distinct user block.
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             line.clone()
                         };
                         session.push_user(&outgoing);
                         recorder.user(&outgoing);
-                        match ask_live(
+                        match crate::tui::ask::ask_live(
                             &mut tui, &mut editor, &mut events, backend,
                             &session.system, session.history(), last_tokens,
                         ).await {
-                            Ok(AskOutcome::Reply(reply)) => {
+                            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
                                 let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-                                let w = current_width(&tui);
-                                page_reply(&mut tui, &clean, w)?;
+                                let w = crate::tui::page::current_width(&tui);
+                                crate::tui::page::page_reply(&mut tui, &clean, w)?;
                                 recorder.assistant(&clean);
                                 session.push_assistant(clean);
                                 crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await;
-                                trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
+                                crate::tui::entry::trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
-                            Ok(AskOutcome::Cancelled) => {
+                            Ok(crate::tui::ask::AskOutcome::Cancelled) => {
                                 // The user turn stays in history (intentional — spec B2); the CLI
                                 // session is half-done — don't resume it, the next call should go
                                 // with the full transcript.
                                 backend.reset_session();
-                                page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
+                                crate::tui::page::page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
                             }
-                            Err(e) => page_error(&mut tui, &format!("error: {e}"))?,
+                            Err(e) => crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?,
                         }
                     }
                 }
@@ -1003,7 +547,7 @@ pub async fn run(
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 let batch = debouncer.flush();
                 if batch.len() > max_feedback_batch {
-                    page_notice(&mut tui, &format!(
+                    crate::tui::page::page_notice(&mut tui, &format!(
                         "bulk change ({} files) — feedback skipped, still watching",
                         batch.len()
                     ))?;
@@ -1024,19 +568,19 @@ pub async fn run(
                     for path in batch {
                         match crate::file_feedback::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
                             Ok(crate::file_feedback::FileFeedback::Sessiz) => {}
-                            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
+                            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => crate::tui::page::page_notice(&mut tui, &m)?,
                             Ok(crate::file_feedback::FileFeedback::Yanit { tokens, reply, show_topic }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
-                                let w = current_width(&tui);
-                                page_reply(&mut tui, &reply.text, w)?;
+                                let w = crate::tui::page::current_width(&tui);
+                                crate::tui::page::page_reply(&mut tui, &reply.text, w)?;
                                 crate::lifecycle::maybe_compact(backend, &mut session, project_root, tokens).await;
-                                trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
+                                crate::tui::entry::trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
                             // Same silent-skip classes as the plain path (plain.rs) /
                             // is_silent_skip (file_feedback.rs): vanished temp file
                             // (NotFound) or binary content (InvalidData) — no noise for either.
                             Err(e) if crate::file_feedback::is_silent_skip(&e) => {}
-                            Err(e) => page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
+                            Err(e) => crate::tui::page::page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
                 }
@@ -1046,140 +590,6 @@ pub async fn run(
     // Drain the last iteration's notices right before exit — so a transcript
     // warning that lands in the buffer on the /quit or Exit path is still seen
     // while the TUI is up.
-    flush_notices(&mut tui)?;
+    crate::tui::page::flush_notices(&mut tui)?;
     Ok(Some((session, recorder, lock))) // Tui drop → restore
-}
-
-/// Project directory with `$HOME` → `~` abbreviation.
-fn short_dir(p: &Path) -> String {
-    let s = p.display().to_string();
-    match dirs::home_dir() {
-        Some(h) => s.replace(&h.display().to_string(), "~"),
-        None => s,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::style::Modifier;
-
-    fn line_text(l: &ratatui::text::Line) -> String {
-        l.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn user_echo_prefixes_first_line_and_indents_rest() {
-        // Wide width → no wrapping, only \n splitting.
-        let t = user_echo_text("satır1\nsatır2", 80);
-        let lines: Vec<String> = t.lines.iter().map(line_text).collect();
-        // [0] blank separator line, [1] ❯ + text, [2] indented continuation.
-        assert_eq!(lines[0], "");
-        assert_eq!(lines[1], "❯ satır1");
-        assert_eq!(lines[2], "  satır2");
-    }
-
-    #[test]
-    fn user_echo_wraps_long_line_to_width() {
-        // 50 'a's, width 20 → inner width 18 → 18+18+14 = 3 content lines.
-        // A long single line is NOT cut off, it wraps (bug: page_reply wraps, echo didn't).
-        let t = user_echo_text(&"a".repeat(50), 20);
-        let lines: Vec<String> = t.lines.iter().map(line_text).collect();
-        assert_eq!(lines[0], "");
-        assert!(
-            lines[1].starts_with("❯ "),
-            "ilk görsel satır ❯: {:?}",
-            lines[1]
-        );
-        assert_eq!(
-            lines[1].chars().filter(|c| *c == 'a').count(),
-            18,
-            "ilk satır iç genişlik kadar"
-        );
-        assert!(
-            lines[2].starts_with("  "),
-            "devam satırı girintili: {:?}",
-            lines[2]
-        );
-        let total: usize = lines
-            .iter()
-            .map(|l| l.chars().filter(|c| *c == 'a').count())
-            .sum();
-        assert_eq!(total, 50, "hiçbir karakter kaybolmaz");
-        assert!(
-            t.lines.len() >= 4,
-            "birden çok görsel satıra bölündü: {}",
-            t.lines.len()
-        );
-    }
-
-    #[test]
-    fn notice_layers_carry_glyph_and_color() {
-        // info: `·` dim, no hard fg color (survives light/dark).
-        let n = notice_line("resuming: rust");
-        assert!(line_text(&n.lines[0]).starts_with("· "));
-        assert!(line_text(&n.lines[0]).contains("resuming: rust"));
-
-        // warn: `⚠` amber (theme::WARN index), text verbatim.
-        let w = warn_line("context filling up");
-        assert!(line_text(&w.lines[0]).starts_with("⚠ "));
-        let wfg = w.lines[0].spans.iter().find_map(|s| s.style.fg);
-        assert_eq!(wfg, Some(theme::WARN));
-
-        // error: `✗` red (theme::ERROR index), text verbatim.
-        let e = error_line("no goal set for this topic");
-        assert!(line_text(&e.lines[0]).starts_with("✗ "));
-        let efg = e.lines[0].spans.iter().find_map(|s| s.style.fg);
-        assert_eq!(efg, Some(theme::ERROR));
-    }
-
-    #[test]
-    fn user_echo_text_is_not_dim() {
-        let t = user_echo_text("merhaba", 80);
-        // No span carries DIM — that was the root of the visibility issue (spec S1).
-        for l in &t.lines {
-            for s in &l.spans {
-                assert!(
-                    !s.style.add_modifier.contains(Modifier::DIM),
-                    "DIM span: {:?}",
-                    s.content
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn user_echo_prefix_is_orange() {
-        let t = user_echo_text("x", 80);
-        let first = &t.lines[1].spans[0];
-        assert_eq!(first.content.as_ref(), "❯ ");
-        assert_eq!(first.style.fg, Some(theme::BRAND));
-    }
-
-    #[test]
-    fn classify_locked_key_ctrl_c_and_d_are_cancel_requests() {
-        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
-        assert!(matches!(
-            classify_locked_key(ctrl_c),
-            LockedKey::CancelRequest
-        ));
-        assert!(matches!(
-            classify_locked_key(ctrl_d),
-            LockedKey::CancelRequest
-        ));
-    }
-
-    #[test]
-    fn classify_locked_key_enter_and_chars_are_edits() {
-        assert!(matches!(
-            classify_locked_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-            LockedKey::Edit
-        ));
-        assert!(matches!(
-            classify_locked_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
-            LockedKey::Edit
-        ));
-    }
 }

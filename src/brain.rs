@@ -70,7 +70,12 @@ fn read_all_approaches(project_usta: Option<&PathBuf>, global: &Path, parts: &mu
 /// Merge the global brain + (if present) the project override/progress to
 /// produce the system prompt. `project` is the project root CONTAINING `.usta/` —
 /// project files live under `project.join(".usta")` (not `.usta` itself).
-pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, today: &str) -> String {
+pub fn load_system_prompt(
+    global: &Path,
+    project: Option<&Path>,
+    topic: &str,
+    today: &str,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     // The model doesn't reliably know today's date — a fixed reference is given
@@ -128,7 +133,11 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     // a naive `contains`, mirrors `game_pref` in slash.rs.
     let user_md = std::fs::read_to_string(global.join("USER.md")).unwrap_or_default();
     if user_md.lines().any(|l| l.trim() == "- gamification: on") {
-        read_section(&global.join("GAMIFICATION.md"), "GAMIFICATION.md", &mut parts);
+        read_section(
+            &global.join("GAMIFICATION.md"),
+            "GAMIFICATION.md",
+            &mut parts,
+        );
     }
 
     // User-facing project context: definition + status live in the VISIBLE
@@ -136,8 +145,16 @@ pub fn load_system_prompt(global: &Path, project: Option<&Path>, topic: &str, to
     // read and hand-edit them (spec: mentor layer). Loaded right after the
     // profile: who first, then which project, then how to teach.
     if let Some(p) = project {
-        read_section(&p.join("mentor/PROJECT.md"), "mentor/PROJECT.md", &mut parts);
-        read_section(&p.join("mentor/PROGRESS.md"), "mentor/PROGRESS.md", &mut parts);
+        read_section(
+            &p.join("mentor/PROJECT.md"),
+            "mentor/PROJECT.md",
+            &mut parts,
+        );
+        read_section(
+            &p.join("mentor/PROGRESS.md"),
+            "mentor/PROGRESS.md",
+            &mut parts,
+        );
     }
 
     read_section(
@@ -246,12 +263,20 @@ mod tests {
     fn gamification_loaded_only_when_user_md_opts_in() {
         let (global, _project) = temp_pair("gamification");
         fs::write(global.join("GAMIFICATION.md"), "GAMIFICATION-İÇERİK").unwrap();
-        fs::write(global.join("USER.md"), "# Profil\n\n## Preferences\n- gamification: off\n").unwrap();
+        fs::write(
+            global.join("USER.md"),
+            "# Profil\n\n## Preferences\n- gamification: off\n",
+        )
+        .unwrap();
 
         let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(!sys.contains("GAMIFICATION-İÇERİK"));
 
-        fs::write(global.join("USER.md"), "# Profil\n\n## Preferences\n- gamification: on\n").unwrap();
+        fs::write(
+            global.join("USER.md"),
+            "# Profil\n\n## Preferences\n- gamification: on\n",
+        )
+        .unwrap();
         let sys2 = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys2.contains("GAMIFICATION-İÇERİK"));
 
@@ -436,7 +461,11 @@ mod tests {
         let (global, _project) = temp_pair("allapproaches");
         fs::create_dir_all(global.join("approaches")).unwrap();
         fs::write(global.join("approaches/software.md"), "YAZILIM YAKLAŞIMI").unwrap();
-        fs::write(global.join("approaches/marketing.md"), "MARKETING YAKLAŞIMI").unwrap();
+        fs::write(
+            global.join("approaches/marketing.md"),
+            "MARKETING YAKLAŞIMI",
+        )
+        .unwrap();
         fs::write(global.join("approaches/_default.md"), "META YAKLAŞIM").unwrap();
 
         let sys = load_system_prompt(&global, None, "gtm", "2026-08-07");

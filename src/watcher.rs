@@ -96,7 +96,11 @@ pub struct Debouncer {
 
 impl Debouncer {
     pub fn new(window: Duration) -> Self {
-        Debouncer { pending: Vec::new(), deadline: None, window }
+        Debouncer {
+            pending: Vec::new(),
+            deadline: None,
+            window,
+        }
     }
 
     /// Accumulate the path (dedupe while preserving first-seen order) and
@@ -132,7 +136,10 @@ mod tests {
         d.push(PathBuf::from("a.rs"), now);
         d.push(PathBuf::from("b.rs"), now);
         d.push(PathBuf::from("a.rs"), now);
-        assert_eq!(d.flush(), vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
+        assert_eq!(
+            d.flush(),
+            vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]
+        );
     }
 
     #[test]

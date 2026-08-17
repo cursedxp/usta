@@ -73,7 +73,10 @@ mod tests {
         assert_eq!(h[0].role, "user");
         assert_eq!(h[0].content, serde_json::Value::String("merhaba".into()));
         assert_eq!(h[1].role, "assistant");
-        assert_eq!(h[1].content, serde_json::Value::String("spek'in ne?".into()));
+        assert_eq!(
+            h[1].content,
+            serde_json::Value::String("spek'in ne?".into())
+        );
         assert_eq!(h[2].role, "user");
         assert_eq!(h[2].content, serde_json::Value::String("bilmiyorum".into()));
     }
@@ -95,7 +98,10 @@ mod tests {
         s.compact(4, "[CHECKPOINT]");
         let h = s.history();
         assert_eq!(h.len(), 5);
-        assert_eq!(h[0].content, serde_json::Value::String("[CHECKPOINT]".into()));
+        assert_eq!(
+            h[0].content,
+            serde_json::Value::String("[CHECKPOINT]".into())
+        );
         assert_eq!(h[4].content, serde_json::Value::String("m9".into()));
     }
 

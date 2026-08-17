@@ -47,9 +47,7 @@ pub fn select() -> Result<Backend> {
     match std::env::var("USTA_BACKEND").ok().as_deref() {
         Some("cli") => Ok(cli_backend()),
         Some("api") => api_backend(),
-        Some(other) => bail!(
-            "USTA_BACKEND invalid: '{other}'. Valid values: 'cli' or 'api'."
-        ),
+        Some(other) => bail!("USTA_BACKEND invalid: '{other}'. Valid values: 'cli' or 'api'."),
         None => {
             if claude_on_path() {
                 Ok(cli_backend())
@@ -134,7 +132,11 @@ impl Backend {
         match self {
             Backend::Api { client, model } => {
                 let (text, web, tokens) = client.complete(model, system, history).await?;
-                Ok(Reply { text, web, context_tokens: tokens })
+                Ok(Reply {
+                    text,
+                    web,
+                    context_tokens: tokens,
+                })
             }
             Backend::Cli { model, session_id } => {
                 let resume = session_id.clone();
@@ -155,7 +157,11 @@ impl Backend {
                 if new_sid.is_some() {
                     *session_id = new_sid;
                 }
-                Ok(Reply { text, web: false, context_tokens: tokens })
+                Ok(Reply {
+                    text,
+                    web: false,
+                    context_tokens: tokens,
+                })
             }
         }
     }
@@ -266,7 +272,11 @@ async fn run_claude_cli(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("claude CLI returned an error ({}): {}", output.status, stderr.trim());
+        bail!(
+            "claude CLI returned an error ({}): {}",
+            output.status,
+            stderr.trim()
+        );
     }
 
     Ok(parse_cli_output(&String::from_utf8_lossy(&output.stdout)))
@@ -326,7 +336,9 @@ pub fn run_backend_wizard() -> Result<Backend> {
             bail!("no backend configured (EOF)");
         }
         match wizard_action(&line) {
-            WizardAction::Quit => bail!("no backend configured — run usta again once one is set up"),
+            WizardAction::Quit => {
+                bail!("no backend configured — run usta again once one is set up")
+            }
             WizardAction::Key(k) => {
                 std::env::set_var("ANTHROPIC_API_KEY", k);
                 match select() {
@@ -346,7 +358,9 @@ pub fn run_backend_wizard() -> Result<Backend> {
                 Err(e) => println!("still no backend: {e}"),
             },
             WizardAction::Invalid => {
-                println!("didn't catch that — Enter to re-check, paste an sk-ant-... key, or q to quit");
+                println!(
+                    "didn't catch that — Enter to re-check, paste an sk-ant-... key, or q to quit"
+                );
             }
         }
     }
@@ -358,9 +372,15 @@ mod tests {
 
     #[test]
     fn context_window_is_1m_for_opus_200k_for_haiku() {
-        let opus = Backend::Cli { model: "opus".into(), session_id: None };
+        let opus = Backend::Cli {
+            model: "opus".into(),
+            session_id: None,
+        };
         assert_eq!(opus.context_window(), 1_000_000);
-        let haiku = Backend::Cli { model: "claude-haiku-4-5".into(), session_id: None };
+        let haiku = Backend::Cli {
+            model: "claude-haiku-4-5".into(),
+            session_id: None,
+        };
         assert_eq!(haiku.context_window(), 200_000);
     }
 
@@ -368,9 +388,14 @@ mod tests {
     fn reset_session_clears_cli_session_id() {
         // reset_session() should set session_id to None — the learning session
         // after the slug mini-session must NOT resume it (spec B1).
-        let mut b = Backend::Cli { model: "opus".into(), session_id: Some("sid-123".into()) };
+        let mut b = Backend::Cli {
+            model: "opus".into(),
+            session_id: Some("sid-123".into()),
+        };
         b.reset_session();
-        let Backend::Cli { session_id, .. } = &b else { panic!("Cli bekleniyordu") };
+        let Backend::Cli { session_id, .. } = &b else {
+            panic!("Cli bekleniyordu")
+        };
         assert!(session_id.is_none());
     }
 

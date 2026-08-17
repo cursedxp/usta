@@ -41,7 +41,12 @@ pub struct WeekSummary {
 
 /// Render one history line: `- {date} | {topic} | map {P}% | settled {N}`.
 /// `None` renders as `map -` / `settled -`.
-pub fn record_line(date: &str, topic: &str, map_percent: Option<u8>, settled: Option<usize>) -> String {
+pub fn record_line(
+    date: &str,
+    topic: &str,
+    map_percent: Option<u8>,
+    settled: Option<usize>,
+) -> String {
     let map = match map_percent {
         Some(p) => format!("map {p}%"),
         None => "map -".to_string(),
@@ -69,10 +74,23 @@ pub fn entries(content: &str) -> Vec<Entry> {
             }
             NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok()?;
             let map = map_part.strip_prefix("map ")?;
-            let map = if map == "-" { None } else { map.strip_suffix('%')?.parse::<u8>().ok() };
+            let map = if map == "-" {
+                None
+            } else {
+                map.strip_suffix('%')?.parse::<u8>().ok()
+            };
             let settled = settled_part.strip_prefix("settled ")?;
-            let settled = if settled == "-" { None } else { settled.parse::<usize>().ok() };
-            Some(Entry { date, topic, map, settled })
+            let settled = if settled == "-" {
+                None
+            } else {
+                settled.parse::<usize>().ok()
+            };
+            Some(Entry {
+                date,
+                topic,
+                map,
+                settled,
+            })
         })
         .collect()
 }
@@ -91,7 +109,9 @@ pub fn append(global: &Path, line: &str) -> Result<()> {
 
 /// Consecutive-day streak ending today (or yesterday, if nothing logged today yet).
 pub fn current_streak(entries: &[Entry], today: &str) -> u32 {
-    let Ok(today) = NaiveDate::parse_from_str(today, "%Y-%m-%d") else { return 0 };
+    let Ok(today) = NaiveDate::parse_from_str(today, "%Y-%m-%d") else {
+        return 0;
+    };
     let days: BTreeSet<NaiveDate> = entries
         .iter()
         .filter_map(|e| NaiveDate::parse_from_str(&e.date, "%Y-%m-%d").ok())
@@ -138,7 +158,10 @@ pub fn longest_streak(entries: &[Entry]) -> u32 {
 /// this) — "first/last in-window" is positional, not a re-sort by date.
 pub fn week_summary(entries: &[Entry], today: &str) -> WeekSummary {
     let Ok(today) = NaiveDate::parse_from_str(today, "%Y-%m-%d") else {
-        return WeekSummary { sessions: 0, per_topic: Vec::new() };
+        return WeekSummary {
+            sessions: 0,
+            per_topic: Vec::new(),
+        };
     };
     let lower = today - chrono::Duration::days(6);
     let in_window: Vec<&Entry> = entries
@@ -171,12 +194,15 @@ pub fn week_summary(entries: &[Entry], today: &str) -> WeekSummary {
             }
         })
         .collect();
-    WeekSummary { sessions: in_window.len() as u32, per_topic }
+    WeekSummary {
+        sessions: in_window.len() as u32,
+        per_topic,
+    }
 }
 
 /// Count of curriculum items in the two "deepest" states (`tokens::STATE_SETTLED`,
 /// `tokens::STATE_DEEPENED`). Reads each line's state through `tokens::map_state_of`
-/// (exact-segment match against `tokens::STATES`) — the same mechanism `tui::welcome`
+/// (exact-segment match against `tokens::STATES`) — the same mechanism `tui::welcome_data`
 /// uses, so state classification stays in sync by construction.
 pub fn settled_count(curriculum: &str) -> Option<usize> {
     Some(
@@ -208,8 +234,19 @@ mod tests {
 
     #[test]
     fn streaks_count_consecutive_days() {
-        let mk = |d: &str| Entry { date: d.into(), topic: "t".into(), map: None, settled: None };
-        let es = vec![mk("2026-08-10"), mk("2026-08-13"), mk("2026-08-14"), mk("2026-08-15"), mk("2026-08-15")];
+        let mk = |d: &str| Entry {
+            date: d.into(),
+            topic: "t".into(),
+            map: None,
+            settled: None,
+        };
+        let es = vec![
+            mk("2026-08-10"),
+            mk("2026-08-13"),
+            mk("2026-08-14"),
+            mk("2026-08-15"),
+            mk("2026-08-15"),
+        ];
         assert_eq!(current_streak(&es, "2026-08-15"), 3);
         // bugün oturum yok ama dün biten seri güncel sayılır
         assert_eq!(current_streak(&es, "2026-08-16"), 3);
@@ -221,7 +258,12 @@ mod tests {
 
     #[test]
     fn week_summary_windows_and_groups() {
-        let mk = |d: &str, t: &str, m: u8, s: usize| Entry { date: d.into(), topic: t.into(), map: Some(m), settled: Some(s) };
+        let mk = |d: &str, t: &str, m: u8, s: usize| Entry {
+            date: d.into(),
+            topic: t.into(),
+            map: Some(m),
+            settled: Some(s),
+        };
         let es = vec![
             mk("2026-08-07", "rust", 30, 3), // 8 gün önce — pencere dışı
             mk("2026-08-09", "rust", 40, 4),
@@ -231,7 +273,10 @@ mod tests {
         let w = week_summary(&es, "2026-08-15");
         assert_eq!(w.sessions, 3);
         let rust = w.per_topic.iter().find(|t| t.topic == "rust").unwrap();
-        assert_eq!((rust.sessions, rust.map_from, rust.map_to), (2, Some(40), Some(55)));
+        assert_eq!(
+            (rust.sessions, rust.map_from, rust.map_to),
+            (2, Some(40), Some(55))
+        );
     }
 
     #[test]
@@ -243,7 +288,8 @@ mod tests {
 
     #[test]
     fn settled_count_ignores_state_words_in_item_text() {
-        let c = "- makale hakkında settled: not seen\n- b: settled\n- c: deepened | due: 2026-01-01\n";
+        let c =
+            "- makale hakkında settled: not seen\n- b: settled\n- c: deepened | due: 2026-01-01\n";
         assert_eq!(settled_count(c), Some(2));
     }
 

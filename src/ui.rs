@@ -21,7 +21,7 @@ pub const RESET: &str = "\x1b[0m";
 /// buffered/no-op so they don't collide with ratatui's inline viewport.
 static TUI_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Notices accumulated while the TUI is active — run.rs flushes these to the
+/// Notices accumulated while the TUI is active — tui/page.rs flushes these to the
 /// scrollback via page_notice.
 static TUI_NOTICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -104,7 +104,7 @@ pub fn notice(msg: &str) {
 
 /// Amber warning line (stderr): `⚠ ` glyph + amber, the design-system caution
 /// voice. While the TUI is live it's buffered with the same `⚠ ` prefix so
-/// run.rs's flush routes it to the amber layer.
+/// tui/page.rs's flush routes it to the amber layer.
 pub fn warn(msg: &str) {
     use crate::tui::theme;
     if tui_active() {
@@ -138,7 +138,11 @@ pub fn context_gauge(tokens: Option<u64>, window: u64) {
     let filled = ((ratio * 8.0).round() as usize).min(8);
     let bar = format!("{}{}", "▓".repeat(filled), "░".repeat(8 - filled));
     let color = if ratio >= 0.7 { AMBER } else { DIM };
-    println!("{color}  {bar} context {}k/{}k{RESET}", t / 1000, window / 1000);
+    println!(
+        "{color}  {bar} context {}k/{}k{RESET}",
+        t / 1000,
+        window / 1000
+    );
 }
 
 /// One-line animation while waiting for the LLM. Draws nothing in plain mode.
@@ -153,7 +157,10 @@ impl Spinner {
         // Also a no-op while the TUI is active: it has its own spinner (Status::Thinking),
         // if this one started too, the background print! task would clobber the viewport.
         if is_plain() || tui_active() {
-            return Spinner { stop_tx: None, handle: None };
+            return Spinner {
+                stop_tx: None,
+                handle: None,
+            };
         }
         let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
@@ -172,7 +179,10 @@ impl Spinner {
             print!("\r\x1b[2K");
             let _ = std::io::Write::flush(&mut std::io::stdout());
         });
-        Spinner { stop_tx: Some(tx), handle: Some(handle) }
+        Spinner {
+            stop_tx: Some(tx),
+            handle: Some(handle),
+        }
     }
 
     pub async fn stop(mut self) {

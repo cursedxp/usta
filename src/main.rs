@@ -36,7 +36,7 @@ use anyhow::Result;
 
 use crate::cli::{parse_command, Command, ResetTarget};
 use crate::lifecycle::{build_session, flush_core, flush_progress, lock_path, today};
-use crate::plain::{resolve_topic, run_plain_loop};
+use crate::plain::{resolve_topic, run_plain_loop, PlainLoopCtx};
 use crate::setup::{
     confirm, confirm_recover, ensure_scaffold, profile_is_generic, run_init, run_migration,
     run_reset_factory, run_reset_profile, run_reset_topic, run_stats, run_topics,
@@ -241,14 +241,16 @@ async fn main() -> Result<()> {
         run_plain_loop(
             &mut backend,
             &mut session,
-            &recorder,
-            &project_root,
-            &global,
-            &topic,
-            has_progress,
-            intro.as_deref(),
-            profile_generic,
             &mut watch_rx,
+            PlainLoopCtx {
+                recorder: &recorder,
+                project_root: &project_root,
+                global: &global,
+                topic: &topic,
+                has_progress,
+                intro: intro.as_deref(),
+                profile_generic,
+            },
         )
         .await?;
         (session, recorder, lock)

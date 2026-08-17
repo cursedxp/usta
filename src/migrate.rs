@@ -68,11 +68,17 @@ pub fn migrate_content(content: &str) -> Option<String> {
         let mut new = body.to_string();
         // 1) Full-line headers (exact line match, trailing space tolerated).
         for (old, newh) in HEADERS {
-            if new.trim_end() == old { new = newh.to_string(); break; }
+            if new.trim_end() == old {
+                new = newh.to_string();
+                break;
+            }
         }
         // 2) `# <topic> — İlerleme` heading.
         if new.starts_with("# ") && new.trim_end().ends_with("— İlerleme") {
-            new = format!("{}— Progress", new.trim_end().strip_suffix("— İlerleme").unwrap());
+            new = format!(
+                "{}— Progress",
+                new.trim_end().strip_suffix("— İlerleme").unwrap()
+            );
         }
         // 3) Map-state segment on `- item: state [| due: …]` lines.
         if let Some(stripped) = new.strip_prefix("- ") {
@@ -89,9 +95,13 @@ pub fn migrate_content(content: &str) -> Option<String> {
         }
         // 4) Context-free markers.
         for (old, newm) in MARKERS {
-            if new.contains(old) { new = new.replace(old, newm); }
+            if new.contains(old) {
+                new = new.replace(old, newm);
+            }
         }
-        if new != body { changed = true; }
+        if new != body {
+            changed = true;
+        }
         out.push_str(&new);
         out.push_str(nl);
     }
@@ -108,10 +118,16 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn migrate_file(path: &Path) -> Result<bool> {
-    let Ok(content) = fs::read_to_string(path) else { return Ok(false) };
-    let Some(new) = migrate_content(&content) else { return Ok(false) };
+    let Ok(content) = fs::read_to_string(path) else {
+        return Ok(false);
+    };
+    let Some(new) = migrate_content(&content) else {
+        return Ok(false);
+    };
     let bak = sibling(path, ".bak");
-    if !bak.exists() { fs::copy(path, &bak)?; } // ilk hal korunur, asla ezilmez
+    if !bak.exists() {
+        fs::copy(path, &bak)?;
+    } // ilk hal korunur, asla ezilmez
     let tmp = sibling(path, ".tmp");
     fs::write(&tmp, &new)?;
     fs::rename(&tmp, path)?; // atomik
@@ -144,7 +160,9 @@ pub fn run(global: &Path, project_usta: Option<&Path>) -> Result<usize> {
         let Ok(rd) = fs::read_dir(&dir) else { continue };
         for e in rd.flatten() {
             let p = e.path();
-            if p.extension().is_some_and(|x| x == ext) && migrate_file(&p)? { n += 1; }
+            if p.extension().is_some_and(|x| x == ext) && migrate_file(&p)? {
+                n += 1;
+            }
         }
     }
     Ok(n)
@@ -221,7 +239,10 @@ mod tests {
 
         let second = run(&global, Some(&project_usta)).unwrap();
         assert_eq!(second, 0); // idempotent: already-migrated file, nothing left to change
-        assert_eq!(fs::read_to_string(&bak).unwrap(), "SENTINEL — never overwritten");
+        assert_eq!(
+            fs::read_to_string(&bak).unwrap(),
+            "SENTINEL — never overwritten"
+        );
     }
 
     #[test]
@@ -265,13 +286,24 @@ mod tests {
         let index_md = global.join("learner/index.md");
         fs::write(&index_md, "## Kayıtlar\n- rust | /proje | 2026-08-01\n").unwrap();
         let progress_md = project_usta.join("learner/progress/rust.md");
-        fs::write(&progress_md, "# rust — İlerleme\n\n## Seviye\n- a: oturdu\n").unwrap();
+        fs::write(
+            &progress_md,
+            "# rust — İlerleme\n\n## Seviye\n- a: oturdu\n",
+        )
+        .unwrap();
 
         let first = run(&global, Some(&project_usta)).unwrap();
-        assert!(first >= 3, "expected at least 3 migrated files, got {first}");
+        assert!(
+            first >= 3,
+            "expected at least 3 migrated files, got {first}"
+        );
 
-        assert!(fs::read_to_string(&user_md).unwrap().contains("## Preferences"));
-        assert!(fs::read_to_string(&index_md).unwrap().contains("## Records"));
+        assert!(fs::read_to_string(&user_md)
+            .unwrap()
+            .contains("## Preferences"));
+        assert!(fs::read_to_string(&index_md)
+            .unwrap()
+            .contains("## Records"));
         let progress_after = fs::read_to_string(&progress_md).unwrap();
         assert!(progress_after.contains("# rust — Progress"));
         assert!(progress_after.contains("## Level"));

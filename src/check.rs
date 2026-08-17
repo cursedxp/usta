@@ -58,10 +58,8 @@ mod tests {
 
     #[test]
     fn is_cargo_project_true_when_manifest_exists() {
-        let base = std::env::temp_dir().join(format!(
-            "usta_check_test_manifest_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("usta_check_test_manifest_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("Cargo.toml"), "[package]").unwrap();
@@ -71,10 +69,8 @@ mod tests {
 
     #[test]
     fn is_cargo_project_false_without_manifest() {
-        let base = std::env::temp_dir().join(format!(
-            "usta_check_test_nomanifest_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("usta_check_test_nomanifest_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         assert!(!is_cargo_project(&base));

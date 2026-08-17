@@ -14,7 +14,9 @@ pub const STATES: [&str; 4] = [STATE_NOT_SEEN, STATE_SEEN, STATE_SETTLED, STATE_
 /// Exact segment match — never a substring scan ("seen" ⊂ "not seen").
 pub fn map_state_of(line: &str) -> Option<&'static str> {
     let line = line.trim();
-    if !line.starts_with("- ") { return None; }
+    if !line.starts_with("- ") {
+        return None;
+    }
     let head = line.split(" | ").next().unwrap_or(line); // drop `| due:` tail
     let state = head.rsplit(':').next()?.trim();
     STATES.iter().find(|s| **s == state).copied()

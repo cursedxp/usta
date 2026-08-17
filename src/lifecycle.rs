@@ -208,7 +208,7 @@ pub(crate) async fn flush_core(
                 let cur = std::fs::read_to_string(&c_path).ok();
                 let map = cur
                     .as_deref()
-                    .and_then(crate::tui::welcome::curriculum_percent);
+                    .and_then(crate::tui::welcome_data::curriculum_percent);
                 let settled = cur.as_deref().and_then(history::settled_count);
                 let line = history::record_line(&today(), topic, map, settled);
                 if let Err(e) = history::append(g, &line) {
