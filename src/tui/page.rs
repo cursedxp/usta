@@ -1,3 +1,7 @@
+//! The TUI session loop's paging layer: pushing persistent content into
+//! scrollback and redrawing the live bottom region — extracted from `run.rs`
+//! (cleanup round, Task 4).
+
 use anyhow::Result;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::text::{Line, Text};

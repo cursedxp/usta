@@ -17,6 +17,26 @@
 | `src/tui/run.rs` | 1185 | ~1062 | ~123 (satır 1062'den) |
 | `src/tui/welcome.rs` | 797 | ~795 | 0 (Task 1'de `welcome_tests.rs`'e ayrıldı) |
 
+### Ulaşılan (Task 8 sonrası, `wc -l src/*.rs src/tui/*.rs`)
+
+| dosya | satır | not |
+|---|---|---|
+| `src/tui/run.rs` | 591 | `use` bloğu + `run()` (558, bilinçli istisna — aşağıda) |
+| `src/tui/welcome.rs` | 591 | `LOGO`, `fit`/`wrap`/`pad`/`week_line`, render'lar; veri yarısı çıktı |
+| `src/tui/welcome_data.rs` | 215 | Task 2 — Spec §5 veri toplama, ratatui bağımsız |
+| `src/tui/paint.rs` | 237 | Task 3 — saf builder'lar + key sınıflandırıcılar |
+| `src/tui/page.rs` | 90 | Task 4 — sayfalama katmanı |
+| `src/tui/ask.rs` | 107 | Task 5 — `ask_live`/`tui_confirm` |
+| `src/tui/entry.rs` | 217 | Task 6 — `ask_topic` + görsel tetikleyiciler |
+
+En büyük beş dosya (`wc -l`, en büyükten): `tui/welcome_tests.rs` 853, `visual.rs` 739, `tui/welcome.rs` 591, `tui/run.rs` 591, `setup.rs` 574. Toplam (tüm `src/*.rs` + `src/tui/*.rs`): 13182 satır.
+
+**`tui/welcome_tests.rs` (853) bütçe dışı, gözden kaçmadı — muaf.** `#[cfg(test)] #[path = "welcome_tests.rs"]` deseniyle ayrılmış bağımsız bir test dosyası (`welcome.rs:590`); kuralın kendi metni "test modülü bütçeye girmez" diyor. Değerlendirildi ve muafiyetle uyumlu, atlanmadı.
+
+**`visual.rs` (739 toplam) uyumlu ama izlenmeli — ihlal değil.** Test modülü 264. satırda başlıyor, yani ~263 satır üretim kodu — bütçenin (600) çok altında. Ama dosyanın toplamı büyük, ve `welcome.rs`/`progress.rs`/`setup.rs`'in zaten aldığı `#[path]` test-ayrımı büyürse bariz bir sonraki adım. Bu tur çıkarmıyor — kapsam dışı; yalnız kayda geçiyor.
+
+Sonuç: crate'te 600 satır üretim bütçesini aşan modül yok. `cargo test` → 372/372, `cargo clippy --all-targets` → sıfır uyarı, `cargo fmt --check` → temiz.
+
 ## `run.rs` — bütçeye `run()`'a dokunmadan iniliyor
 
 Harita çıkarıldıktan sonraki kritik bulgu: **`run()` tek başına 558 satır** (493-1051) ve `Tui`, `InputBox`, `EventStream`, `Session`, `Backend`'i `.await`'ler boyunca canlı tutuyor. Dosyadaki fonksiyonların neredeyse hepsi `&mut Tui` taşıyor.

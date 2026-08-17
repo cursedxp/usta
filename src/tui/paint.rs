@@ -1,5 +1,6 @@
 //! Pure text/style builders and key classifiers for the TUI session loop —
-//! nothing here touches `&mut Tui` (spec B2/S1).
+//! nothing here touches `&mut Tui` (spec B2/S1) — extracted from `run.rs`
+//! (cleanup round, Task 3).
 
 use std::path::Path;
 

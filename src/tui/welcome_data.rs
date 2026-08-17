@@ -1,4 +1,5 @@
-//! Welcome box data gathering (pure) — no ratatui dependency. Spec §5.
+//! Welcome box data gathering (pure) — no ratatui dependency. Spec §5 —
+//! extracted from `welcome.rs` (cleanup round, Task 2).
 //! All parsing is best-effort — malformed/missing input skips the field, never panics.
 
 use crate::tokens;
