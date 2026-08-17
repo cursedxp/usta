@@ -10,98 +10,18 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode};
 use futures_util::StreamExt;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::text::{Line, Text};
-use ratatui::widgets::{Paragraph, Widget};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::anthropic::Message;
 use crate::backend::Backend;
 use crate::session::Session;
 use crate::transcript::Recorder;
-use crate::tui::convert::ansi_to_text;
 use crate::tui::editor::{Action, InputBox};
-use crate::tui::status::{render_status, Status};
-use crate::tui::term::{Tui, VIEWPORT_H};
-use crate::tui::theme;
+use crate::tui::status::Status;
+use crate::tui::term::Tui;
 use crate::tui::welcome;
 use crate::tui::welcome_data;
-use crate::{feedback, history, progress, ui, watcher};
-
-/// Push persistent content above the viewport (into scrollback).
-fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
-    let h = text.height() as u16;
-    tui.terminal.insert_before(h, |buf| {
-        Paragraph::new(text).render(buf.area, buf);
-    })?;
-    Ok(())
-}
-
-/// Print Usta's reply in the visual language: orange ● line + markdown + blank line.
-fn page_reply(tui: &mut Tui, reply: &str, width: u16) -> Result<()> {
-    let ansi = ui::render_markdown(reply, width as usize);
-    let mut t = ansi_to_text(&format!(
-        "\x1b[38;5;{}m{}\x1b[0m\n{ansi}\n",
-        theme::BRAND_IDX,
-        theme::G_BRAND
-    ));
-    t.lines.push(Line::raw(""));
-    page(tui, t)
-}
-
-fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, crate::tui::paint::notice_line(msg))
-}
-fn page_warn(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, crate::tui::paint::warn_line(msg))
-}
-fn page_error(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, crate::tui::paint::error_line(msg))
-}
-
-/// Flush the notices buffered by ui::notice/ui::warn while the TUI was live,
-/// routing each to the right scan-level: a leading `⚠ ` (from ui::warn) renders
-/// as the amber warning layer; everything else is a dim `·` info line.
-fn flush_notices(tui: &mut Tui) -> Result<()> {
-    for m in ui::drain_tui_notices() {
-        match m.strip_prefix(&format!("{} ", theme::G_WARN)) {
-            Some(rest) => page_warn(tui, rest)?,
-            None => page_notice(tui, &m)?,
-        }
-    }
-    Ok(())
-}
-
-/// Push the user's submitted line to scrollback — wrapped to the current width.
-fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
-    let w = current_width(tui);
-    page(tui, crate::tui::paint::user_echo_text(line, w))
-}
-
-/// Current terminal width — keeps wrapping correct after a resize (spec B3).
-/// Falls back to 80 if measurement fails (wrapping doesn't break, just gets narrow).
-fn current_width(tui: &Tui) -> u16 {
-    tui.terminal.size().map(|s| s.width).unwrap_or(80)
-}
-
-/// Draw the bottom region: input box (top) + status line (bottom).
-fn draw(
-    tui: &mut Tui,
-    editor: &InputBox,
-    status: &Status,
-    tokens: Option<u64>,
-    window: u64,
-    watching: Option<bool>,
-) -> Result<()> {
-    tui.terminal.draw(|f| {
-        let [box_area, status_area] =
-            Layout::vertical([Constraint::Length(VIEWPORT_H - 1), Constraint::Length(1)])
-                .areas(f.area());
-        editor.render(f, box_area);
-        f.render_widget(render_status(status, tokens, window, watching), status_area);
-    })?;
-    Ok(())
-}
+use crate::{feedback, history, progress, watcher};
 
 /// Result of ask_live: either a reply arrived or the user cancelled with double Ctrl-C.
 pub enum AskOutcome {
@@ -129,7 +49,7 @@ async fn ask_live(
     let mut frame = 0usize;
     let mut cancel_armed = false; // true after the first Ctrl-C — the counter doesn't reset (spec B2)
     loop {
-        draw(
+        crate::tui::page::draw(
             tui,
             editor,
             &Status::Thinking {
@@ -221,7 +141,7 @@ async fn run_visual_generation(
                                 crate::visual::prune_visuals(d, 10);
                             }
                             let opened = crate::visual::open_in_browser(&path);
-                            page_notice(
+                            crate::tui::page::page_notice(
                                 tui,
                                 &format!(
                                     "visual saved: {}{}",
@@ -234,17 +154,19 @@ async fn run_visual_generation(
                                 ),
                             )
                         }
-                        Err(e) => page_error(tui, &format!("error: {e}")),
+                        Err(e) => crate::tui::page::page_error(tui, &format!("error: {e}")),
                     }
                 }
-                Err(e) => page_error(
+                Err(e) => crate::tui::page::page_error(
                     tui,
                     &format!("visual generation failed ({e}) — try /show again"),
                 ),
             }
         }
-        Ok(AskOutcome::Cancelled) => page_notice(tui, "visual generation cancelled"),
-        Err(e) => page_error(tui, &format!("error: {e}")),
+        Ok(AskOutcome::Cancelled) => {
+            crate::tui::page::page_notice(tui, "visual generation cancelled")
+        }
+        Err(e) => crate::tui::page::page_error(tui, &format!("error: {e}")),
     };
     backend.reset_session(); // all paths — slug parity, ALWAYS runs (see notice_result above)
     notice_result
@@ -271,7 +193,7 @@ async fn trigger_auto_visual(
         Some(t.clone()),
         crate::visual::last_assistant_text(session).as_deref(),
     ) {
-        page_notice(tui, &format!("visualizing: {t}…"))?;
+        crate::tui::page::page_notice(tui, &format!("visualizing: {t}…"))?;
         run_visual_generation(
             tui,
             editor,
@@ -315,8 +237,8 @@ async fn ask_topic(
     // NOT printed again.
     if show_welcome {
         let name = profile.and_then(welcome_data::extract_name);
-        let width = current_width(tui);
-        page(
+        let width = crate::tui::page::current_width(tui);
+        crate::tui::page::page(
             tui,
             welcome::render_welcome_identity(
                 name.as_deref(),
@@ -338,11 +260,11 @@ async fn ask_topic(
         } else {
             "What do you want to learn? (a word, or describe it in a sentence)"
         };
-        page_notice(tui, prompt_line)?;
+        crate::tui::page::page_notice(tui, prompt_line)?;
     }
 
     loop {
-        draw(tui, editor, &Status::Idle, None, 0, None)?;
+        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => {
                 // Empty Enter = resume sentinel (only when there's a topic to resume) —
@@ -377,9 +299,9 @@ async fn tui_confirm(
     events: &mut EventStream,
     msg: &str,
 ) -> Result<bool> {
-    page_notice(tui, msg)?;
+    crate::tui::page::page_notice(tui, msg)?;
     loop {
-        draw(tui, editor, &Status::Idle, None, 0, None)?;
+        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => match k.code {
                 KeyCode::Char('y')
@@ -488,13 +410,13 @@ pub async fn run(
                 };
                 welcome_shown = true;
                 if !raw.trim().is_empty() {
-                    page_user_echo(&mut tui, raw.trim())?;
+                    crate::tui::page::page_user_echo(&mut tui, raw.trim())?;
                 }
                 // Slash commands at topic entry: the hint above the prompt promises
                 // /help, so honor it here too; session-only commands get a pointer
                 // instead of silently being slugged into a topic name.
                 if crate::help::is_help_command(&raw) {
-                    page_notice(&mut tui, crate::help::help_text())?;
+                    crate::tui::page::page_notice(&mut tui, crate::help::help_text())?;
                     continue;
                 }
                 if raw.trim().eq_ignore_ascii_case("/quit") {
@@ -503,7 +425,7 @@ pub async fn run(
                 if crate::visual::parse_show_command(&raw).is_some()
                     || crate::slash::parse_watch_command(&raw).is_some()
                 {
-                    page_notice(
+                    crate::tui::page::page_notice(
                         &mut tui,
                         "that command works inside a session — pick a topic first",
                     )?;
@@ -539,11 +461,14 @@ pub async fn run(
                             Ok(AskOutcome::Cancelled) | Err(_) => None,
                         };
                         let Some((slug, text)) = parsed else {
-                            page_error(&mut tui, "suggestion failed — type a topic")?;
+                            crate::tui::page::page_error(
+                                &mut tui,
+                                "suggestion failed — type a topic",
+                            )?;
                             continue;
                         };
                         if !text.is_empty() {
-                            page_notice(&mut tui, &text)?;
+                            crate::tui::page::page_notice(&mut tui, &text)?;
                         }
                         if tui_confirm(
                             &mut tui,
@@ -553,17 +478,17 @@ pub async fn run(
                         )
                         .await?
                         {
-                            page_notice(&mut tui, &format!("topic: {slug}"))?;
+                            crate::tui::page::page_notice(&mut tui, &format!("topic: {slug}"))?;
                             intro = Some(format!(
                                 "Usta's own opening suggestion (already shown to the user, \
                                  they accepted it — continue from its first step, don't repeat it):\n{text}"
                             ));
                             break slug;
                         }
-                        page_notice(&mut tui, "cancelled — type a topic")?;
+                        crate::tui::page::page_notice(&mut tui, "cancelled — type a topic")?;
                     }
                     Some(crate::topic::TopicChoice::Resume(t)) => {
-                        page_notice(&mut tui, &format!("resuming: {t}"))?;
+                        crate::tui::page::page_notice(&mut tui, &format!("resuming: {t}"))?;
                         resumed = true; // for the continuation panel below
                         break t;
                     }
@@ -598,7 +523,7 @@ pub async fn run(
                         // counts as RESUME (spec K2): the notice becomes "resuming", the
                         // identity-free continuation panel is printed, NO confirmation.
                         if local.contains(&slug) {
-                            page_notice(&mut tui, &format!("resuming: {slug}"))?;
+                            crate::tui::page::page_notice(&mut tui, &format!("resuming: {slug}"))?;
                             resumed = true;
                             break slug;
                         }
@@ -613,7 +538,7 @@ pub async fn run(
                             )
                             .await?
                         {
-                            page_notice(
+                            crate::tui::page::page_notice(
                                 &mut tui,
                                 &format!("topic: {slug} — tell me the details in chat"),
                             )?;
@@ -621,7 +546,7 @@ pub async fn run(
                             break slug;
                         }
                         // Rejected → go back to the entry question (welcome is not printed again).
-                        page_notice(
+                        crate::tui::page::page_notice(
                             &mut tui,
                             "cancelled — Enter = resume, or type another topic",
                         )?;
@@ -643,7 +568,7 @@ pub async fn run(
         )
         .await?
     {
-        page_notice(&mut tui, "cancelled")?;
+        crate::tui::page::page_notice(&mut tui, "cancelled")?;
         return Ok(None);
     }
 
@@ -683,13 +608,13 @@ pub async fn run(
             today,
             read(global.join("learner/history.md")).as_deref(),
         );
-        let w = current_width(&tui);
+        let w = crate::tui::page::current_width(&tui);
         // `None` only on the resume path with nothing recorded yet (Finding 1,
         // v0.21 review) — the `resuming: <topic>` notice already printed by the
         // topic-entry loop stands on its own; skip the panel rather than print
         // an empty frame.
         if let Some(text) = welcome::render_for_entry(had_topic_arg, &data, w) {
-            page(&mut tui, text)?;
+            crate::tui::page::page(&mut tui, text)?;
         }
     }
 
@@ -718,7 +643,7 @@ pub async fn run(
         )
     } else {
         for note in crate::materials::convert_pdfs(project_root) {
-            page_notice(&mut tui, &note)?;
+            crate::tui::page::page_notice(&mut tui, &note)?;
         }
         let mats = crate::materials::scan(project_root);
         let material_digest = crate::materials::combined_digests(&mats);
@@ -746,8 +671,8 @@ pub async fn run(
         Ok(AskOutcome::Reply(reply)) => {
             last_tokens = reply.context_tokens;
             let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-            let w = current_width(&tui);
-            page_reply(&mut tui, &clean, w)?;
+            let w = crate::tui::page::current_width(&tui);
+            crate::tui::page::page_reply(&mut tui, &clean, w)?;
             recorder.assistant(&clean);
             session.push_assistant(clean);
             trigger_auto_visual(
@@ -765,9 +690,9 @@ pub async fn run(
         }
         Ok(AskOutcome::Cancelled) => {
             backend.reset_session();
-            page_notice(&mut tui, "opening turn cancelled")?;
+            crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
         }
-        Err(e) => page_error(&mut tui, &format!("opening turn skipped: {e}"))?,
+        Err(e) => crate::tui::page::page_error(&mut tui, &format!("opening turn skipped: {e}"))?,
     }
 
     let mut watching = true;
@@ -775,8 +700,8 @@ pub async fn run(
         // Drain the buffer at the start of every iteration — notices that
         // accumulate outside maybe_compact, like a transcript write error,
         // should never be lost either.
-        flush_notices(&mut tui)?;
-        draw(
+        crate::tui::page::flush_notices(&mut tui)?;
+        crate::tui::page::draw(
             &mut tui,
             &editor,
             &Status::Idle,
@@ -801,24 +726,24 @@ pub async fn run(
                     Action::Exit => break,
                     Action::Submit(line) => {
                         if let Some(cmd) = crate::slash::parse_watch_command(&line) {
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             let (next, msg) = crate::slash::apply_watch(cmd, watching);
                             watching = next;
-                            page_notice(&mut tui, msg)?;
+                            crate::tui::page::page_notice(&mut tui, msg)?;
                             continue;
                         }
                         if crate::help::is_help_command(&line) {
-                            page_user_echo(&mut tui, &line)?;
-                            page_notice(&mut tui, crate::help::help_text())?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_notice(&mut tui, crate::help::help_text())?;
                             continue;
                         }
                         if let Some(arg) = crate::visual::parse_show_command(&line) {
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                             // Borrow care: read the last reply BEFORE any &mut session borrow.
                             let last = crate::visual::last_assistant_text(&session);
                             match crate::visual::show_request(arg, last.as_deref()) {
-                                None => page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
+                                None => crate::tui::page::page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
                                 Some(req) => {
                                     run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
                                 }
@@ -831,10 +756,10 @@ pub async fn run(
                         // (swapped below) that flows through the normal ask — same shape as /exam.
                         let game_cmd = crate::slash::parse_game_command(&line);
                         if let Some(cmd) = &game_cmd {
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             match cmd {
                                 crate::slash::GameCmd::Status => {
-                                    page_notice(&mut tui, if crate::slash::game_pref(global) {
+                                    crate::tui::page::page_notice(&mut tui, if crate::slash::game_pref(global) {
                                         "gamification is on"
                                     } else {
                                         "gamification is off"
@@ -844,10 +769,10 @@ pub async fn run(
                                 crate::slash::GameCmd::On | crate::slash::GameCmd::Off => {
                                     let on = matches!(cmd, crate::slash::GameCmd::On);
                                     if let Err(e) = crate::slash::set_game_pref(global, on) {
-                                        page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
+                                        crate::tui::page::page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
                                         continue;
                                     }
-                                    page_notice(&mut tui, if on {
+                                    crate::tui::page::page_notice(&mut tui, if on {
                                         "gamification on — XP, levels and badges are live"
                                     } else {
                                         "gamification off — back to quiet mode"
@@ -858,9 +783,9 @@ pub async fn run(
                         // /exam: echo the literal command, gate on goal presence, then swap the
                         // outgoing text and fall through to the normal ask flow below.
                         let outgoing = if crate::slash::is_exam_command(&line) {
-                            page_user_echo(&mut tui, "/exam")?;
+                            crate::tui::page::page_user_echo(&mut tui, "/exam")?;
                             if !crate::slash::topic_has_goal(project_root, global, &topic) {
-                                page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
+                                crate::tui::page::page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
                                 continue;
                             }
                             progress::exam_prompt(&topic)
@@ -875,7 +800,7 @@ pub async fn run(
                             }
                         } else {
                             // Push the submitted line to scrollback as a distinct user block.
-                            page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
                             line.clone()
                         };
                         session.push_user(&outgoing);
@@ -887,8 +812,8 @@ pub async fn run(
                             Ok(AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
                                 let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-                                let w = current_width(&tui);
-                                page_reply(&mut tui, &clean, w)?;
+                                let w = crate::tui::page::current_width(&tui);
+                                crate::tui::page::page_reply(&mut tui, &clean, w)?;
                                 recorder.assistant(&clean);
                                 session.push_assistant(clean);
                                 crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await;
@@ -899,9 +824,9 @@ pub async fn run(
                                 // session is half-done — don't resume it, the next call should go
                                 // with the full transcript.
                                 backend.reset_session();
-                                page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
+                                crate::tui::page::page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
                             }
-                            Err(e) => page_error(&mut tui, &format!("error: {e}"))?,
+                            Err(e) => crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?,
                         }
                     }
                 }
@@ -912,7 +837,7 @@ pub async fn run(
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 let batch = debouncer.flush();
                 if batch.len() > max_feedback_batch {
-                    page_notice(&mut tui, &format!(
+                    crate::tui::page::page_notice(&mut tui, &format!(
                         "bulk change ({} files) — feedback skipped, still watching",
                         batch.len()
                     ))?;
@@ -933,11 +858,11 @@ pub async fn run(
                     for path in batch {
                         match crate::file_feedback::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
                             Ok(crate::file_feedback::FileFeedback::Sessiz) => {}
-                            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => page_notice(&mut tui, &m)?,
+                            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => crate::tui::page::page_notice(&mut tui, &m)?,
                             Ok(crate::file_feedback::FileFeedback::Yanit { tokens, reply, show_topic }) => {
                                 if let Some(t) = tokens { last_tokens = Some(t); }
-                                let w = current_width(&tui);
-                                page_reply(&mut tui, &reply.text, w)?;
+                                let w = crate::tui::page::current_width(&tui);
+                                crate::tui::page::page_reply(&mut tui, &reply.text, w)?;
                                 crate::lifecycle::maybe_compact(backend, &mut session, project_root, tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
@@ -945,7 +870,7 @@ pub async fn run(
                             // is_silent_skip (file_feedback.rs): vanished temp file
                             // (NotFound) or binary content (InvalidData) — no noise for either.
                             Err(e) if crate::file_feedback::is_silent_skip(&e) => {}
-                            Err(e) => page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
+                            Err(e) => crate::tui::page::page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
                         }
                     }
                 }
@@ -955,6 +880,6 @@ pub async fn run(
     // Drain the last iteration's notices right before exit — so a transcript
     // warning that lands in the buffer on the /quit or Exit path is still seen
     // while the TUI is up.
-    flush_notices(&mut tui)?;
+    crate::tui::page::flush_notices(&mut tui)?;
     Ok(Some((session, recorder, lock))) // Tui drop → restore
 }

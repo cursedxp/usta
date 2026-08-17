@@ -3,6 +3,7 @@
 
 pub mod convert;
 pub mod editor;
+pub mod page;
 pub mod paint;
 pub mod run;
 pub mod status;
