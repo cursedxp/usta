@@ -138,20 +138,32 @@ async fn derive_slug(backend: &mut Backend, raw: &str, known: &[String]) -> Stri
     out
 }
 
+/// Bundles the by-value and shared-reference parameters of [`run_plain_loop`]
+/// that don't need `&mut` access — `backend`, `session` and `watch_rx` stay
+/// as direct arguments since a struct is the wrong home for `&mut` fields.
+/// This keeps `run_plain_loop` at four arguments instead of ten, and — the
+/// real point — replaces four positional slots that type-check identically
+/// in pairs (`project_root`/`global`: both `&Path`; `has_progress`/
+/// `profile_generic`: both `bool`) with named fields a transposition can't
+/// silently pass the compiler.
+pub(crate) struct PlainLoopCtx<'a> {
+    pub(crate) recorder: &'a transcript::Recorder,
+    pub(crate) project_root: &'a Path,
+    pub(crate) global: &'a Path,
+    pub(crate) topic: &'a str,
+    pub(crate) has_progress: bool,
+    pub(crate) intro: Option<&'a str>,
+    pub(crate) profile_generic: bool,
+}
+
 /// Plain (line-based) REPL loop: rustyline input thread + watcher + debounce
 /// all in one select!. Runs when there's no TTY / in NO_COLOR — behavior identical
 /// to the old main loop (banner is printed in main, drill + loop live here).
 pub(crate) async fn run_plain_loop(
     backend: &mut Backend,
     session: &mut Session,
-    recorder: &transcript::Recorder,
-    project_root: &Path,
-    global: &Path,
-    topic: &str,
-    has_progress: bool,
-    intro: Option<&str>,
-    profile_generic: bool,
     watch_rx: &mut tokio::sync::mpsc::UnboundedReceiver<PathBuf>,
+    ctx: PlainLoopCtx<'_>,
 ) -> Result<()> {
     // Input thread + debounce state — specific to the plain path (rustyline).
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
@@ -160,29 +172,29 @@ pub(crate) async fn run_plain_loop(
     let mut files = feedback::FileMemory::new();
     // Mentor docs are already in the system prompt — baseline them so an
     // unchanged re-save is a Skip, not a redundant full re-send (FIX: first-sight seed).
-    seed_mentor_baseline(&mut files, project_root);
+    seed_mentor_baseline(&mut files, ctx.project_root);
 
     // Opening drill: if progress exists from previous sessions, Usta speaks first,
     // warming up with 2-3 recall questions (testing effect — USTA.md rule).
-    let project_known = progress::project_md_path(project_root).exists();
-    if has_progress {
+    let project_known = progress::project_md_path(ctx.project_root).exists();
+    if ctx.has_progress {
         let td = today();
-        let gs = game_streak_line(global, &td);
+        let gs = game_streak_line(ctx.global, &td);
         let progress_content =
-            std::fs::read_to_string(progress::progress_path(project_root, topic))
+            std::fs::read_to_string(progress::progress_path(ctx.project_root, ctx.topic))
                 .unwrap_or_default();
         let due = crate::tui::welcome_data::due_questions(&progress_content, &td);
         let has_questions = crate::tui::welcome_data::drill_count(&progress_content) > 0;
         let opening = progress::opening_prompt(
-            topic,
-            profile_generic,
+            ctx.topic,
+            ctx.profile_generic,
             project_known,
             gs.as_deref(),
             &due,
             has_questions,
         );
         session.push_user(&opening);
-        recorder.user(&opening);
+        ctx.recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
                 let (clean, show_topic) = visual::extract_show_marker(&reply.text);
@@ -192,29 +204,30 @@ pub(crate) async fn run_plain_loop(
                     reply.context_tokens,
                     backend.context_window(),
                 );
-                recorder.assistant(&clean);
+                ctx.recorder.assistant(&clean);
                 session.push_assistant(clean);
-                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
+                trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic)
+                    .await;
             }
             // Drill failed → don't block the session, fall silently back into normal flow.
             Err(e) => ui::warn(&format!("opening drill skipped: {e}")),
         }
     } else {
         // New topic: no approach/map yet — introduction turn, Usta speaks first.
-        for note in crate::materials::convert_pdfs(project_root) {
+        for note in crate::materials::convert_pdfs(ctx.project_root) {
             ui::notice(&note);
         }
-        let mats = crate::materials::scan(project_root);
+        let mats = crate::materials::scan(ctx.project_root);
         let material_digest = crate::materials::combined_digests(&mats);
         let onboarding = progress::onboarding_prompt(
-            topic,
-            intro,
-            profile_generic,
+            ctx.topic,
+            ctx.intro,
+            ctx.profile_generic,
             project_known,
             material_digest.as_deref(),
         );
         session.push_user(&onboarding);
-        recorder.user(&onboarding);
+        ctx.recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
             Ok(reply) => {
                 let (clean, show_topic) = visual::extract_show_marker(&reply.text);
@@ -224,9 +237,10 @@ pub(crate) async fn run_plain_loop(
                     reply.context_tokens,
                     backend.context_window(),
                 );
-                recorder.assistant(&clean);
+                ctx.recorder.assistant(&clean);
                 session.push_assistant(clean);
-                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
+                trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic)
+                    .await;
             }
             Err(e) => ui::warn(&format!("introduction turn skipped: {e}")),
         }
@@ -256,7 +270,7 @@ pub(crate) async fn run_plain_loop(
                         let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
                         match crate::visual::show_request(arg, crate::visual::last_assistant_text(session).as_deref()) {
                             None => ui::notice("nothing to visualize yet — explain something first, or use /show [topic]"),
-                            Some(req) => run_visual_generation(backend, project_root, topic, &concept, &req).await,
+                            Some(req) => run_visual_generation(backend, ctx.project_root, ctx.topic, &concept, &req).await,
                         }
                         let _ = ready_tx.send(());
                         continue;
@@ -273,7 +287,7 @@ pub(crate) async fn run_plain_loop(
                     if let Some(cmd) = &game_cmd {
                         match cmd {
                             GameCmd::Status => {
-                                ui::notice(if game_pref(global) {
+                                ui::notice(if game_pref(ctx.global) {
                                     "gamification is on"
                                 } else {
                                     "gamification is off"
@@ -283,7 +297,7 @@ pub(crate) async fn run_plain_loop(
                             }
                             GameCmd::On | GameCmd::Off => {
                                 let on = matches!(cmd, GameCmd::On);
-                                if let Err(e) = set_game_pref(global, on) {
+                                if let Err(e) = set_game_pref(ctx.global, on) {
                                     ui::notice(&format!("could not save game preference: {e}"));
                                     let _ = ready_tx.send(());
                                     continue;
@@ -299,16 +313,16 @@ pub(crate) async fn run_plain_loop(
                     // /exam and /game on|off: swap the outgoing text and fall through to the
                     // normal ask flow below — the typed command is already echoed by rustyline.
                     let line = if is_exam_command(&line) {
-                        if !topic_has_goal(project_root, global, topic) {
+                        if !topic_has_goal(ctx.project_root, ctx.global, ctx.topic) {
                             ui::notice("no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction");
                             let _ = ready_tx.send(());
                             continue;
                         }
-                        progress::exam_prompt(topic)
+                        progress::exam_prompt(ctx.topic)
                     } else if let Some(cmd) = game_cmd {
                         match cmd {
                             GameCmd::On => game_on_turn(
-                                &std::fs::read_to_string(global.join("GAMIFICATION.md")).unwrap_or_default(),
+                                &std::fs::read_to_string(ctx.global.join("GAMIFICATION.md")).unwrap_or_default(),
                             ),
                             GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
                             GameCmd::Status => line, // unreachable: Status returns above
@@ -318,16 +332,16 @@ pub(crate) async fn run_plain_loop(
                     };
                     if !line.is_empty() {
                         session.push_user(&line);
-                        recorder.user(&line);
+                        ctx.recorder.user(&line);
                         match ask_usta(backend, &session.system, session.history()).await {
                             Ok(reply) => {
                                 let (clean, show_topic) = visual::extract_show_marker(&reply.text);
                                 print_reply(&clean, reply.web, reply.context_tokens, backend.context_window());
                                 let tokens = reply.context_tokens;
-                                recorder.assistant(&clean);
+                                ctx.recorder.assistant(&clean);
                                 session.push_assistant(clean);
-                                maybe_compact(backend, session, project_root, tokens).await;
-                                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
+                                maybe_compact(backend, session, ctx.project_root, tokens).await;
+                                trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic).await;
                             }
                             Err(e) => ui::warn(&format!("error: {e}")),
                         }
@@ -364,15 +378,15 @@ pub(crate) async fn run_plain_loop(
                     }
                 } else {
                     for path in batch {
-                        match handle_file_change(backend, session, &mut files, project_root, &path, recorder).await {
+                        match handle_file_change(backend, session, &mut files, ctx.project_root, &path, ctx.recorder).await {
                             // handle_file_change no longer prints — the plain path applies
                             // its own presentation language (print_reply: web + gauge).
                             Ok(FileFeedback::Sessiz) => {}
                             Ok(FileFeedback::Bildirim(m)) => println!("{m}"),
                             Ok(FileFeedback::Yanit { tokens, reply, show_topic }) => {
                                 print_reply(&reply.text, reply.web, reply.context_tokens, backend.context_window());
-                                maybe_compact(backend, session, project_root, tokens).await;
-                                trigger_auto_visual(backend, session, project_root, topic, show_topic).await;
+                                maybe_compact(backend, session, ctx.project_root, tokens).await;
+                                trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic).await;
                             }
                             // Deleted-before-we-read-it (a tool's transient temp file) or
                             // binary content (an image saved into the project) — not the
