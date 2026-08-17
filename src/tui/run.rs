@@ -23,76 +23,6 @@ use crate::tui::welcome;
 use crate::tui::welcome_data;
 use crate::{feedback, history, progress, watcher};
 
-/// Result of ask_live: either a reply arrived or the user cancelled with double Ctrl-C.
-pub enum AskOutcome {
-    Reply(crate::backend::Reply),
-    Cancelled,
-}
-
-/// Wait for the LLM call with a live interface: spinner spins, keys are processed
-/// by the editor but Submit/Exit are LOCKED (single-turn principle) — Enter is
-/// swallowed. Can be cancelled with double Ctrl-C (or Ctrl-D): the first press
-/// lights up a hint on the status line, the second drops the future
-/// (kill_on_drop kills the child).
-async fn ask_live(
-    tui: &mut Tui,
-    editor: &mut InputBox,
-    events: &mut EventStream,
-    backend: &mut Backend,
-    system: &str,
-    history: &[Message],
-    tokens: Option<u64>,
-) -> Result<AskOutcome> {
-    let window = backend.context_window();
-    let fut = backend.complete(system, history);
-    tokio::pin!(fut);
-    let mut frame = 0usize;
-    let mut cancel_armed = false; // true after the first Ctrl-C — the counter doesn't reset (spec B2)
-    loop {
-        crate::tui::page::draw(
-            tui,
-            editor,
-            &Status::Thinking {
-                frame,
-                cancel_hint: cancel_armed,
-            },
-            tokens,
-            window,
-            None,
-        )?;
-        tokio::select! {
-            r = &mut fut => return Ok(AskOutcome::Reply(r?)),
-            Some(Ok(ev)) = events.next() => {
-                // Paste is still processed by the editor even while locked (doesn't submit).
-                if let Event::Paste(s) = &ev {
-                    editor.insert_str(s);
-                } else if let Event::Key(k) = ev {
-                    // Single Esc = instant cancel (drops fut → kill_on_drop kills the child).
-                    if matches!(k.code, KeyCode::Esc) {
-                        return Ok(AskOutcome::Cancelled);
-                    }
-                    match crate::tui::paint::classify_locked_key(k) {
-                        crate::tui::paint::LockedKey::CancelRequest if cancel_armed => {
-                            // fut drops → kill_on_drop kills the child (backend.rs).
-                            return Ok(AskOutcome::Cancelled);
-                        }
-                        crate::tui::paint::LockedKey::CancelRequest => { cancel_armed = true; }
-                        crate::tui::paint::LockedKey::Edit => {
-                            if !matches!(k.code, KeyCode::Enter) {
-                                let _ = match editor.handle_key(k) {
-                                    Action::Exit => Action::None, // never reached here (CancelRequest catches it) — safety net
-                                    other => other,
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(120)) => { frame += 1; }
-        }
-    }
-}
-
 /// TUI sibling of plain.rs's `run_visual_generation` — same guarantees: isolated
 /// mini-session, `backend.reset_session()` on every exit path (success, cancel,
 /// error, invalid JSON), Esc-cancellable via `ask_live`, same "try /show again"
@@ -113,7 +43,7 @@ async fn run_visual_generation(
     // `page_notice(...)?` must NOT be allowed to early-return here — every arm's
     // notice Result is captured instead, so `backend.reset_session()` below always
     // runs before any terminal-IO error is propagated (Görev 6 carry-forward fix).
-    let notice_result: Result<()> = match ask_live(
+    let notice_result: Result<()> = match crate::tui::ask::ask_live(
         tui,
         editor,
         events,
@@ -124,7 +54,7 @@ async fn run_visual_generation(
     )
     .await
     {
-        Ok(AskOutcome::Reply(reply)) => {
+        Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
             let json = crate::progress::clean_markdown_reply(&reply.text);
             match crate::visual::build_visual_html(&json) {
                 Ok(html) => {
@@ -163,7 +93,7 @@ async fn run_visual_generation(
                 ),
             }
         }
-        Ok(AskOutcome::Cancelled) => {
+        Ok(crate::tui::ask::AskOutcome::Cancelled) => {
             crate::tui::page::page_notice(tui, "visual generation cancelled")
         }
         Err(e) => crate::tui::page::page_error(tui, &format!("error: {e}")),
@@ -288,30 +218,6 @@ async fn ask_topic(
             Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
             Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
             None => return Ok(None),         // stream ended — don't spin in a hot loop (spec B4)
-        }
-    }
-}
-
-/// Single-key confirmation in the TUI: print the message, wait for one key. `y`/`Y`/`e`/`E` → true, other → false.
-async fn tui_confirm(
-    tui: &mut Tui,
-    editor: &InputBox,
-    events: &mut EventStream,
-    msg: &str,
-) -> Result<bool> {
-    crate::tui::page::page_notice(tui, msg)?;
-    loop {
-        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
-        match events.next().await {
-            Some(Ok(Event::Key(k))) => match k.code {
-                KeyCode::Char('y')
-                | KeyCode::Char('Y')
-                | KeyCode::Char('e')
-                | KeyCode::Char('E') => return Ok(true),
-                _ => return Ok(false),
-            },
-            Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
-            None => return Ok(false),        // stream ended — don't spin in a hot loop (spec B4)
         }
     }
 }
@@ -443,7 +349,7 @@ pub async fn run(
                         // then ALWAYS reset.
                         let project_md =
                             read(progress::project_md_path(project_root)).unwrap_or_default();
-                        let outcome = ask_live(
+                        let outcome = crate::tui::ask::ask_live(
                             &mut tui,
                             &mut editor,
                             &mut events,
@@ -455,10 +361,10 @@ pub async fn run(
                         .await;
                         backend.reset_session(); // suggestion chat must not leak into the session
                         let parsed = match outcome {
-                            Ok(AskOutcome::Reply(reply)) => {
+                            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                 crate::topic::parse_start_suggestion(&reply.text)
                             }
-                            Ok(AskOutcome::Cancelled) | Err(_) => None,
+                            Ok(crate::tui::ask::AskOutcome::Cancelled) | Err(_) => None,
                         };
                         let Some((slug, text)) = parsed else {
                             crate::tui::page::page_error(
@@ -470,7 +376,7 @@ pub async fn run(
                         if !text.is_empty() {
                             crate::tui::page::page_notice(&mut tui, &text)?;
                         }
-                        if tui_confirm(
+                        if crate::tui::ask::tui_confirm(
                             &mut tui,
                             &editor,
                             &mut events,
@@ -497,7 +403,7 @@ pub async fn run(
                         let slug = if raw.split_whitespace().count() <= 2 {
                             crate::topic::slugify_topic(&raw)
                         } else {
-                            let slug = match ask_live(
+                            let slug = match crate::tui::ask::ask_live(
                                 &mut tui,
                                 &mut editor,
                                 &mut events,
@@ -508,10 +414,10 @@ pub async fn run(
                             )
                             .await
                             {
-                                Ok(AskOutcome::Reply(reply)) => {
+                                Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                     crate::topic::finalize_slug(&raw, &reply.text)
                                 }
-                                Ok(AskOutcome::Cancelled) | Err(_) => {
+                                Ok(crate::tui::ask::AskOutcome::Cancelled) | Err(_) => {
                                     crate::topic::slugify_topic(&raw)
                                 }
                             };
@@ -530,7 +436,7 @@ pub async fn run(
                         // New-topic confirmation: only asked when there's a topic that could
                         // be resumed (spec §2) — on first-run/empty-local it opens without confirmation.
                         if local.is_empty()
-                            || tui_confirm(
+                            || crate::tui::ask::tui_confirm(
                                 &mut tui,
                                 &editor,
                                 &mut events,
@@ -560,7 +466,7 @@ pub async fn run(
     // writing its own lock. If rejected, no session/lock → Tui drop restores.
     let lock = crate::lifecycle::lock_path(project_root, &topic);
     if lock.exists()
-        && !tui_confirm(
+        && !crate::tui::ask::tui_confirm(
             &mut tui,
             &editor,
             &mut events,
@@ -657,7 +563,7 @@ pub async fn run(
     };
     session.push_user(&opening);
     recorder.user(&opening);
-    match ask_live(
+    match crate::tui::ask::ask_live(
         &mut tui,
         &mut editor,
         &mut events,
@@ -668,7 +574,7 @@ pub async fn run(
     )
     .await
     {
-        Ok(AskOutcome::Reply(reply)) => {
+        Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
             last_tokens = reply.context_tokens;
             let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
             let w = crate::tui::page::current_width(&tui);
@@ -688,7 +594,7 @@ pub async fn run(
             )
             .await?;
         }
-        Ok(AskOutcome::Cancelled) => {
+        Ok(crate::tui::ask::AskOutcome::Cancelled) => {
             backend.reset_session();
             crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
         }
@@ -805,11 +711,11 @@ pub async fn run(
                         };
                         session.push_user(&outgoing);
                         recorder.user(&outgoing);
-                        match ask_live(
+                        match crate::tui::ask::ask_live(
                             &mut tui, &mut editor, &mut events, backend,
                             &session.system, session.history(), last_tokens,
                         ).await {
-                            Ok(AskOutcome::Reply(reply)) => {
+                            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
                                 let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
                                 let w = crate::tui::page::current_width(&tui);
@@ -819,7 +725,7 @@ pub async fn run(
                                 crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await;
                                 trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
-                            Ok(AskOutcome::Cancelled) => {
+                            Ok(crate::tui::ask::AskOutcome::Cancelled) => {
                                 // The user turn stays in history (intentional — spec B2); the CLI
                                 // session is half-done — don't resume it, the next call should go
                                 // with the full transcript.
