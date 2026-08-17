@@ -1,9 +1,13 @@
 //! TUI session loop: keys + watcher + LLM all in one select!. Persistent content
-//! flows into scrollback via insert_before; the bottom region is redrawn live. Spec §3.
+//! flows into scrollback via `tui/page.rs`'s `insert_before` wrapper; the bottom
+//! region is redrawn live. Spec §3. Delegates to four sibling modules split out
+//! of this one in the cleanup round: `paint` (pure text/style builders), `page`
+//! (the paging layer), `ask` (question-asking), and `entry` (topic entry +
+//! visual-generation trigger).
 //!
 //! In plain mode (ui::is_plain) this module is never used — main's branching
 //! routes the plain path to run_plain_loop. There is NO alt-screen here: only
-//! an inline viewport + insert_before, scrollback is preserved.
+//! an inline viewport, scrollback is preserved.
 
 use std::path::{Path, PathBuf};
 

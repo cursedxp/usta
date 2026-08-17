@@ -202,7 +202,7 @@ pub fn week_summary(entries: &[Entry], today: &str) -> WeekSummary {
 
 /// Count of curriculum items in the two "deepest" states (`tokens::STATE_SETTLED`,
 /// `tokens::STATE_DEEPENED`). Reads each line's state through `tokens::map_state_of`
-/// (exact-segment match against `tokens::STATES`) — the same mechanism `tui::welcome`
+/// (exact-segment match against `tokens::STATES`) — the same mechanism `tui::welcome_data`
 /// uses, so state classification stays in sync by construction.
 pub fn settled_count(curriculum: &str) -> Option<usize> {
     Some(

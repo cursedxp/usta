@@ -21,7 +21,7 @@ pub const RESET: &str = "\x1b[0m";
 /// buffered/no-op so they don't collide with ratatui's inline viewport.
 static TUI_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Notices accumulated while the TUI is active — run.rs flushes these to the
+/// Notices accumulated while the TUI is active — tui/page.rs flushes these to the
 /// scrollback via page_notice.
 static TUI_NOTICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -104,7 +104,7 @@ pub fn notice(msg: &str) {
 
 /// Amber warning line (stderr): `⚠ ` glyph + amber, the design-system caution
 /// voice. While the TUI is live it's buffered with the same `⚠ ` prefix so
-/// run.rs's flush routes it to the amber layer.
+/// tui/page.rs's flush routes it to the amber layer.
 pub fn warn(msg: &str) {
     use crate::tui::theme;
     if tui_active() {

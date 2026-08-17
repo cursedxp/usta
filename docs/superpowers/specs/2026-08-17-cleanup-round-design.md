@@ -21,7 +21,7 @@
 
 | dosya | satır | not |
 |---|---|---|
-| `src/tui/run.rs` | 591 | `use` bloğu + `run()` (558, bilinçli istisna — aşağıda) |
+| `src/tui/run.rs` | 591 | `use` bloğu + `run()` (562, bilinçli istisna — aşağıda) |
 | `src/tui/welcome.rs` | 591 | `LOGO`, `fit`/`wrap`/`pad`/`week_line`, render'lar; veri yarısı çıktı |
 | `src/tui/welcome_data.rs` | 215 | Task 2 — Spec §5 veri toplama, ratatui bağımsız |
 | `src/tui/paint.rs` | 237 | Task 3 — saf builder'lar + key sınıflandırıcılar |
@@ -54,13 +54,13 @@ Toplam ~510 satır çıkar → `run.rs`'te `run()` + `use` bloğu ≈ **580 sat�
 
 ### `run()` bölünmüyor — gerekçe
 
-558 satır tek fonksiyon için çok, ama bölmemesi bilinçli:
+562 satır tek fonksiyon için çok, ama bölmemesi bilinçli:
 
 - **Sıfır testi var.** Dosyadaki 7 testin hepsi saf yardımcıları kapsıyor (`user_echo_text`, `notice_line` üçlüsü, `classify_locked_key`). `run`, `ask_live`, `ask_topic`, `tui_confirm` — canlı `Tui`/`EventStream`/`Backend` isteyen hiçbir şey test edilmemiş. v0.22.0'ın "test sayısı sabit" kanıtı burada yok.
 - **Beş mutable değer `.await` boyunca canlı.** `run`'ın ana `tokio::select!`'i (866-1045) `&mut tui`, `&mut editor`, `&mut events`, `&mut session`, `&mut files`, `&mut debouncer` ve `backend`'i her arm'ın `.await`'i boyunca tutuyor. Fazları çıkarmak bunları tek bir bundle struct'a toplamayı gerektirir — gerçek bir tasarım değişikliği, taşıma değil.
 - **Bütçe dosya başına.** `run.rs` bütçeye iniyor. Tek fonksiyonun uzunluğu ayrı bir kural olurdu ve o kural yazılı değil.
 
-Sonuç: `run()` 558 satırıyla kalıyor, spec'e bilinen madde olarak yazılıyor. Bölünmesi kendi spec'ini ve — asıl önemlisi — önce bir test yüzeyini hak ediyor.
+Sonuç: `run()` 562 satırıyla kalıyor, spec'e bilinen madde olarak yazılıyor. Bölünmesi kendi spec'ini ve — asıl önemlisi — önce bir test yüzeyini hak ediyor.
 
 ## `welcome.rs` — veri/render kesimi temiz
 

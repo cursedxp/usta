@@ -1,5 +1,8 @@
-//! Welcome box: data gathering (pure) + render. Spec §5.
-//! All parsing is best-effort — malformed/missing input skips the field, never panics.
+//! Welcome box render: the two-column box (logo/identity left, status right),
+//! its three modes — full welcome, compact resume continuation, and the
+//! entry-point dispatch between them — plus the wrap/pad/fit text helpers
+//! they share. Spec §5. Data gathering moved to `welcome_data.rs` (cleanup
+//! round, Task 2); this module only draws from the `WelcomeData` it's given.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -182,7 +185,7 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
 /// Identity mode: NO topic. Left column is logo + greeting + model + directory;
 /// right column is "What do you want to learn?" + local topics that can be
 /// resumed (or the first-session message). Shown before a topic is chosen
-/// (Claude-style: welcome on top, question below). Wired up in run.rs's
+/// (Claude-style: welcome on top, question below). Wired up in entry.rs's
 /// topic entry (`ask_topic`).
 ///
 /// `local`: topics recorded in this project — if not empty, shows an
@@ -354,9 +357,11 @@ fn solo_box(title: &str, rows: Vec<Vec<Span<'static>>>, width: u16) -> Text<'sta
 /// box above, and repeating them was the bug this panel replaces. Its job is
 /// continuity: what you are picking up, when you were last here, how far
 /// along the map you are. Design: Claude Design f8cc2dc7 page 06, variant A.
-// Wired into run.rs (v0.21.0): the `resumed` branch calls this instead of
-// `render_welcome`, replacing the second identity-carrying frame that used
-// to print right after the one ask_topic already showed.
+///
+/// Wired in (v0.21.0) via `render_for_entry`'s dispatch: on the `resumed`
+/// branch it calls this instead of `render_welcome`, replacing the second
+/// identity-carrying frame that used to print right after the one
+/// `ask_topic` already showed.
 ///
 /// Returns `None` when every row would drop — i.e. there's genuinely nothing
 /// to show (a topic upserted at OPEN but never reaching its first CLOSING

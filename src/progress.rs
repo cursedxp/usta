@@ -194,7 +194,7 @@ pub fn closing_prompt(
 /// Where it hooks into plain.rs: Task 3 (opening-drill trigger).
 ///
 /// `due`/`has_questions` are shell-selected: the shell already scanned the progress
-/// file's `due:` tails (`welcome::due_questions` / `welcome::drill_count`), sorted and
+/// file's `due:` tails (`welcome_data::due_questions` / `welcome_data::drill_count`), sorted and
 /// capped them — date filtering/sorting is pure and deterministic, so it doesn't belong
 /// in a model instruction. This function only decides HOW to phrase the turn for the
 /// three possible shapes of that shell-computed state.
