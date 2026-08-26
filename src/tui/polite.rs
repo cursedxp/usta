@@ -23,10 +23,11 @@ impl PoliteQueue {
     /// is the first into an empty queue (i.e. it's time to announce).
     pub(crate) fn push(&mut self, path: PathBuf) -> bool {
         let was_empty = self.paths.is_empty();
-        if !self.paths.contains(&path) {
+        let added = !self.paths.contains(&path);
+        if added {
             self.paths.push(path);
         }
-        was_empty && !self.paths.is_empty()
+        was_empty && added
     }
 
     pub(crate) fn is_empty(&self) -> bool {
