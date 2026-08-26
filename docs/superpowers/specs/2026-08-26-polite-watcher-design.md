@@ -73,6 +73,13 @@ Canlı doğrulama (stagit oturumu, 0.24.0): mentorun iki sorusu açıkken `cargo
 - **H3 — Wiring source-pin testi.** İki turdur run.rs bağlantıları silinse de 388 test yeşil kalıyor. En ucuz çare: `include_str!` ile run.rs kaynağını okuyan pin testi — `route(`, `silence_queue_on_watch_off`, `deliver_queue_on_polite_off` çağrı yerlerinin varlığını assert eder (kaba ama silmeye karşı gerçek koruma; trait-seam refactor'u ayrı iş, kapsam dışı).
 - Minors bu tura girmez (ayrıca loglu).
 
+## v0.24.4 Düzeltmeler (2026-08-26 — v0.24.3 final review; Anil onayı: "devam et")
+
+- **J1 — Polite-off onay mesajı yutulamaz.** `deliver_queue_on_polite_off` limit-üstü kuyrukta `Ok(true)` dönüyor; run.rs bunu "kendi mesajını bastı" sayıp `continue` ediyor → `apply_polite`'ın "polite mode off — instant file feedback" onayı hiç basılmıyor. Düzeltme: dönüş değeri GERÇEKTEN mesaj basılıp basılmadığını yansıtır (`Ok(notice.is_some())` deseni) — mesaj basılmadıysa normal apply_polite mesajı akar. run.rs'e satır eklenmez.
+- **J2 — Yalan doc comment düzelir.** `polite.rs:206-207` civarı "this path prints its own notice" açıklaması J1'in gerçek davranışına göre yeniden yazılır (J1 ile aynı commit olabilir).
+- **J3 — H3 pin kendi turunu da pinler.** Needle listesine `bulk_skip_absorbing_queue` ve `process_paths` eklenir — run.rs:570 (cevap-sonrası ana flush) silinince test kırılmalı.
+- Minors yine girmez (ObserveOnly'nin H1-şekli dahil — reviewer "doğru ertelenmiş" dedi).
+
 ## Kapsam dışı
 
 - Plain yol (`plain.rs` — pipe/CI): bugünkü davranışında kalır · sınav modu zaten ayrı bir akış, dokunulmaz · mod değişikliğinin approach dosyasına otomatik yazımı yok · LLM'e "cevap bekliyorum" protokol bayrağı yok (heuristik yeter, prompt diet korunur) · kuyruktaki diff'i kullanıcının cevabına iliştirme (ayrı tur olarak işlenir — ileride istenirse ayrı tasarım).
