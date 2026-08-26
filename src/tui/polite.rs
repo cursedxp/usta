@@ -255,6 +255,30 @@ pub(crate) fn bulk_skip(tui: &mut Tui, files: &mut FileMemory, paths: Vec<PathBu
     Ok(())
 }
 
+/// Drains `pq`'s withheld paths into `paths` so a bulk sync absorbs them too
+/// — merging first means the queue empties and `armed_at` clears in the same
+/// step, so nothing is left stranded mid-queue past the bulk baseline sync.
+pub(crate) fn absorb_queue_into_batch(
+    pq: &mut PoliteQueue,
+    mut paths: Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    paths.extend(pq.drain());
+    paths
+}
+
+/// `Route::Bulk`, but folds in whatever `pq` was withholding first (H1): a
+/// path queued behind an open question must not have its baseline synced
+/// while it's still sitting in the queue, or the eventual drain would find
+/// `ChangePayload::Skip` and the promised feedback would silently never arrive.
+pub(crate) fn bulk_skip_absorbing_queue(
+    tui: &mut Tui,
+    files: &mut FileMemory,
+    pq: &mut PoliteQueue,
+    paths: Vec<PathBuf>,
+) -> Result<()> {
+    bulk_skip(tui, files, absorb_queue_into_batch(pq, paths))
+}
+
 /// The file-feedback cycle, shared by the three points that can start one: the
 /// watcher's debounce flush, the flush after the user's answer, and the
 /// inactivity backstop. Over `max_feedback_batch` paths it degrades to
@@ -463,6 +487,58 @@ mod tests {
         assert!(pq.is_empty());
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bulk_route_absorbs_pending_queue() {
+        // Real temp files (same pattern as
+        // silence_queue_on_watch_off_drains_only_when_off_and_nonempty above)
+        // so sync_baseline's std::fs::read_to_string actually succeeds and
+        // files.observe is exercised, not silently skipped.
+        let queued_path = std::env::temp_dir().join(format!(
+            "usta_polite_bulk_absorb_queued_{}.rs",
+            std::process::id()
+        ));
+        let queued_content = "fn queued() {}";
+        std::fs::write(&queued_path, queued_content).unwrap();
+
+        let bulk_path = std::env::temp_dir().join(format!(
+            "usta_polite_bulk_absorb_bulk_{}.rs",
+            std::process::id()
+        ));
+        let bulk_content = "fn bulk() {}";
+        std::fs::write(&bulk_path, bulk_content).unwrap();
+
+        let mut files = FileMemory::new();
+        let mut pq = PoliteQueue::new();
+        pq.push(queued_path.clone());
+        assert!(pq.armed_at().is_some());
+
+        // A same-tick bulk batch arrives, independent of the pending queue.
+        let batch = vec![bulk_path.clone()];
+        let merged = absorb_queue_into_batch(&mut pq, batch);
+
+        // The queue is absorbed, not stranded: it's empty and disarmed.
+        assert!(pq.is_empty());
+        assert!(pq.armed_at().is_none());
+        assert!(merged.contains(&queued_path));
+        assert!(merged.contains(&bulk_path));
+
+        // What bulk_skip does with the merged paths: sync the baseline for
+        // all of them, queued path included.
+        sync_baseline(&mut files, merged);
+
+        // Baseline was actually recorded for the queued path during the bulk
+        // sync: observing the same content again reports "no change", not a
+        // stale diff — the promised feedback isn't stranded behind a synced
+        // baseline that the queue never got credit for.
+        assert!(matches!(
+            files.observe(&queued_path, queued_content.to_string()),
+            crate::feedback::ChangePayload::Skip
+        ));
+
+        let _ = std::fs::remove_file(&queued_path);
+        let _ = std::fs::remove_file(&bulk_path);
     }
 
     #[test]

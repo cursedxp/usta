@@ -578,7 +578,7 @@ pub async fn run(
                 let batch = debouncer.flush();
                 use crate::tui::polite::Route;
                 match crate::tui::polite::route(batch.len(), max_feedback_batch, watching, polite, question_open) {
-                    Route::Bulk => crate::tui::polite::bulk_skip(&mut tui, &mut files, batch)?,
+                    Route::Bulk => crate::tui::polite::bulk_skip_absorbing_queue(&mut tui, &mut files, &mut pq, batch)?,
                     Route::ObserveOnly => crate::tui::polite::sync_baseline(&mut files, batch),
                     Route::Queue => crate::tui::polite::queue_batch(&mut tui, &mut pq, batch)?,
                     Route::Feedback => crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, batch, max_feedback_batch).await?,
