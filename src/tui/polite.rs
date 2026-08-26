@@ -24,11 +24,15 @@ pub(crate) const POLITE_BACKSTOP: Duration = Duration::from_secs(180);
 /// mentor question is open.
 pub(crate) struct PoliteQueue {
     paths: Vec<PathBuf>,
+    armed_at: Option<tokio::time::Instant>,
 }
 
 impl PoliteQueue {
     pub(crate) fn new() -> Self {
-        Self { paths: Vec::new() }
+        Self {
+            paths: Vec::new(),
+            armed_at: None,
+        }
     }
 
     /// Pushes `path` if not already queued. Returns `true` when this push
@@ -39,6 +43,9 @@ impl PoliteQueue {
         if added {
             self.paths.push(path);
         }
+        if was_empty && added {
+            self.armed_at = Some(tokio::time::Instant::now());
+        }
         was_empty && added
     }
 
@@ -46,8 +53,15 @@ impl PoliteQueue {
         self.paths.is_empty()
     }
 
+    /// When the queue was armed (first path pushed into an empty queue), or
+    /// `None` while it's empty.
+    pub(crate) fn armed_at(&self) -> Option<tokio::time::Instant> {
+        self.armed_at
+    }
+
     /// Drains all queued paths in order, resetting the queue to empty.
     pub(crate) fn drain(&mut self) -> Vec<PathBuf> {
+        self.armed_at = None;
         std::mem::take(&mut self.paths)
     }
 }
@@ -58,16 +72,14 @@ pub(crate) fn question_open(text: &str) -> bool {
 }
 
 /// The backstop flush deadline: `None` while the queue is empty, otherwise
-/// `last_key + POLITE_BACKSTOP`.
+/// anchored to whichever is later, the queue's arm time or the last
+/// keystroke, plus `POLITE_BACKSTOP` — so the window is never shorter than
+/// the time the queue has actually been armed.
 pub(crate) fn backstop_deadline(
-    queue_empty: bool,
+    armed_at: Option<tokio::time::Instant>,
     last_key: tokio::time::Instant,
 ) -> Option<tokio::time::Instant> {
-    if queue_empty {
-        None
-    } else {
-        Some(last_key + POLITE_BACKSTOP)
-    }
+    armed_at.map(|a| a.max(last_key) + POLITE_BACKSTOP)
 }
 
 /// Whether any line in `text`, trimmed and lowercased, is `watch: live`.
@@ -230,8 +242,43 @@ mod tests {
     #[test]
     fn backstop_deadline_only_when_queue_nonempty() {
         let now = tokio::time::Instant::now();
-        assert_eq!(backstop_deadline(true, now), None);
-        assert_eq!(backstop_deadline(false, now), Some(now + POLITE_BACKSTOP));
+        assert_eq!(backstop_deadline(None, now), None);
+        assert_eq!(
+            backstop_deadline(Some(now), now),
+            Some(now + POLITE_BACKSTOP)
+        );
+    }
+
+    #[test]
+    fn queue_stamps_armed_at_on_first_push_and_clears_on_drain() {
+        let mut q = PoliteQueue::new();
+        assert_eq!(q.armed_at(), None);
+        let before = tokio::time::Instant::now();
+        q.push(std::path::PathBuf::from("a.rs"));
+        let armed = q.armed_at().expect("armed after first push");
+        assert!(armed >= before);
+        q.push(std::path::PathBuf::from("b.rs"));
+        assert_eq!(q.armed_at(), Some(armed)); // second push does not re-stamp
+        q.drain();
+        assert_eq!(q.armed_at(), None);
+    }
+
+    #[test]
+    fn backstop_window_never_shorter_than_arm_time() {
+        let last_key = tokio::time::Instant::now();
+        let armed = last_key + POLITE_BACKSTOP; // user idle 180s, THEN saves a file
+                                                // Old bug: deadline = last_key + 180 = already past → fired immediately.
+        assert_eq!(
+            backstop_deadline(Some(armed), last_key),
+            Some(armed + POLITE_BACKSTOP)
+        );
+        // Typing after the queue armed still extends the window:
+        let late_key = armed + std::time::Duration::from_secs(10);
+        assert_eq!(
+            backstop_deadline(Some(armed), late_key),
+            Some(late_key + POLITE_BACKSTOP)
+        );
+        assert_eq!(backstop_deadline(None, last_key), None);
     }
 
     #[test]
