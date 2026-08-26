@@ -58,6 +58,14 @@ Canlı doğrulama (stagit oturumu, 0.24.0): mentorun iki sorusu açıkken `cargo
 - **F4 — Dizin event'leri sessiz.** Watcher dizin path'lerini kaynağında eler (`path.is_dir()` → gönderme); yarış artığına karşı `is_silent_skip` `ErrorKind::IsADirectory`'yi de sessiz sınıflar (NotFound/InvalidData deseninin aynısı; rustc 1.98, IsADirectory 1.83'te stabil).
 - SPEC.md §4.21'deki "her backstop penceresi 180 sn" cümlesi F1 ile doğru hale gelir — değişiklik gerekmez; yine de kontrol edilir.
 
+## v0.24.2 Düzeltmeler (2026-08-26 — v0.24.1 final review bulguları; Anil kararı: polite-off kuyruğu HEMEN İŞLENİR)
+
+- **G0 (ön-koşul) — Routing çıkarımı.** Watcher dalındaki 4-yollu karar saf fonksiyona çıkarılır: `pub(crate) enum Route { Bulk, ObserveOnly, Queue, Feedback }` + `pub(crate) fn route(batch_len: usize, max_batch: usize, watching: bool, polite: bool, question_open: bool) -> Route` (`polite.rs`'te; sıra: bulk → !watching → polite&&question_open → feedback). Saf refactor — davranış birebir; run.rs `match` ile küçülür (600/600 kilidini açar) ve F2'nin `watching` kapısı birim-test edilebilir olur.
+- **G1 — `/watch polite off` bekleyen kuyruğu HEMEN işler.** Anil kararı: polite'ı kapatmak "anında feedback istiyorum" demek — slash dalında polite false'a düşerken kuyruk doluysa `process_paths(pq.drain())` o anda koşar (`.await` mevcut Submit dalında zaten kullanılıyor). Notice: `polite mode off — delivering queued feedback` (kuyruk boşsa mevcut mesaj).
+- **G2 — Mesaj/dokümantasyon düzeltmeleri.** `/watch off` kuyruk doluyken mesaja `(pending feedback dropped)` eklenir · README "never lost" ifadesi düzeltilir (`/watch off` düşürür; polite off teslim eder) · README/SPEC "180s of inactivity" netleşir: pencereyi yalnız TUI tuş vuruşları uzatır, editör kayıtları uzatmaz · SPEC.md:249 "exactly the pre-v0.24 behavior" cümlesi F4 istisnasıyla düzeltilir (dizin eleme her modda geçerli).
+- **G3 — Küçük teknik borç.** `Cargo.toml`'a `rust-version = "1.83"` (F4 `ErrorKind::IsADirectory` MSRV'yi yükseltti) · watcher temp-dir testlerine `std::process::id()` soneki (polite.rs testleriyle tutarlı).
+- Kapsam dışı (değişmedi): `FileFeedback::{Sessiz,Bildirim,Yanit}` legacy rename ayrı iş.
+
 ## Kapsam dışı
 
 - Plain yol (`plain.rs` — pipe/CI): bugünkü davranışında kalır · sınav modu zaten ayrı bir akış, dokunulmaz · mod değişikliğinin approach dosyasına otomatik yazımı yok · LLM'e "cevap bekliyorum" protokol bayrağı yok (heuristik yeter, prompt diet korunur) · kuyruktaki diff'i kullanıcının cevabına iliştirme (ayrı tur olarak işlenir — ileride istenirse ayrı tasarım).
