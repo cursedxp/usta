@@ -451,7 +451,11 @@ pub async fn run(
                             let msg = match cmd {
                                 PoliteOn | PoliteOff | PoliteToggle => {
                                     let (next, m) = crate::slash::apply_polite(cmd, polite);
-                                    polite = next; m
+                                    polite = next;
+                                    if crate::tui::polite::deliver_queue_on_polite_off(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, polite, &mut pq, max_feedback_batch).await? {
+                                        continue;
+                                    }
+                                    m
                                 }
                                 On | Off | Toggle => {
                                     let (next, m) = crate::slash::apply_watch(cmd, watching);

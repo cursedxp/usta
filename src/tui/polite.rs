@@ -160,6 +160,59 @@ pub(crate) fn silence_queue_on_watch_off(
     }
 }
 
+/// Whether turning polite off should also flush the withheld queue right now:
+/// only when polite just turned off and something is actually queued. Split
+/// out from `deliver_queue_on_polite_off` so the gate is unit-testable on its
+/// own, same shape as `silence_queue_on_watch_off`'s off-check.
+pub(crate) fn should_deliver_queue_on_polite_off(polite: bool, pq: &PoliteQueue) -> bool {
+    !polite && !pq.is_empty()
+}
+
+/// Turning polite off means "give me instant feedback now" (spec v0.24.2 G1):
+/// deliver the withheld queue immediately instead of stranding it. No-op
+/// unless `should_deliver_queue_on_polite_off` says so. Returns whether it
+/// delivered, so the caller can skip its normal mode-change notice on that
+/// path — this path prints its own.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn deliver_queue_on_polite_off(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    session: &mut Session,
+    files: &mut FileMemory,
+    recorder: &Recorder,
+    project_root: &Path,
+    topic: &str,
+    last_tokens: &mut Option<u64>,
+    question_open: &mut bool,
+    polite: bool,
+    pq: &mut PoliteQueue,
+    max_feedback_batch: usize,
+) -> Result<bool> {
+    if !should_deliver_queue_on_polite_off(polite, pq) {
+        return Ok(false);
+    }
+    crate::tui::page::page_notice(tui, "polite mode off — delivering queued feedback")?;
+    process_paths(
+        tui,
+        editor,
+        events,
+        backend,
+        session,
+        files,
+        recorder,
+        project_root,
+        topic,
+        last_tokens,
+        question_open,
+        pq.drain(),
+        max_feedback_batch,
+    )
+    .await?;
+    Ok(true)
+}
+
 /// A question is open — withhold `paths` instead of interrupting. Exactly one
 /// notice per queue fill: `push` only reports the first path into an empty queue.
 pub(crate) fn queue_batch(tui: &mut Tui, pq: &mut PoliteQueue, paths: Vec<PathBuf>) -> Result<()> {
@@ -392,6 +445,18 @@ mod tests {
         assert!(pq.is_empty());
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn should_deliver_queue_on_polite_off_only_when_off_and_nonempty() {
+        let mut pq = PoliteQueue::new();
+        // Empty queue — nothing to deliver, even when turning off.
+        assert!(!should_deliver_queue_on_polite_off(false, &pq));
+        pq.push(PathBuf::from("a.rs"));
+        // Still polite (on) — no delivery even though something is queued.
+        assert!(!should_deliver_queue_on_polite_off(true, &pq));
+        // Off + non-empty — deliver now instead of stranding the queue.
+        assert!(should_deliver_queue_on_polite_off(false, &pq));
     }
 
     #[test]
