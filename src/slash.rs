@@ -15,6 +15,9 @@ pub(crate) enum WatchCmd {
     On,
     Off,
     Toggle,
+    PoliteOn,
+    PoliteOff,
+    PoliteToggle,
 }
 
 pub(crate) fn parse_watch_command(line: &str) -> Option<WatchCmd> {
@@ -23,6 +26,9 @@ pub(crate) fn parse_watch_command(line: &str) -> Option<WatchCmd> {
         "/watch" => Some(WatchCmd::Toggle),
         "/watch on" => Some(WatchCmd::On),
         "/watch off" => Some(WatchCmd::Off),
+        "/watch polite" => Some(WatchCmd::PoliteToggle),
+        "/watch polite on" => Some(WatchCmd::PoliteOn),
+        "/watch polite off" => Some(WatchCmd::PoliteOff),
         _ => None,
     }
 }
@@ -32,11 +38,30 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
         WatchCmd::On => true,
         WatchCmd::Off => false,
         WatchCmd::Toggle => !cur,
+        // Polite variants never reach this function; defensive, not unreachable!.
+        _ => cur,
     };
     let msg = if next {
         "companion on — watching your files"
     } else {
         "companion paused — file feedback off"
+    };
+    (next, msg)
+}
+
+/// Polite-mode toggle for `/watch polite`. Only ever called with the `Polite*`
+/// variants; other variants return `cur` unchanged (defensive, not `unreachable!`).
+pub(crate) fn apply_polite(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
+    let next = match cmd {
+        WatchCmd::PoliteOn => true,
+        WatchCmd::PoliteOff => false,
+        WatchCmd::PoliteToggle => !cur,
+        _ => return (cur, ""),
+    };
+    let msg = if next {
+        "polite mode on — file feedback waits while a question is open"
+    } else {
+        "polite mode off — instant file feedback"
     };
     (next, msg)
 }
@@ -266,6 +291,36 @@ mod tests {
         assert!(apply_watch(WatchCmd::Toggle, false).0);
         assert!(apply_watch(WatchCmd::On, false).1.contains("on"));
         assert!(apply_watch(WatchCmd::Off, true).1.contains("off"));
+    }
+
+    #[test]
+    fn parse_watch_polite_variants() {
+        assert_eq!(
+            parse_watch_command("/watch polite"),
+            Some(WatchCmd::PoliteToggle)
+        );
+        assert_eq!(
+            parse_watch_command("/watch polite on"),
+            Some(WatchCmd::PoliteOn)
+        );
+        assert_eq!(
+            parse_watch_command("/watch polite off"),
+            Some(WatchCmd::PoliteOff)
+        );
+        assert_eq!(
+            parse_watch_command("/WATCH POLITE OFF"),
+            Some(WatchCmd::PoliteOff)
+        );
+        assert_eq!(parse_watch_command("/watch politely"), None);
+    }
+
+    #[test]
+    fn apply_polite_transitions() {
+        assert!(apply_polite(WatchCmd::PoliteOn, false).0);
+        assert!(!apply_polite(WatchCmd::PoliteOff, true).0);
+        assert!(apply_polite(WatchCmd::PoliteToggle, false).0);
+        assert!(!apply_polite(WatchCmd::PoliteToggle, true).0);
+        assert!(apply_polite(WatchCmd::PoliteOn, false).1.contains("polite"));
     }
 
     #[test]
