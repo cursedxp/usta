@@ -39,10 +39,7 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
             let Ok(event) = res else { continue };
             if matches!(event.kind, EventKind::Modify(_)) {
                 for path in event.paths {
-                    // Directories (e.g. `cargo new` creating `src/`) never
-                    // carry feedback-worthy content — drop them at the
-                    // source rather than letting them reach the read path.
-                    if is_ignored(&path) || path.is_dir() {
+                    if !should_forward(&path) {
                         continue;
                     }
                     // End the thread if the REPL receiver has closed.
@@ -85,6 +82,14 @@ pub fn is_ignored(path: &Path) -> bool {
         }
         _ => false,
     })
+}
+
+/// Decide whether a changed path is feedback-worthy: not ignored, and not a
+/// directory. Directories (e.g. `cargo new` creating `src/`) never carry
+/// feedback-worthy content — drop them at the source rather than letting
+/// them reach the read path.
+pub fn should_forward(path: &Path) -> bool {
+    !is_ignored(path) && !path.is_dir()
 }
 
 /// Pure debounce state that smooths out a save storm. Editors produce
@@ -236,5 +241,21 @@ mod tests {
     #[test]
     fn is_ignored_flags_emacs_autosave_file() {
         assert!(is_ignored(Path::new("#main.rs#")));
+    }
+
+    #[test]
+    fn should_forward_filters_out_real_directory() {
+        let dir = std::env::temp_dir().join("usta_watcher_test_should_forward_dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!should_forward(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn should_forward_allows_real_file() {
+        let path = std::env::temp_dir().join("usta_watcher_test_should_forward_file.rs");
+        std::fs::write(&path, b"fn main() {}").unwrap();
+        assert!(should_forward(&path));
+        std::fs::remove_file(&path).unwrap();
     }
 }
