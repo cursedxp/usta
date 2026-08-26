@@ -59,6 +59,10 @@ pub(crate) fn is_exercise_path(project_root: &Path, path: &Path) -> bool {
 ///   into the project. Content-based, so the domain-agnostic principle holds:
 ///   any TEXT file of any extension is still watched (a GTM brief is a valid
 ///   deliverable), binary never is.
+/// - `IsADirectory`: the watcher's own `is_dir()` source filter should have
+///   caught this, but create/rename can race it (e.g. `cargo new` creating
+///   `src/` mid-event) — treat the same as the other silent cases rather
+///   than surfacing "Is a directory (os error 21)" to the user.
 ///
 /// Everything else (PermissionDenied, …) is a real failure the user should see.
 pub(crate) fn is_silent_skip(e: &anyhow::Error) -> bool {
@@ -67,7 +71,9 @@ pub(crate) fn is_silent_skip(e: &anyhow::Error) -> bool {
         .any(|io_err| {
             matches!(
                 io_err.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::InvalidData
+                    | std::io::ErrorKind::IsADirectory
             )
         })
 }
@@ -224,6 +230,16 @@ mod tests {
             "stream did not contain valid UTF-8",
         );
         let e = anyhow::Error::new(io_err).context("reading watched file");
+        assert!(is_silent_skip(&e));
+    }
+
+    #[test]
+    fn is_silent_skip_true_for_wrapped_is_a_directory() {
+        // A directory path that slipped past the watcher's own filter (race
+        // between create and the source filter) must still be silent, not a
+        // user-visible "Is a directory (os error 21)".
+        let io = std::io::Error::new(std::io::ErrorKind::IsADirectory, "is a directory");
+        let e = anyhow::Error::from(io).context("reading changed file");
         assert!(is_silent_skip(&e));
     }
 

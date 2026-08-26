@@ -39,7 +39,10 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
             let Ok(event) = res else { continue };
             if matches!(event.kind, EventKind::Modify(_)) {
                 for path in event.paths {
-                    if is_ignored(&path) {
+                    // Directories (e.g. `cargo new` creating `src/`) never
+                    // carry feedback-worthy content — drop them at the
+                    // source rather than letting them reach the read path.
+                    if is_ignored(&path) || path.is_dir() {
                         continue;
                     }
                     // End the thread if the REPL receiver has closed.
