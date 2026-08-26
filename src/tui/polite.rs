@@ -186,6 +186,20 @@ pub(crate) fn should_deliver_queue_on_polite_off(polite: bool, pq: &PoliteQueue)
     !polite && !pq.is_empty()
 }
 
+/// Whether turning polite off should print the "delivering queued feedback"
+/// notice: only when `process_paths` will actually deliver the queue rather
+/// than degrade to `bulk_skip`, which prints its own, truthful notice instead.
+pub(crate) fn polite_off_delivery_notice(
+    queue_len: usize,
+    max_batch: usize,
+) -> Option<&'static str> {
+    if queue_len == 0 || queue_len > max_batch {
+        None
+    } else {
+        Some("polite mode off — delivering queued feedback")
+    }
+}
+
 /// Turning polite off means "give me instant feedback now" (spec v0.24.2 G1):
 /// deliver the withheld queue immediately instead of stranding it. No-op
 /// unless `should_deliver_queue_on_polite_off` says so. Returns whether it
@@ -211,7 +225,10 @@ pub(crate) async fn deliver_queue_on_polite_off(
     if !should_deliver_queue_on_polite_off(polite, pq) {
         return Ok(false);
     }
-    crate::tui::page::page_notice(tui, "polite mode off — delivering queued feedback")?;
+    let paths = pq.drain();
+    if let Some(notice) = polite_off_delivery_notice(paths.len(), max_feedback_batch) {
+        crate::tui::page::page_notice(tui, notice)?;
+    }
     process_paths(
         tui,
         editor,
@@ -224,7 +241,7 @@ pub(crate) async fn deliver_queue_on_polite_off(
         topic,
         last_tokens,
         question_open,
-        pq.drain(),
+        paths,
         max_feedback_batch,
     )
     .await?;
@@ -551,6 +568,17 @@ mod tests {
         assert!(!should_deliver_queue_on_polite_off(true, &pq));
         // Off + non-empty — deliver now instead of stranding the queue.
         assert!(should_deliver_queue_on_polite_off(false, &pq));
+    }
+
+    #[test]
+    fn polite_off_notice_only_when_queue_actually_deliverable() {
+        assert_eq!(polite_off_delivery_notice(0, 10), None);
+        assert_eq!(
+            polite_off_delivery_notice(3, 10),
+            Some("polite mode off — delivering queued feedback")
+        );
+        assert_eq!(polite_off_delivery_notice(11, 10), None); // bulk skip will tell the truth
+        assert!(polite_off_delivery_notice(10, 10).is_some()); // boundary: exactly max delivers
     }
 
     #[test]
