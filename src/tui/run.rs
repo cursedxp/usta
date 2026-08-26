@@ -584,8 +584,10 @@ pub async fn run(
                 }
             }
             // Backstop: the user went quiet mid-question — don't sit on the queue forever.
+            // Re-arm last_key on fire so a fresh 180s inactivity window starts.
             _ = crate::lifecycle::sleep_until_deadline(crate::tui::polite::backstop_deadline(pq.is_empty(), last_key)), if polite && !pq.is_empty() => {
                 crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, pq.drain(), max_feedback_batch).await?;
+                last_key = tokio::time::Instant::now();
             }
         }
     }
