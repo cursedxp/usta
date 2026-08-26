@@ -48,6 +48,16 @@ Repo english-base (2026-08-12 migration): yeni kod, tip/fonksiyon adları, kulla
 - Approach parse: `watch: live` satırı var/yok/tanınmayan değer.
 - Uçtan uca elle doğrulama: Anil (soru açıkken kaydet → notis + cevap sonrası feedback; `/watch polite off` → anında feedback; JS approach'ına `watch: live` → oturum live açılır).
 
+## v0.24.1 Düzeltmeler (2026-08-26 — Anil'in canlı oturumu + final review bulguları)
+
+Canlı doğrulama (stagit oturumu, 0.24.0): mentorun iki sorusu açıkken `cargo new` → feedback anında bastı. Kök neden aşağıdaki F1. Ek olarak dizin event'i gürültüsü görüldü (`file feedback skipped: .../src: Is a directory (os error 21)`).
+
+- **F1 (I1) — Backstop penceresi kuyruğun kurulma anına çapalanır.** `PoliteQueue` boş kuyruğa ilk push'ta `armed_at: Option<Instant>` damgalar (`drain` temizler). `backstop_deadline(armed_at: Option<Instant>, last_key: Instant) -> Option<Instant>` = `armed_at.map(|a| a.max(last_key) + POLITE_BACKSTOP)` — pencere HİÇBİR zaman kuyruklama anından kısa olamaz. Bu, `db0b47b`'nin ateşleme-sonrası elle `last_key` bump'ını kapsar → o iki satır kaldırılır (drain → armed_at sıfırlanır, sonraki push taze pencere açar).
+- **F2 (I2) — `/watch off` bekleyen kuyruğu da susturur.** Watch kapatılırken kuyruk işlenmeden boşaltılır; boşaltılan path'ler `files.observe` ile senkronlanır (mevcut `!watching` dalıyla aynı baseline davranışı). Backstop select guard'ına `watching &&` eklenir.
+- **F3 (I3) — Dokümantasyon.** `help.rs` yardım metnine `/watch polite [on|off]` satırı; README'ye polite mode bölümü (default davranış + `watch: live` approach anahtarı + `/watch polite off`). İngilizce.
+- **F4 — Dizin event'leri sessiz.** Watcher dizin path'lerini kaynağında eler (`path.is_dir()` → gönderme); yarış artığına karşı `is_silent_skip` `ErrorKind::IsADirectory`'yi de sessiz sınıflar (NotFound/InvalidData deseninin aynısı; rustc 1.98, IsADirectory 1.83'te stabil).
+- SPEC.md §4.21'deki "her backstop penceresi 180 sn" cümlesi F1 ile doğru hale gelir — değişiklik gerekmez; yine de kontrol edilir.
+
 ## Kapsam dışı
 
 - Plain yol (`plain.rs` — pipe/CI): bugünkü davranışında kalır · sınav modu zaten ayrı bir akış, dokunulmaz · mod değişikliğinin approach dosyasına otomatik yazımı yok · LLM'e "cevap bekliyorum" protokol bayrağı yok (heuristik yeter, prompt diet korunur) · kuyruktaki diff'i kullanıcının cevabına iliştirme (ayrı tur olarak işlenir — ileride istenirse ayrı tasarım).
