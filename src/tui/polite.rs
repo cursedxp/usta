@@ -609,4 +609,28 @@ mod tests {
         // boundary: exactly max is NOT bulk (existing `>` comparison)
         assert_eq!(route(10, 10, true, false, false), Feedback);
     }
+
+    #[test]
+    fn run_rs_wiring_call_sites_are_pinned() {
+        // Crude source pin, not a unit test: the TUI loop in run.rs is bound
+        // to Terminal<CrosstermBackend<Stdout>> and can't be driven directly
+        // from a test. Two release rounds in a row a reviewer found that
+        // deleting the polite wiring from run.rs left the whole suite green,
+        // because everything below the call sites is unit-tested but the
+        // call sites themselves were not. This guards against that class of
+        // silent deletion by asserting the wiring is still called from
+        // run.rs's source text.
+        let src = include_str!("run.rs");
+        for needle in [
+            "polite::route(",
+            "silence_queue_on_watch_off",
+            "deliver_queue_on_polite_off",
+            "backstop_deadline(",
+        ] {
+            assert!(
+                src.contains(needle),
+                "run.rs lost its polite wiring: {needle}"
+            );
+        }
+    }
 }

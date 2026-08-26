@@ -257,6 +257,8 @@ Design detail: `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`.
 
 **v0.24.2:** the routing decision (bulk/observe-only/queue/feedback) is now a pure `polite::route()`; `/watch polite off` delivers the withheld queue immediately instead of stranding it, and `/watch off` notes when it drops one instead.
 
+**v0.24.3:** bulk absorbs the pending queue instead of stranding it; the delivery notice is gated on there being something to deliver; the polite wiring in `run.rs` is now pinned by a source test.
+
 ## 5. Flow (one learning session)
 
 ```
