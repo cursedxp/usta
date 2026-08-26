@@ -10,6 +10,17 @@
 - Mekanizma: `run.rs` watcher dalı (debounce → `handle_file_change`) diyalog durumuna hiç bakmıyor; tek kapı `watching` bayrağı + bulk-batch limiti. Session'da "cevap bekleyen soru" durumu yok (`Status` yalnız Idle/Thinking).
 - SPEC §11 "Enter beklemeden feedback" kararı bilinçli — proaktiflik ölmez, yalnız soru-açık penceresinde ertelenir. Bilinen konuda (örn. JS) kesinti istenir → mod konu bazlı seçilebilir.
 
+## İsimlendirme (bağlayıcı — tüm yeni kod İngilizce)
+
+Repo english-base (2026-08-12 migration): yeni kod, tip/fonksiyon adları, kullanıcıya dönük metinler, kod yorumları ve commit mesajları İNGİLİZCE. Bu tasarımın kod adları:
+
+- Modül: `src/tui/polite.rs` · Bayrak: `polite: bool` · Kuyruk tipi: `PoliteQueue` (`push` / `is_empty` / `drain`)
+- Soru-açık durumu: `question_open: bool`, tespit yardımcısı `question_open(text: &str) -> bool`
+- Backstop sabiti: `POLITE_BACKSTOP` (Duration, 180 sn) · deadline yardımcısı `backstop_deadline(...)`
+- Approach parse: `live_from_approach(text: &str) -> bool` · approach anahtarı: `watch: live`
+- Slash: `WatchCmd::{PoliteOn, PoliteOff, PoliteToggle}` + `apply_polite(...)`
+- (Mevcut `FileFeedback::Sessiz/Bildirim/Yanit` Türkçe varyantları legacy — bu işin kapsamında rename YOK, yenisi eklenmez.)
+
 ## Davranış
 
 - **İki ortogonal bayrak:** `watching: bool` aynen kalır (kapalı = hiç feedback). Yanına `polite: bool` gelir:
