@@ -39,7 +39,7 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
         WatchCmd::Off => false,
         WatchCmd::Toggle => !cur,
         // Polite variants never reach this function; defensive, not unreachable!.
-        _ => cur,
+        WatchCmd::PoliteOn | WatchCmd::PoliteOff | WatchCmd::PoliteToggle => cur,
     };
     let msg = if next {
         "companion on — watching your files"
@@ -56,7 +56,7 @@ pub(crate) fn apply_polite(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
         WatchCmd::PoliteOn => true,
         WatchCmd::PoliteOff => false,
         WatchCmd::PoliteToggle => !cur,
-        _ => return (cur, ""),
+        WatchCmd::On | WatchCmd::Off | WatchCmd::Toggle => return (cur, ""),
     };
     let msg = if next {
         "polite mode on — file feedback waits while a question is open"
