@@ -245,7 +245,10 @@ mod tests {
 
     #[test]
     fn should_forward_filters_out_real_directory() {
-        let dir = std::env::temp_dir().join("usta_watcher_test_should_forward_dir");
+        let dir = std::env::temp_dir().join(format!(
+            "usta_watcher_test_should_forward_dir_{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!should_forward(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -253,7 +256,10 @@ mod tests {
 
     #[test]
     fn should_forward_allows_real_file() {
-        let path = std::env::temp_dir().join("usta_watcher_test_should_forward_file.rs");
+        let path = std::env::temp_dir().join(format!(
+            "usta_watcher_test_should_forward_file_{}.rs",
+            std::process::id()
+        ));
         std::fs::write(&path, b"fn main() {}").unwrap();
         assert!(should_forward(&path));
         std::fs::remove_file(&path).unwrap();

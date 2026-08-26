@@ -160,6 +160,24 @@ pub(crate) fn silence_queue_on_watch_off(
     }
 }
 
+/// Same drop as `silence_queue_on_watch_off`, plus a user-facing notice —
+/// unlike `/watch polite off`, which delivers the queue instead of dropping
+/// it (`deliver_queue_on_polite_off`), `/watch off` discards it, so the user
+/// needs to be told. No-op notice when there was nothing pending to drop.
+pub(crate) fn silence_queue_on_watch_off_with_notice(
+    tui: &mut Tui,
+    watching: bool,
+    pq: &mut PoliteQueue,
+    files: &mut FileMemory,
+) -> Result<()> {
+    let had_pending = !watching && !pq.is_empty();
+    silence_queue_on_watch_off(watching, pq, files);
+    if had_pending {
+        crate::tui::page::page_notice(tui, "(pending feedback dropped)")?;
+    }
+    Ok(())
+}
+
 /// Whether turning polite off should also flush the withheld queue right now:
 /// only when polite just turned off and something is actually queued. Split
 /// out from `deliver_queue_on_polite_off` so the gate is unit-testable on its

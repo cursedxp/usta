@@ -460,7 +460,7 @@ pub async fn run(
                                 On | Off | Toggle => {
                                     let (next, m) = crate::slash::apply_watch(cmd, watching);
                                     watching = next;
-                                    crate::tui::polite::silence_queue_on_watch_off(watching, &mut pq, &mut files);
+                                    crate::tui::polite::silence_queue_on_watch_off_with_notice(&mut tui, watching, &mut pq, &mut files)?;
                                     m
                                 }
                             };

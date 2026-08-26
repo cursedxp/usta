@@ -245,7 +245,7 @@ Design detail: `docs/superpowers/specs/2026-08-16-prompt-diet-design.md`.
 
 ## 4.21 Polite Watcher (v0.24)
 
-A `polite` flag sits alongside `watching` in TUI watch mode — **default ON**, unless the topic's approach file (project `.usta/approaches/<topic>.md` overriding global `approaches/<topic>.md`; missing/unreadable keeps it ON) has a `watch: live` line. `watching && !polite` is exactly the pre-v0.24 instant-feedback behavior.
+A `polite` flag sits alongside `watching` in TUI watch mode — **default ON**, unless the topic's approach file (project `.usta/approaches/<topic>.md` overriding global `approaches/<topic>.md`; missing/unreadable keeps it ON) has a `watch: live` line. `watching && !polite` is exactly the pre-v0.24 instant-feedback behavior, except that directory events are filtered in all modes (F4, v0.24.1).
 
 While polite is on and the mentor has an open question (heuristic: the last assistant message contains `?`, unset once the user replies — no separate LLM protocol field, see §11), file-change paths are withheld into an order-preserving, dedup'd queue instead of interrupting; the first path into an empty queue prints one dim notice (`change noticed — feedback after your answer`), later ones are silent. The bulk-batch limit (`max_feedback_batch`) is checked before the polite gate, and again when the queue flushes.
 
@@ -254,6 +254,8 @@ The queue flushes at two points: unconditionally once the user's message and the
 Design detail: `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`.
 
 **v0.24.1 fixes:** the backstop deadline now anchors to the queue's arm time, not just the last keystroke, so it's never shorter than the time the queue has actually been armed (the "180s" claim above holds as a result — no wording change needed); `/watch off` drains the pending queue (syncing the diff baseline) and disarms the backstop instead of letting it still fire; directory events are filtered at the watcher source and `ErrorKind::IsADirectory` is a silent skip. `/watch polite [on|off]` is now documented in `/help` and the README.
+
+**v0.24.2:** the routing decision (bulk/observe-only/queue/feedback) is now a pure `polite::route()`; `/watch polite off` delivers the withheld queue immediately instead of stranding it, and `/watch off` notes when it drops one instead.
 
 ## 5. Flow (one learning session)
 
