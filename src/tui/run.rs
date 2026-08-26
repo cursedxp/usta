@@ -455,7 +455,9 @@ pub async fn run(
                                 }
                                 On | Off | Toggle => {
                                     let (next, m) = crate::slash::apply_watch(cmd, watching);
-                                    watching = next; m
+                                    watching = next;
+                                    crate::tui::polite::silence_queue_on_watch_off(watching, &mut pq, &mut files);
+                                    m
                                 }
                             };
                             crate::tui::page::page_notice(&mut tui, msg)?;
@@ -585,7 +587,7 @@ pub async fn run(
             }
             // Backstop: the user went quiet mid-question — don't sit on the queue forever.
             // window anchoring in backstop_deadline covers re-arm; see spec v0.24.1 F1
-            _ = crate::lifecycle::sleep_until_deadline(crate::tui::polite::backstop_deadline(pq.armed_at(), last_key)), if polite && !pq.is_empty() => {
+            _ = crate::lifecycle::sleep_until_deadline(crate::tui::polite::backstop_deadline(pq.armed_at(), last_key)), if watching && polite && !pq.is_empty() => {
                 crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, pq.drain(), max_feedback_batch).await?;
             }
         }

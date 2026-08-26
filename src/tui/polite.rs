@@ -111,6 +111,20 @@ pub(crate) fn sync_baseline(files: &mut FileMemory, paths: Vec<PathBuf>) {
     }
 }
 
+/// `/watch off` must silence pending feedback too, not just future feedback:
+/// drain the queue (which also disarms the backstop) and sync the diff
+/// baseline for whatever was withheld, same treatment as any other skipped
+/// batch. No-op while still watching, or while the queue is empty.
+pub(crate) fn silence_queue_on_watch_off(
+    watching: bool,
+    pq: &mut PoliteQueue,
+    files: &mut FileMemory,
+) {
+    if !watching && !pq.is_empty() {
+        sync_baseline(files, pq.drain());
+    }
+}
+
 /// A question is open — withhold `paths` instead of interrupting. Exactly one
 /// notice per queue fill: `push` only reports the first path into an empty queue.
 pub(crate) fn queue_batch(tui: &mut Tui, pq: &mut PoliteQueue, paths: Vec<PathBuf>) -> Result<()> {
@@ -303,6 +317,27 @@ mod tests {
         assert_eq!(approach_text(&project, &global, "rust"), "# local\n");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn silence_queue_on_watch_off_drains_only_when_off_and_nonempty() {
+        let mut files = FileMemory::new();
+        let mut pq = PoliteQueue::new();
+        pq.push(PathBuf::from("a.rs"));
+
+        // Still watching — queue is left alone.
+        silence_queue_on_watch_off(true, &mut pq, &mut files);
+        assert!(!pq.is_empty());
+        assert!(pq.armed_at().is_some());
+
+        // Watch off — the queue drains, which also disarms the backstop.
+        silence_queue_on_watch_off(false, &mut pq, &mut files);
+        assert!(pq.is_empty());
+        assert!(pq.armed_at().is_none());
+
+        // Already empty + off — no-op, doesn't panic or re-arm.
+        silence_queue_on_watch_off(false, &mut pq, &mut files);
+        assert!(pq.is_empty());
     }
 
     #[test]
