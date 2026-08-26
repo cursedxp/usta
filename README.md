@@ -88,7 +88,7 @@ In-session commands: `/watch on|off` (file feedback) · `/show [topic]` (animate
 
 ### Polite watching
 
-By default, file feedback is polite: while Usta's last message left a question open, a save is queued instead of interrupting — a dim notice appears (`change noticed — feedback after your answer`), and the queue flushes once you reply, or after ~180s without a keystroke in usta (editor saves don't extend the window). `/watch off` discards any pending queue; `/watch polite off` delivers it immediately, then switches the session back to instant feedback (pre-v0.24 behavior); `/watch polite on` / `/watch polite` (toggle) switch it again. To make instant feedback the default for a topic, add a `watch: live` line to its approach file (`.usta/approaches/<topic>.md`, project override first) — the session-only `/watch polite` commands never write back to it.
+By default, file feedback is polite: while Usta's last message left a question open, a save is queued instead of interrupting — a dim notice appears (`change noticed — feedback after your answer`), and the queue flushes once you reply, or ~180s after your last keystroke in usta or after the change was queued, whichever is later (further saves don't push it out). `/watch off` discards any pending queue; `/watch polite off` delivers it immediately, then switches the session back to instant feedback (pre-v0.24 behavior); `/watch polite on` / `/watch polite` (toggle) switch it again. To make instant feedback the default for a topic, add a `watch: live` line to its approach file (`.usta/approaches/<topic>.md`, project override first) — the session-only `/watch polite` commands never write back to it.
 
 ### Project context: the `mentor/` folder
 
