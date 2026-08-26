@@ -417,7 +417,7 @@ pub async fn run(
             &Status::Idle,
             last_tokens,
             window,
-            Some(watching),
+            Some((watching, false)),
         )?;
         tokio::select! {
             maybe_ev = events.next() => {

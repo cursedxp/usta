@@ -27,11 +27,15 @@ pub fn render_status(
     s: &Status,
     tokens: Option<u64>,
     window: u64,
-    watching: Option<bool>,
+    watch: Option<(bool, bool)>,
 ) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
-    if let Some(on) = watching {
-        let txt = if on { "👁 watching " } else { "watch off " };
+    if let Some((watching, polite)) = watch {
+        let txt = match (watching, polite) {
+            (false, _) => "watch off ",
+            (true, false) => "👁 watching ",
+            (true, true) => "👁 watching·polite ",
+        };
         spans.push(Span::styled(txt.to_string(), theme::info()));
     }
     if let Status::Thinking { frame, cancel_hint } = s {
@@ -149,12 +153,46 @@ mod tests {
 
     #[test]
     fn watch_indicator_shows_when_some() {
-        assert!(
-            text(&render_status(&Status::Idle, None, 1_000_000, Some(true))).contains("watching")
-        );
-        assert!(
-            text(&render_status(&Status::Idle, None, 1_000_000, Some(false))).contains("watch off")
-        );
+        assert!(text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((true, false))
+        ))
+        .contains("watching"));
+        assert!(text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((false, false))
+        ))
+        .contains("watch off"));
+        assert!(!text(&render_status(&Status::Idle, None, 1_000_000, None)).contains("watch"));
+    }
+
+    #[test]
+    fn watch_indicator_shows_polite_state() {
+        assert!(text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((true, true))
+        ))
+        .contains("watching·polite"));
+        let live = text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((true, false)),
+        ));
+        assert!(live.contains("watching") && !live.contains("polite"));
+        assert!(text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((false, true))
+        ))
+        .contains("watch off"));
         assert!(!text(&render_status(&Status::Idle, None, 1_000_000, None)).contains("watch"));
     }
 }
