@@ -406,6 +406,15 @@ pub async fn run(
     }
 
     let mut watching = true;
+    // Polite mode: file feedback waits while a mentor question is open. Default on;
+    // a `watch: live` line in the topic's approach file opts back into instant
+    // feedback. The opening turn usually ends with a question — seed from it.
+    let approach = crate::tui::polite::approach_text(project_root, global, &topic);
+    let mut polite = !crate::tui::polite::live_from_approach(&approach);
+    let mut pq = crate::tui::polite::PoliteQueue::new();
+    let mut question_open = crate::visual::last_assistant_text(&session)
+        .is_some_and(|t| crate::tui::polite::question_open(&t));
+    let mut last_key = tokio::time::Instant::now();
     loop {
         // Drain the buffer at the start of every iteration — notices that
         // accumulate outside maybe_compact, like a transcript write error,
@@ -417,7 +426,7 @@ pub async fn run(
             &Status::Idle,
             last_tokens,
             window,
-            Some((watching, false)),
+            Some((watching, polite)),
         )?;
         tokio::select! {
             maybe_ev = events.next() => {
@@ -431,14 +440,24 @@ pub async fn run(
                     Event::Paste(s) => { editor.insert_str(&s); continue }
                     _ => continue,
                 };
+                last_key = tokio::time::Instant::now(); // pushes the backstop deadline out
                 match editor.handle_key(k) {
                     Action::None => {}
                     Action::Exit => break,
                     Action::Submit(line) => {
                         if let Some(cmd) = crate::slash::parse_watch_command(&line) {
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            let (next, msg) = crate::slash::apply_watch(cmd, watching);
-                            watching = next;
+                            use crate::slash::WatchCmd::*;
+                            let msg = match cmd {
+                                PoliteOn | PoliteOff | PoliteToggle => {
+                                    let (next, m) = crate::slash::apply_polite(cmd, polite);
+                                    polite = next; m
+                                }
+                                On | Off | Toggle => {
+                                    let (next, m) = crate::slash::apply_watch(cmd, watching);
+                                    watching = next; m
+                                }
+                            };
                             crate::tui::page::page_notice(&mut tui, msg)?;
                             continue;
                         }
@@ -513,6 +532,7 @@ pub async fn run(
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
                             line.clone()
                         };
+                        question_open = false; // the user answered — the gate closes
                         session.push_user(&outgoing);
                         recorder.user(&outgoing);
                         match crate::tui::ask::ask_live(
@@ -522,6 +542,7 @@ pub async fn run(
                             Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
                                 let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
+                                question_open = crate::tui::polite::question_open(&clean);
                                 let w = crate::tui::page::current_width(&tui);
                                 crate::tui::page::page_reply(&mut tui, &clean, w)?;
                                 recorder.assistant(&clean);
@@ -538,6 +559,9 @@ pub async fn run(
                             }
                             Err(e) => crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?,
                         }
+                        // The turn is over — release whatever was withheld, even if this
+                        // reply asks a new question (spec). Empty queue = no-op.
+                        crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, pq.drain(), max_feedback_batch).await?;
                     }
                 }
             }
@@ -546,44 +570,22 @@ pub async fn run(
             }
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 let batch = debouncer.flush();
+                // Bulk and companion-off gates come BEFORE the polite queue: a bulk
+                // save is skipped, never queued.
                 if batch.len() > max_feedback_batch {
-                    crate::tui::page::page_notice(&mut tui, &format!(
-                        "bulk change ({} files) — feedback skipped, still watching",
-                        batch.len()
-                    ))?;
-                    // Silently sync FileMemory: the next single save shouldn't produce a giant diff.
-                    for path in batch {
-                        if let Ok(c) = std::fs::read_to_string(&path) {
-                            let _ = files.observe(&path, c);
-                        }
-                    }
+                    crate::tui::polite::bulk_skip(&mut tui, &mut files, batch)?;
                 } else if !watching {
                     // Companion off: keep the diff baseline current, no LLM feedback.
-                    for path in batch {
-                        if let Ok(c) = std::fs::read_to_string(&path) {
-                            let _ = files.observe(&path, c);
-                        }
-                    }
+                    crate::tui::polite::sync_baseline(&mut files, batch);
+                } else if polite && question_open {
+                    crate::tui::polite::queue_batch(&mut tui, &mut pq, batch)?;
                 } else {
-                    for path in batch {
-                        match crate::file_feedback::handle_file_change(backend, &mut session, &mut files, project_root, &path, &recorder).await {
-                            Ok(crate::file_feedback::FileFeedback::Sessiz) => {}
-                            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => crate::tui::page::page_notice(&mut tui, &m)?,
-                            Ok(crate::file_feedback::FileFeedback::Yanit { tokens, reply, show_topic }) => {
-                                if let Some(t) = tokens { last_tokens = Some(t); }
-                                let w = crate::tui::page::current_width(&tui);
-                                crate::tui::page::page_reply(&mut tui, &reply.text, w)?;
-                                crate::lifecycle::maybe_compact(backend, &mut session, project_root, tokens).await;
-                                crate::tui::entry::trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
-                            }
-                            // Same silent-skip classes as the plain path (plain.rs) /
-                            // is_silent_skip (file_feedback.rs): vanished temp file
-                            // (NotFound) or binary content (InvalidData) — no noise for either.
-                            Err(e) if crate::file_feedback::is_silent_skip(&e) => {}
-                            Err(e) => crate::tui::page::page_error(&mut tui, &format!("file feedback skipped: {}: {e}", path.display()))?,
-                        }
-                    }
+                    crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, batch, max_feedback_batch).await?;
                 }
+            }
+            // Backstop: the user went quiet mid-question — don't sit on the queue forever.
+            _ = crate::lifecycle::sleep_until_deadline(crate::tui::polite::backstop_deadline(pq.is_empty(), last_key)), if polite && !pq.is_empty() => {
+                crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, pq.drain(), max_feedback_batch).await?;
             }
         }
     }

@@ -1,8 +1,20 @@
-//! Pure logic for the polite watcher: queues file-change feedback while a
-//! mentor question is open, and decides when to flush it.
+//! The polite watcher: queues file-change feedback while a mentor question is
+//! open, and decides when to flush it. Mostly pure logic; `process_paths` is
+//! the one impure piece — the single file-feedback cycle `run.rs` starts from
+//! its three flush points, kept here so `run.rs` stays connective tissue.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use anyhow::Result;
+use crossterm::event::EventStream;
+
+use crate::backend::Backend;
+use crate::feedback::FileMemory;
+use crate::session::Session;
+use crate::transcript::Recorder;
+use crate::tui::editor::InputBox;
+use crate::tui::term::Tui;
 
 /// How long to wait for a keystroke before flushing a queued file-change
 /// notice even without an answer (inactivity backstop).
@@ -32,10 +44,6 @@ impl PoliteQueue {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.paths.is_empty()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.paths.len()
     }
 
     /// Drains all queued paths in order, resetting the queue to empty.
@@ -68,6 +76,130 @@ pub(crate) fn live_from_approach(text: &str) -> bool {
         .any(|l| l.trim().eq_ignore_ascii_case("watch: live"))
 }
 
+/// The topic's approach file, project override first — same priority as
+/// `slash::topic_has_goal` and brain.rs's GOAL probe. An unreadable or missing
+/// file is an empty string, which keeps polite mode on.
+pub(crate) fn approach_text(project_root: &Path, global: &Path, topic: &str) -> String {
+    let override_path = crate::progress::approach_path(project_root, topic);
+    let path = if override_path.exists() {
+        override_path
+    } else {
+        global.join("approaches").join(format!("{topic}.md"))
+    };
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Re-baselines `files` for `paths` without asking the mentor — used wherever a
+/// batch is skipped, so the next single save still diffs against fresh content.
+pub(crate) fn sync_baseline(files: &mut FileMemory, paths: Vec<PathBuf>) {
+    for path in paths {
+        if let Ok(c) = std::fs::read_to_string(&path) {
+            let _ = files.observe(&path, c);
+        }
+    }
+}
+
+/// A question is open — withhold `paths` instead of interrupting. Exactly one
+/// notice per queue fill: `push` only reports the first path into an empty queue.
+pub(crate) fn queue_batch(tui: &mut Tui, pq: &mut PoliteQueue, paths: Vec<PathBuf>) -> Result<()> {
+    for path in paths {
+        if pq.push(path) {
+            crate::tui::page::page_notice(tui, "change noticed — feedback after your answer")?;
+        }
+    }
+    Ok(())
+}
+
+/// Too many files at once: say so, skip the LLM feedback, sync the baseline.
+pub(crate) fn bulk_skip(tui: &mut Tui, files: &mut FileMemory, paths: Vec<PathBuf>) -> Result<()> {
+    crate::tui::page::page_notice(
+        tui,
+        &format!(
+            "bulk change ({} files) — feedback skipped, still watching",
+            paths.len()
+        ),
+    )?;
+    sync_baseline(files, paths);
+    Ok(())
+}
+
+/// The file-feedback cycle, shared by the three points that can start one: the
+/// watcher's debounce flush, the flush after the user's answer, and the
+/// inactivity backstop. Over `max_feedback_batch` paths it degrades to
+/// `bulk_skip` — the same rule the live path applies, different source of paths.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn process_paths(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    session: &mut Session,
+    files: &mut FileMemory,
+    recorder: &Recorder,
+    project_root: &Path,
+    topic: &str,
+    last_tokens: &mut Option<u64>,
+    question_open: &mut bool,
+    paths: Vec<PathBuf>,
+    max_feedback_batch: usize,
+) -> Result<()> {
+    if paths.len() > max_feedback_batch {
+        return bulk_skip(tui, files, paths);
+    }
+    for path in paths {
+        match crate::file_feedback::handle_file_change(
+            backend,
+            session,
+            files,
+            project_root,
+            &path,
+            recorder,
+        )
+        .await
+        {
+            Ok(crate::file_feedback::FileFeedback::Sessiz) => {}
+            Ok(crate::file_feedback::FileFeedback::Bildirim(m)) => {
+                crate::tui::page::page_notice(tui, &m)?
+            }
+            Ok(crate::file_feedback::FileFeedback::Yanit {
+                tokens,
+                reply,
+                show_topic,
+            }) => {
+                // A feedback reply can end with a question too — keep the gate honest.
+                *question_open = self::question_open(&reply.text);
+                if let Some(t) = tokens {
+                    *last_tokens = Some(t);
+                }
+                let w = crate::tui::page::current_width(tui);
+                crate::tui::page::page_reply(tui, &reply.text, w)?;
+                crate::lifecycle::maybe_compact(backend, session, project_root, tokens).await;
+                crate::tui::entry::trigger_auto_visual(
+                    tui,
+                    editor,
+                    events,
+                    backend,
+                    session,
+                    project_root,
+                    topic,
+                    show_topic,
+                    *last_tokens,
+                )
+                .await?;
+            }
+            // Same silent-skip classes as the plain path (plain.rs) /
+            // is_silent_skip (file_feedback.rs): vanished temp file
+            // (NotFound) or binary content (InvalidData) — no noise for either.
+            Err(e) if crate::file_feedback::is_silent_skip(&e) => {}
+            Err(e) => crate::tui::page::page_error(
+                tui,
+                &format!("file feedback skipped: {}: {e}", path.display()),
+            )?,
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,7 +211,6 @@ mod tests {
         assert!(q.push(PathBuf::from("a.rs"))); // first push into empty queue → announce
         assert!(!q.push(PathBuf::from("b.rs"))); // queue already non-empty → silent
         assert!(!q.push(PathBuf::from("a.rs"))); // duplicate → silent, not re-added
-        assert_eq!(q.len(), 2);
         assert_eq!(
             q.drain(),
             vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]
@@ -101,6 +232,30 @@ mod tests {
         let now = tokio::time::Instant::now();
         assert_eq!(backstop_deadline(true, now), None);
         assert_eq!(backstop_deadline(false, now), Some(now + POLITE_BACKSTOP));
+    }
+
+    #[test]
+    fn approach_text_prefers_project_override_and_tolerates_missing() {
+        let base =
+            std::env::temp_dir().join(format!("usta_polite_approach_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let project = base.join("proj");
+        let global = base.join("global");
+        std::fs::create_dir_all(project.join(".usta/approaches")).unwrap();
+        std::fs::create_dir_all(global.join("approaches")).unwrap();
+
+        // no file at all → empty (so live_from_approach is false → polite stays on)
+        assert_eq!(approach_text(&project, &global, "rust"), "");
+
+        // only global → global content
+        std::fs::write(global.join("approaches/rust.md"), "watch: live\n").unwrap();
+        assert_eq!(approach_text(&project, &global, "rust"), "watch: live\n");
+
+        // project override wins, even when it drops the line
+        std::fs::write(project.join(".usta/approaches/rust.md"), "# local\n").unwrap();
+        assert_eq!(approach_text(&project, &global, "rust"), "# local\n");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
