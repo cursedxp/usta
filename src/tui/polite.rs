@@ -321,9 +321,18 @@ mod tests {
 
     #[test]
     fn silence_queue_on_watch_off_drains_only_when_off_and_nonempty() {
+        // Real file on disk (same temp-dir pattern as
+        // approach_text_prefers_project_override_and_tolerates_missing above)
+        // so sync_baseline's std::fs::read_to_string actually succeeds and
+        // files.observe is exercised, not silently skipped.
+        let path =
+            std::env::temp_dir().join(format!("usta_polite_silence_{}.rs", std::process::id()));
+        let content = "fn main() {}";
+        std::fs::write(&path, content).unwrap();
+
         let mut files = FileMemory::new();
         let mut pq = PoliteQueue::new();
-        pq.push(PathBuf::from("a.rs"));
+        pq.push(path.clone());
 
         // Still watching — queue is left alone.
         silence_queue_on_watch_off(true, &mut pq, &mut files);
@@ -335,9 +344,19 @@ mod tests {
         assert!(pq.is_empty());
         assert!(pq.armed_at().is_none());
 
+        // Baseline was actually recorded during the drain: observing the same
+        // content again reports "no change", not "first sight". This only
+        // holds if sync_baseline's files.observe call ran on the drained path.
+        assert!(matches!(
+            files.observe(&path, content.to_string()),
+            crate::feedback::ChangePayload::Skip
+        ));
+
         // Already empty + off — no-op, doesn't panic or re-arm.
         silence_queue_on_watch_off(false, &mut pq, &mut files);
         assert!(pq.is_empty());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
