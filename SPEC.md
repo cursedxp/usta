@@ -259,6 +259,8 @@ Design detail: `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`.
 
 **v0.24.3:** bulk absorbs the pending queue instead of stranding it; the delivery notice is gated on there being something to deliver; the polite wiring in `run.rs` is now pinned by a source test.
 
+**v0.24.4:** the polite-off mode-change confirmation is no longer swallowed on an over-limit queue (`deliver_queue_on_polite_off` returns whether it printed its own notice); the wiring pin also covers `bulk_skip_absorbing_queue` and `process_paths` (the post-turn flush included).
+
 ## 5. Flow (one learning session)
 
 ```

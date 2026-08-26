@@ -656,6 +656,8 @@ mod tests {
             "silence_queue_on_watch_off",
             "deliver_queue_on_polite_off",
             "backstop_deadline(",
+            "bulk_skip_absorbing_queue",
+            "process_paths",
         ] {
             assert!(
                 src.contains(needle),
