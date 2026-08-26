@@ -7,6 +7,7 @@ pub mod editor;
 pub mod entry;
 pub mod page;
 pub mod paint;
+pub mod polite;
 pub mod run;
 pub mod status;
 pub mod term;
