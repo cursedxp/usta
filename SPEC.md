@@ -243,6 +243,16 @@ Binding principle: nothing that can be resolved deterministically by the shell i
 
 Design detail: `docs/superpowers/specs/2026-08-16-prompt-diet-design.md`.
 
+## 4.21 Polite Watcher (v0.24)
+
+A `polite` flag sits alongside `watching` in TUI watch mode — **default ON**, unless the topic's approach file (project `.usta/approaches/<topic>.md` overriding global `approaches/<topic>.md`; missing/unreadable keeps it ON) has a `watch: live` line. `watching && !polite` is exactly the pre-v0.24 instant-feedback behavior.
+
+While polite is on and the mentor has an open question (heuristic: the last assistant message contains `?`, unset once the user replies — no separate LLM protocol field, see §11), file-change paths are withheld into an order-preserving, dedup'd queue instead of interrupting; the first path into an empty queue prints one dim notice (`change noticed — feedback after your answer`), later ones are silent. The bulk-batch limit (`max_feedback_batch`) is checked before the polite gate, and again when the queue flushes.
+
+The queue flushes at two points: unconditionally once the user's message and the mentor's reply for that turn land (even if the new reply also asks a question), and via a 180s inactivity backstop (`POLITE_BACKSTOP`, `src/tui/polite.rs`) that re-arms after each firing — a fresh 180s window starts rather than the next change flushing immediately. `/watch polite` (toggle), `/watch polite on`, `/watch polite off` override the session only; the override is never written back to the approach file. Status line: `👁 watching·polite ` (polite on) vs `👁 watching ` (off) vs `watch off ` (not watching). Out of scope: the plain/pipe/CI path (`plain.rs`) and the exam flow are unchanged.
+
+Design detail: `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`.
+
 ## 5. Flow (one learning session)
 
 ```
@@ -343,6 +353,7 @@ usta/
 - **TUI design system (v0.18):** the visual language was pulled to a single source (`src/tui/theme.rs`) — semantic color `Color::Indexed` + glyph pairs, all TUI modules + `ui.rs` plain-ANSI + termimad skin fed from here (no scattered `Color::` literals). Color reinforces the glyph, it isn't status (color-blind/monochrome safety); orange = identity, ≤2 on a static screen (test-locked). The exam card isn't drawn in the shell — the model draws it via the GOAL.md `## Mock Exams` format rule, the shell doesn't parse question-state ("thin shell" preserved). Behavior/text unchanged, only presentation. Version: `0.18.0`.
 - **Module size budget (v0.22.0):** a module whose production code (test module excluded) exceeds 600 lines needs a documented reason to stay unsplit. A test module that bloats a file moves to its own file instead (`#[cfg(test)] #[path = "..."] mod tests;`), it doesn't count against the budget. A file carrying that pattern must not become a directory module (`foo.rs` → `foo/mod.rs`) without moving its test file alongside — dropping the `mod tests;` line leaves the test file uncompiled and its tests silently gone, and nothing in CI pins the test count to catch it. Grew out of `main.rs` reaching 3045 lines with no rubric anywhere ever asking "has this file grown too large" — see `docs/superpowers/specs/2026-08-16-module-split-design.md`. Version: `0.22.0`.
 - **Module size budget, status (v0.23.0):** the two modules over budget when the rule shipped — `tui/run.rs` (1185) and `tui/welcome.rs` (797) — were split (cleanup round); no module in the crate exceeds the budget now. `run()` itself stays 562 lines inside the 591-line `tui/run.rs` by documented exception (zero test coverage on the function, five mutable values live across `.await` in its `select!`) — see `docs/superpowers/specs/2026-08-17-cleanup-round-design.md`. Version: `0.23.0`.
+- **Polite watcher (v0.24.0):** the `?` heuristic is enough to track an open question — deliberately no LLM protocol flag for "awaiting answer" (prompt diet, §4.20 principle applied here too). The session's `/watch polite` override is not persisted to the approach file — it's a per-session choice, `watch: live` in the approach file remains the only durable opt-out. Version: `0.24.0`.
 
 ## 12. Open Decision Points (clarified in the implementation plan)
 
