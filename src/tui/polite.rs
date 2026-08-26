@@ -71,6 +71,41 @@ pub(crate) fn question_open(text: &str) -> bool {
     text.contains('?')
 }
 
+/// The four ways a flushed file-change batch can be handled — decided once,
+/// up front, so `run.rs` only matches on the outcome.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Route {
+    /// Too many files at once — feedback skipped, baseline still synced.
+    Bulk,
+    /// Companion off — baseline synced, no LLM feedback.
+    ObserveOnly,
+    /// Polite mode with a question open — withhold until the user answers.
+    Queue,
+    /// Give feedback now.
+    Feedback,
+}
+
+/// Picks the route for a flushed batch. Order matters: bulk and
+/// companion-off gates come before the polite queue, same as the run loop's
+/// original if/else chain — a bulk save is skipped, never queued.
+pub(crate) fn route(
+    batch_len: usize,
+    max_batch: usize,
+    watching: bool,
+    polite: bool,
+    question_open: bool,
+) -> Route {
+    if batch_len > max_batch {
+        Route::Bulk
+    } else if !watching {
+        Route::ObserveOnly
+    } else if polite && question_open {
+        Route::Queue
+    } else {
+        Route::Feedback
+    }
+}
+
 /// The backstop flush deadline: `None` while the queue is empty, otherwise
 /// anchored to whichever is later, the queue's arm time or the last
 /// keystroke, plus `POLITE_BACKSTOP` — so the window is never shorter than
@@ -366,5 +401,25 @@ mod tests {
         assert!(!live_from_approach("watch: polite\n")); // unknown value → default
         assert!(!live_from_approach("# nothing here\n"));
         assert!(!live_from_approach(""));
+    }
+
+    #[test]
+    fn route_truth_table() {
+        use Route::*;
+        // bulk wins over everything
+        assert_eq!(route(11, 10, true, true, true), Bulk);
+        assert_eq!(route(11, 10, false, false, false), Bulk);
+        // watching off → observe only, regardless of polite/question
+        assert_eq!(route(1, 10, false, true, true), ObserveOnly);
+        assert_eq!(route(1, 10, false, false, false), ObserveOnly);
+        // polite + open question → queue
+        assert_eq!(route(1, 10, true, true, true), Queue);
+        // polite but no open question → instant feedback
+        assert_eq!(route(1, 10, true, true, false), Feedback);
+        // live mode ignores question state
+        assert_eq!(route(1, 10, true, false, true), Feedback);
+        assert_eq!(route(1, 10, true, false, false), Feedback);
+        // boundary: exactly max is NOT bulk (existing `>` comparison)
+        assert_eq!(route(10, 10, true, false, false), Feedback);
     }
 }

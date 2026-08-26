@@ -572,17 +572,12 @@ pub async fn run(
             }
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 let batch = debouncer.flush();
-                // Bulk and companion-off gates come BEFORE the polite queue: a bulk
-                // save is skipped, never queued.
-                if batch.len() > max_feedback_batch {
-                    crate::tui::polite::bulk_skip(&mut tui, &mut files, batch)?;
-                } else if !watching {
-                    // Companion off: keep the diff baseline current, no LLM feedback.
-                    crate::tui::polite::sync_baseline(&mut files, batch);
-                } else if polite && question_open {
-                    crate::tui::polite::queue_batch(&mut tui, &mut pq, batch)?;
-                } else {
-                    crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, batch, max_feedback_batch).await?;
+                use crate::tui::polite::Route;
+                match crate::tui::polite::route(batch.len(), max_feedback_batch, watching, polite, question_open) {
+                    Route::Bulk => crate::tui::polite::bulk_skip(&mut tui, &mut files, batch)?,
+                    Route::ObserveOnly => crate::tui::polite::sync_baseline(&mut files, batch),
+                    Route::Queue => crate::tui::polite::queue_batch(&mut tui, &mut pq, batch)?,
+                    Route::Feedback => crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, batch, max_feedback_batch).await?,
                 }
             }
             // Backstop: the user went quiet mid-question — don't sit on the queue forever.
