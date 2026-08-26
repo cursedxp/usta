@@ -253,6 +253,8 @@ The queue flushes at two points: unconditionally once the user's message and the
 
 Design detail: `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`.
 
+**v0.24.1 fixes:** the backstop deadline now anchors to the queue's arm time, not just the last keystroke, so it's never shorter than the time the queue has actually been armed (the "180s" claim above holds as a result — no wording change needed); `/watch off` drains the pending queue (syncing the diff baseline) and disarms the backstop instead of letting it still fire; directory events are filtered at the watcher source and `ErrorKind::IsADirectory` is a silent skip. `/watch polite [on|off]` is now documented in `/help` and the README.
+
 ## 5. Flow (one learning session)
 
 ```

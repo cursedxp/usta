@@ -17,6 +17,7 @@ pub fn help_text() -> &'static str {
      \n\
      In-session commands\n\
      \x20\x20/watch on|off    file-feedback companion (on by default)\n\
+     \x20\x20/watch polite    queue file feedback while a question is open (on|off, default: on)\n\
      \x20\x20/show [topic]    animated visual explainer (opens in browser)\n\
      \x20\x20/exam            goal mode: timed mock exam from your map\n\
      \x20\x20/game on|off     XP, levels, badges (ADHD-safe)\n\
@@ -63,6 +64,7 @@ mod tests {
             "Esc",
             "↑ / ↓",
             "/watch on|off",
+            "/watch polite",
             "/show [topic]",
             "/exam",
             "/game on|off",

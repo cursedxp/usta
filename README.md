@@ -86,6 +86,10 @@ Practice: Usta assigns exercises into `exercises/` — write, save, get reviewed
 
 In-session commands: `/watch on|off` (file feedback) · `/show [topic]` (animated visual explainer) · `/exam` (goal mode: mock exam) · `/game on|off` (gamification) · `/help` · `/quit`.
 
+### Polite watching
+
+By default, file feedback is polite: while Usta's last message left a question open, a save is queued instead of interrupting — a dim notice appears (`change noticed — feedback after your answer`), and the queue flushes once you reply, or after ~180s of inactivity so a save mid-thought is never lost. `/watch polite off` switches the session back to instant feedback (pre-v0.24 behavior); `/watch polite on` / `/watch polite` (toggle) switch it again. To make instant feedback the default for a topic, add a `watch: live` line to its approach file (`.usta/approaches/<topic>.md`, project override first) — the session-only `/watch polite` commands never write back to it.
+
 ### Project context: the `mentor/` folder
 
 Every project gets a visible `mentor/` folder next to `.usta/`:
