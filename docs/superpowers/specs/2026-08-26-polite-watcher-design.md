@@ -66,6 +66,13 @@ Canlı doğrulama (stagit oturumu, 0.24.0): mentorun iki sorusu açıkken `cargo
 - **G3 — Küçük teknik borç.** `Cargo.toml`'a `rust-version = "1.88"` — DÜZELTME (implementasyonda ölçüldü, 2× bağımsız `cargo metadata --locked`): 1.83 yalnız usta'nın kendi kaynağının tabanıydı (`ErrorKind::IsADirectory`); kilitli bağımlılık grafiğinin tabanı 1.88 (`home` 0.5.12, `instability` 0.3.13, `darling` 0.24.0). 1.83 pin'i yanlış kapasite beyanı olurdu. Kalan boşluk: 1.88 toolchain'i lokalde kurulu değil — pin "çok düşük değil" olarak doğrulandı, 1.88'e karşı derlenmedi. · Watcher temp-dir testlerine `std::process::id()` soneki (polite.rs testleriyle tutarlı).
 - Kapsam dışı (değişmedi): `FileFeedback::{Sessiz,Bildirim,Yanit}` legacy rename ayrı iş.
 
+## v0.24.3 Düzeltmeler (2026-08-26 — v0.24.2 final review; Anil onayı: "bunları fixleyelim")
+
+- **H1 — Bulk kuyruktaki dosyayı sessizce yutamaz.** Bulk rotasında bekleyen kuyruk batch'e katılır ve kuyruk boşalır (`batch.extend(pq.drain())` etkisi — `armed_at` de temizlenir). Sonuç: kuyruklanmış dosyanın baseline'ı bulk senkronuyla birlikte güncellenir, askıda söz kalmaz; kullanıcı zaten "bulk change — feedback skipped" bildirimini görür. Son "sessiz açlık" yolu kapanır.
+- **H2 — Polite-off teslim mesajı yalan söyleyemez.** "delivering queued feedback" yalnız kuyruk gerçekten teslim edilebilecekse basılır (`queue_len <= max_feedback_batch`); limit aşılmışsa mesaj basılmaz — bulk-skip bildirimi gerçeği söyler. Karar saf yardımcıya çıkar (test edilebilir).
+- **H3 — Wiring source-pin testi.** İki turdur run.rs bağlantıları silinse de 388 test yeşil kalıyor. En ucuz çare: `include_str!` ile run.rs kaynağını okuyan pin testi — `route(`, `silence_queue_on_watch_off`, `deliver_queue_on_polite_off` çağrı yerlerinin varlığını assert eder (kaba ama silmeye karşı gerçek koruma; trait-seam refactor'u ayrı iş, kapsam dışı).
+- Minors bu tura girmez (ayrıca loglu).
+
 ## Kapsam dışı
 
 - Plain yol (`plain.rs` — pipe/CI): bugünkü davranışında kalır · sınav modu zaten ayrı bir akış, dokunulmaz · mod değişikliğinin approach dosyasına otomatik yazımı yok · LLM'e "cevap bekliyorum" protokol bayrağı yok (heuristik yeter, prompt diet korunur) · kuyruktaki diff'i kullanıcının cevabına iliştirme (ayrı tur olarak işlenir — ileride istenirse ayrı tasarım).
