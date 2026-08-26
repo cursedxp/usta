@@ -99,7 +99,7 @@ Kuyruk boşsa mevcut `msg` akışı aynen (notice tek kez basılmalı — `conti
 - [ ] **Step 1:** `/watch off` kuyruk doluyken notice'a ek: mevcut `apply_watch` off mesajı sabit `&'static str` — run.rs'te kuyruk drop edilen noktada (v0.24.1 F2 bloğu) `page_notice(&mut tui, "(pending feedback dropped)")?;` tek ek satır (apply_watch imzasına DOKUNMA).
 - [ ] **Step 2:** README polite bölümü: "never lost" ifadesi düzeltilir — `/watch off` drops the pending queue, `/watch polite off` delivers it; "180s of inactivity" → "180s without a keystroke in usta (editor saves don't extend the window)".
 - [ ] **Step 3:** SPEC.md: :249 civarındaki "exactly the pre-v0.24 behavior" cümlesine F4 istisnası (directory events are filtered in all modes); §4.21'e v0.24.2 tek satır not (route extraction, polite-off delivery).
-- [ ] **Step 4:** `Cargo.toml`'a `rust-version = "1.83"` (`[package]` altına — F4'ün `ErrorKind::IsADirectory` MSRV'si).
+- [ ] **Step 4:** `Cargo.toml`'a `rust-version = "1.88"` (`[package]` altına). NOT — plan aslında 1.83 diyordu; implementasyonda `cargo metadata --locked` ile ölçüldü, kilitli bağımlılık tabanı 1.88 çıktı ve öyle ship edildi (spec G3 düzeltmesi). Bu satır geriye dönük düzeltildi.
 - [ ] **Step 5:** `src/watcher.rs` temp-dir test adlarına `std::process::id()` soneki (polite.rs:325 desenine bak, aynısı).
 - [ ] **Step 6:** `cargo build && cargo test` → PASS. Commit + push: `docs: correct polite watcher copy, pin MSRV, test hygiene`
 
