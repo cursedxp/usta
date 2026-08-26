@@ -202,9 +202,13 @@ pub(crate) fn polite_off_delivery_notice(
 
 /// Turning polite off means "give me instant feedback now" (spec v0.24.2 G1):
 /// deliver the withheld queue immediately instead of stranding it. No-op
-/// unless `should_deliver_queue_on_polite_off` says so. Returns whether it
-/// delivered, so the caller can skip its normal mode-change notice on that
-/// path — this path prints its own.
+/// unless `should_deliver_queue_on_polite_off` says so. Returns whether this
+/// call printed its own notice (`polite_off_delivery_notice(...).is_some()`):
+/// `true` for a deliverable queue, `false` when the queue is empty or over
+/// `max_feedback_batch` — in the over-limit case `process_paths` degrades to
+/// `bulk_skip`, which prints its own, truthful notice instead. The caller
+/// must still print its normal mode-change confirmation whenever this
+/// returns `false`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn deliver_queue_on_polite_off(
     tui: &mut Tui,
@@ -226,8 +230,9 @@ pub(crate) async fn deliver_queue_on_polite_off(
         return Ok(false);
     }
     let paths = pq.drain();
-    if let Some(notice) = polite_off_delivery_notice(paths.len(), max_feedback_batch) {
-        crate::tui::page::page_notice(tui, notice)?;
+    let notice = polite_off_delivery_notice(paths.len(), max_feedback_batch);
+    if let Some(msg) = notice {
+        crate::tui::page::page_notice(tui, msg)?;
     }
     process_paths(
         tui,
@@ -245,7 +250,7 @@ pub(crate) async fn deliver_queue_on_polite_off(
         max_feedback_batch,
     )
     .await?;
-    Ok(true)
+    Ok(notice.is_some())
 }
 
 /// A question is open — withhold `paths` instead of interrupting. Exactly one
@@ -579,6 +584,31 @@ mod tests {
         );
         assert_eq!(polite_off_delivery_notice(11, 10), None); // bulk skip will tell the truth
         assert!(polite_off_delivery_notice(10, 10).is_some()); // boundary: exactly max delivers
+
+        // Bool contract: `deliver_queue_on_polite_off` returns
+        // `Ok(notice.is_some())`, so its return value mirrors this `.is_some()`
+        // shape exactly. Pinned here because that function needs a `Tui` and
+        // can't be driven directly from a unit test.
+        assert!(polite_off_delivery_notice(0, 10).is_none()); // empty queue → false
+        assert!(polite_off_delivery_notice(3, 10).is_some()); // deliverable queue → true
+        assert!(polite_off_delivery_notice(11, 10).is_none()); // over limit → false, bulk_skip speaks
+    }
+
+    #[test]
+    fn deliver_queue_return_value_mirrors_notice_is_some() {
+        // `deliver_queue_on_polite_off` can't be unit-tested directly — it
+        // needs a `Tui`. Pin the exact return expression in its source
+        // instead, so a future edit can't quietly revert it to a bare
+        // `Ok(true)` that swallows the caller's confirmation on the
+        // over-limit path (same pattern as `run_rs_wiring_call_sites_are_pinned`
+        // below, but pinning this file's own source). Search only the source
+        // above the test module, so this assert's own text can't match itself.
+        let full_src = include_str!("polite.rs");
+        let production_src = full_src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            production_src.contains("Ok(notice.is_some())"),
+            "deliver_queue_on_polite_off must return Ok(notice.is_some()), not a constant Ok(true)"
+        );
     }
 
     #[test]
