@@ -82,8 +82,8 @@ impl<W: Write> RatatuiBackend for TrackedBackend<W> {
     }
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
-        let height = self.inner.size()?.height;
         self.inner.append_lines(n)?;
+        let height = self.inner.size()?.height;
         self.pos = advanced_by_lines(self.pos, n, height);
         Ok(())
     }
@@ -265,12 +265,20 @@ mod tests {
 
     #[test]
     fn append_lines_through_the_backend_never_moves_the_column_backwards() {
-        // The clamp height comes from `size()`, a real ioctl, so the exact row is
-        // not assertable off a TTY — and `size()` may fail outright. Both outcomes
-        // satisfy the invariants below; the arithmetic itself is pinned by the
-        // pure-helper tests above.
-        let (mut tb, _buf) = backend(Position { x: 2, y: 1 });
+        // The clamp height comes from `size()`, a real ioctl, so off a TTY it may
+        // fail outright — but `append_lines` now forwards to the writer *before*
+        // calling `size()`, so the newlines below must reach the wire regardless
+        // of whether the overall call ends up `Ok` or `Err`. That write is the
+        // part this test must not let pass vacuously: if the `append_lines`
+        // override were deleted, the trait's provided default (`Ok(())`, a
+        // silent no-op) would leave `buf` empty and fail the assertion below.
+        let (mut tb, buf) = backend(Position { x: 2, y: 1 });
         let _ = tb.append_lines(3);
+        assert_eq!(
+            buf.bytes(),
+            b"\n\n\n".to_vec(),
+            "append_lines(3) must emit exactly three bare LF bytes to the writer"
+        );
         let after = tb.get_cursor_position().unwrap();
         assert_eq!(after.x, 2, "append_lines emits bare LFs, never a CR");
         assert!(after.y >= 1, "the row only ever advances or clamps");

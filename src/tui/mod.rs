@@ -2,7 +2,7 @@
 //! In plain mode (ui::is_plain) this module is never used.
 
 pub mod ask;
-pub mod backend_wrap;
+pub(crate) mod backend_wrap;
 pub mod convert;
 pub mod editor;
 pub mod entry;
