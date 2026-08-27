@@ -293,7 +293,7 @@ usta start rust-takvim
 - **Rust = thin shell:** CLI, LLM backend, file watching (`notify` crate), web research, health auditing.
 - **Intelligence + personality = in markdown files** (the headspace pattern). Changing behavior = edit markdown, don't touch Rust.
 - **Pluggable LLM backend (both supported — some have an API, some don't):**
-  - **CLI (default):** the local `claude` CLI (Claude Code) → existing auth/subscription, **no API key, no token bill**. `--allowedTools WebSearch` opens research + enforces "no touching" at the tool level.
+  - **CLI (default):** the local `claude` CLI (Claude Code) → existing auth/subscription, **no API key, no token bill**. `--allowedTools WebSearch` opens research + enforces "no touching" at the tool level. `--setting-sources ""` (v0.25.1) keeps Usta standalone: the user's Claude Code plugins/skills/hooks/settings never load into its calls — measured ~25k tokens of unrelated catalog per turn without it (~51k → ~26k baseline).
   - **API (optional):** the Anthropic Messages API via `ANTHROPIC_API_KEY` (reqwest), model `claude-opus-4-8`, server-side web_search, adaptive thinking.
   - Selection: `USTA_BACKEND=cli|api` takes priority; otherwise `claude` on PATH → CLI, otherwise if a key exists → API.
 - **Call:** non-streaming (no client timeout in raw reqwest → robust). Streaming in a later version. The CLI backend continues a session with `--resume <session_id>` — the first call captures the id from `--output-format json`, subsequent turns send only the new message (on a stale session it falls back to the full transcript).

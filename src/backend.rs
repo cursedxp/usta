@@ -239,7 +239,12 @@ async fn run_claude_cli(
         .arg("--model")
         .arg(model)
         .arg("--allowedTools")
-        .arg("WebSearch");
+        .arg("WebSearch")
+        // Usta is standalone: never load the user's Claude Code settings,
+        // plugins, skills or hooks into its calls — they cost ~25k tokens per
+        // turn and have nothing to do with mentoring (measured: ~51k → ~26k).
+        .arg("--setting-sources")
+        .arg("");
     if let Some(id) = resume {
         cmd.arg("--resume").arg(id);
     }
@@ -369,6 +374,21 @@ pub fn run_backend_wizard() -> Result<Backend> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_call_isolates_usta_from_claude_code_settings() {
+        // Usta is a standalone system: the user's Claude Code plugins, skills,
+        // hooks and settings must never load into its calls. Without
+        // `--setting-sources ""` the CLI baseline measured ~51k tokens per
+        // turn (plugin/skill catalogs included); with it, ~26k (v0.25.1).
+        // Source pin — the arg lives inside an async spawn fn.
+        let src = include_str!("backend.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            production.contains("--setting-sources"),
+            "CLI call no longer isolates usta from Claude Code settings"
+        );
+    }
 
     #[test]
     fn context_window_is_1m_for_opus_200k_for_haiku() {
