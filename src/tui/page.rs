@@ -70,6 +70,16 @@ pub(crate) fn current_width(tui: &Tui) -> u16 {
     tui.terminal.size().map(|s| s.width).unwrap_or(80)
 }
 
+/// Refresh the inline viewport after a terminal resize. Without this the
+/// viewport keeps drawing at its stale pre-resize area and the bottom region
+/// garbles (duplicated/shifted lines). `clear` re-anchors the inline area;
+/// the caller's loop redraws on its next iteration.
+pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
+    tui.terminal.autoresize()?;
+    tui.terminal.clear()?;
+    Ok(())
+}
+
 /// Draw the bottom region: input box (top) + status line (bottom).
 pub(crate) fn draw(
     tui: &mut Tui,
@@ -87,4 +97,34 @@ pub(crate) fn draw(
         f.render_widget(render_status(status, tokens, window, watch), status_area);
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn resize_events_are_handled_in_every_event_loop() {
+        // Source pin (same pattern as run_rs_wiring_call_sites_are_pinned):
+        // the inline-viewport TUI can't be driven from a unit test, and Resize
+        // was silently ignored in every loop — which garbled the display on
+        // terminal resize (v0.24.6). Guard against the arms being deleted.
+        for (name, src) in [
+            ("run.rs", include_str!("run.rs")),
+            ("ask.rs", include_str!("ask.rs")),
+            ("entry.rs", include_str!("entry.rs")),
+        ] {
+            assert!(
+                src.contains("Event::Resize"),
+                "{name} no longer handles Event::Resize"
+            );
+        }
+        let own = include_str!("page.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap()
+            .to_string();
+        assert!(
+            own.contains("fn handle_resize"),
+            "page.rs lost its handle_resize helper"
+        );
+    }
 }

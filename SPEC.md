@@ -222,6 +222,8 @@ The approved design system (Claude Design project) was applied to the code — b
 
 Design detail: `docs/superpowers/specs/2026-08-16-tui-design-apply-design.md`.
 
+**Resize (v0.24.6):** `Event::Resize` is handled in all event loops (main, ask_live, confirm, topic entry) via `page::handle_resize` — `autoresize` + `clear` re-anchors the inline viewport so the bottom region stops garbling after a terminal resize. Previously-printed scrollback stays as the terminal reflowed it (out of scope). Pinned by a source test. Design: `docs/superpowers/specs/2026-08-27-tui-resize-fix-design.md`.
+
 ## 4.20 Prompt Diet (v0.19)
 
 Binding principle: nothing that can be resolved deterministically by the shell is written into the prompt; a section whose condition the shell knows isn't loaded unconditionally.

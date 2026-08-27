@@ -210,7 +210,8 @@ pub(crate) async fn ask_topic(
                 }
             }
             Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
-            Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
+            Some(Ok(Event::Resize(_, _))) => crate::tui::page::handle_resize(tui)?,
+            Some(Ok(_)) | Some(Err(_)) => {} // other events — ignore
             None => return Ok(None),         // stream ended — don't spin in a hot loop (spec B4)
         }
     }

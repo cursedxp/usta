@@ -438,6 +438,7 @@ pub async fn run(
                     Event::Key(k) => k,
                     // Bracketed paste: single event, Enter isn't triggered, structure is preserved.
                     Event::Paste(s) => { editor.insert_str(&s); continue }
+                    Event::Resize(_, _) => { crate::tui::page::handle_resize(&mut tui)?; continue }
                     _ => continue,
                 };
                 last_key = tokio::time::Instant::now(); // pushes the backstop deadline out

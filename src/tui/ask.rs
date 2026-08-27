@@ -55,6 +55,8 @@ pub(crate) async fn ask_live(
                 // Paste is still processed by the editor even while locked (doesn't submit).
                 if let Event::Paste(s) = &ev {
                     editor.insert_str(s);
+                } else if let Event::Resize(_, _) = ev {
+                    crate::tui::page::handle_resize(tui)?;
                 } else if let Event::Key(k) = ev {
                     // Single Esc = instant cancel (drops fut → kill_on_drop kills the child).
                     if matches!(k.code, KeyCode::Esc) {
@@ -100,7 +102,8 @@ pub(crate) async fn tui_confirm(
                 | KeyCode::Char('E') => return Ok(true),
                 _ => return Ok(false),
             },
-            Some(Ok(_)) | Some(Err(_)) => {} // resize etc. — ignore
+            Some(Ok(Event::Resize(_, _))) => crate::tui::page::handle_resize(tui)?,
+            Some(Ok(_)) | Some(Err(_)) => {} // other events — ignore
             None => return Ok(false),        // stream ended — don't spin in a hot loop (spec B4)
         }
     }
