@@ -3,7 +3,7 @@
 //! (module split, Task 6). Name note: `feedback.rs` (FileMemory/diffing) and
 //! `watcher.rs` (fs events) already exist; this is the layer above both.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -123,8 +123,7 @@ pub(crate) fn feedback_frame(
 /// `EXERCISE_REVIEW_RULE`) when at least one file in the batch is an exercise
 /// submission.
 ///
-/// Not yet called from production code — Task 2 wires it into the batch
-/// handler, so `cargo build` emits one expected `dead_code` warning until then.
+/// Called from `handle_batch_change` (below) when `polite` is true.
 pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
     let mut frame = format!(
         "[Files changed]\n{files_payload}\n\n\
@@ -217,6 +216,159 @@ pub(crate) async fn handle_file_change(
         reply: display_reply,
         show_topic,
     })
+}
+
+/// Metadata `build_batch_payload` derives alongside the merged payload —
+/// everything `handle_batch_change` needs to pick a frame, decide whether to
+/// run `cargo check`, and report what happened, without re-walking `paths`.
+pub(crate) struct BatchMeta {
+    /// How many files made it into the payload (0 means no LLM call at all).
+    pub(crate) total_included: usize,
+    /// At least one included file is an exercise submission.
+    pub(crate) any_exercise: bool,
+    /// At least one included file is NOT an exercise submission (gates
+    /// `cargo check`, same rule `handle_file_change` applies per-file).
+    pub(crate) any_non_exercise: bool,
+    /// Notices for files that were dropped but still worth telling the user
+    /// about (read errors that aren't silent-skip, oversized files). In
+    /// `paths` order.
+    pub(crate) notices: Vec<String>,
+    /// Path display strings of the INCLUDED files, in `paths` order.
+    pub(crate) displays: Vec<String>,
+}
+
+/// Merge a debounce batch of changed files into one payload for a single LLM
+/// turn. Pure aside from the `FileMemory` state machine and the file reads
+/// themselves — no LLM call, so this is what the batch tests exercise
+/// directly. Per-file classification mirrors `handle_file_change` exactly
+/// (same silent-skip rule, same oversized-file notice text); the only new
+/// behavior is merging N files into one `FILE: <path> (<kind>)` block per
+/// included file, joined with blank lines, in `paths` order.
+fn build_batch_payload(
+    files: &mut feedback::FileMemory,
+    project_root: &Path,
+    paths: &[PathBuf],
+) -> (String, BatchMeta) {
+    let mut blocks = Vec::new();
+    let mut meta = BatchMeta {
+        total_included: 0,
+        any_exercise: false,
+        any_non_exercise: false,
+        notices: Vec::new(),
+        displays: Vec::new(),
+    };
+    for path in paths {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                let e = anyhow::Error::new(e);
+                if !is_silent_skip(&e) {
+                    meta.notices
+                        .push(format!("file feedback skipped: {}: {e}", path.display()));
+                }
+                continue;
+            }
+        };
+        let exercise = is_exercise_path(project_root, path);
+        let (body, is_diff) = match files.observe(path, content) {
+            feedback::ChangePayload::Skip => continue,
+            feedback::ChangePayload::TooLarge(len) => {
+                meta.notices.push(format!(
+                    "(large file — not watched: {} — {len} bytes)",
+                    path.display()
+                ));
+                continue;
+            }
+            feedback::ChangePayload::FirstSight(full) => (full, false),
+            feedback::ChangePayload::Diff(diff) => (diff, true),
+        };
+        let kind = match (exercise, is_diff) {
+            (false, false) => "full contents",
+            (false, true) => "unified diff",
+            (true, false) => "exercise submission, full contents",
+            (true, true) => "exercise submission, unified diff",
+        };
+        blocks.push(format!("FILE: {} ({kind})\n{body}", path.display()));
+        meta.displays.push(path.display().to_string());
+        meta.total_included += 1;
+        if exercise {
+            meta.any_exercise = true;
+        } else {
+            meta.any_non_exercise = true;
+        }
+    }
+    (blocks.join("\n\n"), meta)
+}
+
+/// Runs a whole debounce batch of saved files through `FileMemory` and turns
+/// it into ONE injected user turn → ONE LLM call, instead of one call per
+/// file (`handle_file_change`'s old per-file loop, see `polite::process_paths`).
+/// `.0` is notices the caller should print, in `paths` order, BEFORE the
+/// reply (dropped files that are still worth telling the user about);
+/// `.1` is `FileFeedback::Sessiz` when nothing made it into the payload (no
+/// LLM call at all), otherwise `FileFeedback::Yanit` in its usual shape.
+/// `FileFeedback::Bildirim` is never returned here — a batch can carry both a
+/// large-file notice AND a reply, which a single `FileFeedback` can't express;
+/// that variant stays in the enum for `handle_file_change`'s single-file path.
+///
+/// Frame choice: `polite` selects the lesson-flow frame (`flow_frame`) or the
+/// same review frame `handle_file_change` uses (`feedback_frame`, given the
+/// whole merged payload as one block, exercise-flagged when any file in the
+/// batch is an exercise submission). `cargo check` runs at most once per
+/// batch — only when at least one included file is not an exercise
+/// submission — instead of once per file.
+pub(crate) async fn handle_batch_change(
+    backend: &mut Backend,
+    session: &mut Session,
+    files: &mut feedback::FileMemory,
+    project_root: &Path,
+    paths: &[PathBuf],
+    recorder: &transcript::Recorder,
+    polite: bool,
+) -> Result<(Vec<String>, FileFeedback)> {
+    let (payload, meta) = build_batch_payload(files, project_root, paths);
+    if meta.total_included == 0 {
+        return Ok((meta.notices, FileFeedback::Sessiz));
+    }
+    let mut injected = if polite {
+        flow_frame(&payload, meta.any_exercise)
+    } else {
+        feedback_frame(
+            meta.any_exercise,
+            &meta.displays.join(", "),
+            &payload,
+            false,
+        )
+    };
+    if meta.any_non_exercise {
+        if let Some(check_result) = check::run_check(project_root).await {
+            injected.push_str(&format!(
+                "\n\n[cargo check result — FOR YOUR EYES ONLY, don't pass this directly to the user; apply the prediction protocol]\n{check_result}"
+            ));
+        }
+    }
+    session.push_user(&injected);
+    recorder.user(&injected);
+    let reply = ask_usta(backend, &session.system, session.history()).await?;
+    let tokens = reply.context_tokens;
+    // Marker (Görev 4) is stripped BEFORE recording/pushing — same rule as
+    // handle_file_change: history never carries `[[show: ...]]`.
+    let (clean, show_topic) = visual::extract_show_marker(&reply.text);
+    recorder.assistant(&clean);
+    session.push_assistant(clean.clone());
+    let display_reply = backend::Reply {
+        text: clean,
+        web: reply.web,
+        context_tokens: reply.context_tokens,
+    };
+    Ok((
+        meta.notices,
+        FileFeedback::Yanit {
+            tokens,
+            reply: display_reply,
+            show_topic,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -344,5 +496,209 @@ mod tests {
     fn flow_frame_carries_exercise_rule_when_flagged() {
         assert!(flow_frame("x", true).contains("AS AN EXERCISE"));
         assert!(!flow_frame("x", false).contains("AS AN EXERCISE"));
+    }
+
+    /// Unique scratch dir per test so parallel `cargo test` runs don't collide
+    /// (same pattern as `binary_file_read_error_classifies_as_silent_skip`).
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("usta-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn batch_payload_merges_files_and_drops_skips() {
+        let dir = scratch_dir("batch-merge");
+        let unchanged = dir.join("unchanged.rs");
+        let changed = dir.join("changed.rs");
+        let binary = dir.join("image.png");
+        std::fs::write(&binary, [0x89u8, 0x50, 0x4E, 0x47, 0xFF, 0xFE, 0x00, 0x9C]).unwrap();
+
+        let mut files = feedback::FileMemory::new();
+        // Baseline both text files, then only change one — so `unchanged`
+        // observes as Skip and `changed` observes as Diff.
+        files.seed(&unchanged, "same\n".to_string());
+        files.seed(&changed, "old\n".to_string());
+        std::fs::write(&unchanged, "same\n").unwrap();
+        std::fs::write(&changed, "new\n").unwrap();
+
+        let paths = vec![unchanged.clone(), changed.clone(), binary.clone()];
+        let (payload, meta) = build_batch_payload(&mut files, &dir, &paths);
+
+        assert_eq!(meta.total_included, 1);
+        assert_eq!(meta.displays, vec![changed.display().to_string()]);
+        assert!(payload.contains(&format!("FILE: {} (unified diff)", changed.display())));
+        assert!(payload.contains("-old"));
+        assert!(payload.contains("+new"));
+        assert!(!payload.contains(&format!("FILE: {}", unchanged.display())));
+        assert!(!payload.contains(&format!("FILE: {}", binary.display())));
+        // Skip (unchanged) is silent, and the binary read error is a silent-skip
+        // class (InvalidData) — neither produces a notice.
+        assert!(meta.notices.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_payload_orders_files_deterministically() {
+        let dir = scratch_dir("batch-order");
+        let a = dir.join("a.rs");
+        let b = dir.join("b.rs");
+        std::fs::write(&a, "fn a() {}\n").unwrap();
+        std::fs::write(&b, "fn b() {}\n").unwrap();
+        // Deliberately not alphabetical — order must follow `paths`, not sorting.
+        let paths = vec![b.clone(), a.clone()];
+
+        let mut files1 = feedback::FileMemory::new();
+        let (payload1, meta1) = build_batch_payload(&mut files1, &dir, &paths);
+        let mut files2 = feedback::FileMemory::new();
+        let (payload2, meta2) = build_batch_payload(&mut files2, &dir, &paths);
+
+        assert_eq!(payload1, payload2);
+        assert_eq!(meta1.displays, meta2.displays);
+        assert_eq!(
+            meta1.displays,
+            vec![b.display().to_string(), a.display().to_string()]
+        );
+        let b_pos = payload1.find(&b.display().to_string()).unwrap();
+        let a_pos = payload1.find(&a.display().to_string()).unwrap();
+        assert!(b_pos < a_pos);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_payload_flags_exercise_and_non_exercise_mix() {
+        let dir = scratch_dir("batch-mix");
+        let exercises_dir = dir.join("exercises");
+        std::fs::create_dir_all(&exercises_dir).unwrap();
+        let exercise_file = exercises_dir.join("brief.md");
+        let regular_file = dir.join("src_main.rs");
+        std::fs::write(&exercise_file, "my answer\n").unwrap();
+        std::fs::write(&regular_file, "fn main() {}\n").unwrap();
+
+        let mut files = feedback::FileMemory::new();
+        let paths = vec![exercise_file.clone(), regular_file.clone()];
+        let (payload, meta) = build_batch_payload(&mut files, &dir, &paths);
+
+        assert_eq!(meta.total_included, 2);
+        assert!(meta.any_exercise);
+        assert!(meta.any_non_exercise);
+        assert!(payload.contains(&format!(
+            "FILE: {} (exercise submission, full contents)",
+            exercise_file.display()
+        )));
+        assert!(payload.contains(&format!("FILE: {} (full contents)", regular_file.display())));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_payload_exercise_only_batch_has_no_non_exercise_flag() {
+        // Gates whether `handle_batch_change` runs `cargo check` at all.
+        let dir = scratch_dir("batch-exercise-only");
+        let exercises_dir = dir.join("exercises");
+        std::fs::create_dir_all(&exercises_dir).unwrap();
+        let exercise_file = exercises_dir.join("brief.md");
+        std::fs::write(&exercise_file, "my answer\n").unwrap();
+
+        let mut files = feedback::FileMemory::new();
+        let paths = vec![exercise_file.clone()];
+        let (_payload, meta) = build_batch_payload(&mut files, &dir, &paths);
+
+        assert!(meta.any_exercise);
+        assert!(!meta.any_non_exercise);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_payload_too_large_file_drops_with_existing_notice_text() {
+        let dir = scratch_dir("batch-too-large");
+        let big_path = dir.join("big.rs");
+        let big = "x".repeat(feedback::MAX_FILE_BYTES + 1);
+        std::fs::write(&big_path, &big).unwrap();
+
+        let mut files = feedback::FileMemory::new();
+        let paths = vec![big_path.clone()];
+        let (payload, meta) = build_batch_payload(&mut files, &dir, &paths);
+
+        assert_eq!(meta.total_included, 0);
+        assert!(payload.is_empty());
+        assert_eq!(
+            meta.notices,
+            vec![format!(
+                "(large file — not watched: {} — {} bytes)",
+                big_path.display(),
+                big.len()
+            )]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn batch_payload_everything_dropped_yields_zero_included() {
+        // Proves the precondition `handle_batch_change` uses to skip the LLM
+        // call entirely: when every file in the batch drops (Skip or
+        // silent-skip), `total_included` is 0 and the payload is empty.
+        let dir = scratch_dir("batch-all-dropped");
+        let unchanged = dir.join("unchanged.rs");
+        let binary = dir.join("image.png");
+        std::fs::write(&binary, [0x89u8, 0x50, 0x4E, 0x47, 0xFF, 0xFE, 0x00, 0x9C]).unwrap();
+
+        let mut files = feedback::FileMemory::new();
+        files.seed(&unchanged, "same\n".to_string());
+        std::fs::write(&unchanged, "same\n").unwrap();
+
+        let paths = vec![unchanged.clone(), binary.clone()];
+        let (payload, meta) = build_batch_payload(&mut files, &dir, &paths);
+
+        assert_eq!(meta.total_included, 0);
+        assert!(payload.is_empty());
+        assert!(meta.notices.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn batch_change_skips_llm_call_when_everything_drops() {
+        // Everything in the batch drops (unchanged file → Skip) — proves
+        // `handle_batch_change` returns `Sessiz` BEFORE touching the backend
+        // or session: no injected turn is pushed, no recorder entry is
+        // written, so no LLM call happened.
+        let dir = scratch_dir("batch-change-no-llm");
+        let unchanged = dir.join("unchanged.rs");
+        std::fs::write(&unchanged, "same\n").unwrap();
+        let mut files = feedback::FileMemory::new();
+        files.seed(&unchanged, "same\n".to_string());
+
+        let mut backend = Backend::Cli {
+            model: "opus".to_string(),
+            session_id: None,
+        };
+        let mut session = Session::new("rust", "system prompt");
+        let recorder_path = dir.join("transcript.jsonl");
+        let recorder = transcript::Recorder::new(recorder_path.clone());
+        let paths = vec![unchanged.clone()];
+
+        let (notices, result) = handle_batch_change(
+            &mut backend,
+            &mut session,
+            &mut files,
+            &dir,
+            &paths,
+            &recorder,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(notices.is_empty());
+        assert!(matches!(result, FileFeedback::Sessiz));
+        assert!(session.history().is_empty());
+        assert!(!recorder_path.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
