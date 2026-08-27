@@ -102,6 +102,12 @@ impl InputBox {
     /// Insert pasted text at the cursor position (bracketed paste). Line breaks
     /// are PRESERVED — so the model can see list/log structure; since the box is
     /// single-line, they're shown as ⏎ in the render. CRLF → LF is normalized.
+    /// Drop any half-typed text (confirm cancelled — don't leak it into the next prompt).
+    pub fn clear(&mut self) {
+        self.input.reset();
+        self.cursor = None;
+    }
+
     pub fn insert_str(&mut self, s: &str) {
         self.cursor = None;
         let cleaned = s.replace("\r\n", "\n").replace('\r', "\n");

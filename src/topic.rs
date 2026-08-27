@@ -44,8 +44,10 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
 pub(crate) fn start_suggest_system() -> String {
     "You are Usta, a Socratic engineering mentor. The user has a project \
      definition (given in the user message) but does NOT know where to start \
-     learning. Propose the single best starting topic. Reply in the language \
-     of the project file. FIRST line must be exactly `KONU: <topic-slug>` \
+     learning. Propose the single best starting topic. Reply in English — \
+     the user hasn't written anything yet, and the default language is \
+     English until they do (the project file's language is NOT the user's). \
+     FIRST line must be exactly `KONU: <topic-slug>` \
      (lowercase, hyphenated, 1-3 words). Then 2-4 sentences: why this topic \
      first, and ONE concrete first step small enough to start today. No \
      greeting, no markdown headings, nothing after the suggestion."
@@ -77,9 +79,9 @@ pub(crate) fn parse_start_suggestion(reply: &str) -> Option<(String, String)> {
 
 /// New-topic confirmation text (for TUI tui_confirm). The plain path uses its own
 /// `[y/N]` rustyline format — the wording is deliberately different, the two surfaces are separate.
-/// Display advertises `y` only; `e` stays silently accepted (tui_confirm key match).
+/// The answer is typed + Enter (`parse_confirm_answer`): yes/no, Turkish variants accepted silently.
 pub(crate) fn new_topic_confirm_msg(slug: &str) -> String {
-    format!("new topic: {slug} — open it? [y = yes / any other key = go back]")
+    format!("new topic: {slug} — open it? (yes/no)")
 }
 
 /// Interpret the topic input: resume or new topic? (spec K1)
@@ -286,6 +288,9 @@ mod tests {
         let s = start_suggest_system();
         assert!(s.contains("KONU:"));
         assert!(s.contains("first step"));
+        // v0.24.7: the suggestion runs before the user has typed a word — it
+        // must not inherit the project file's language.
+        assert!(s.contains("Reply in English"));
     }
 
     #[test]
@@ -407,7 +412,7 @@ mod tests {
     fn new_topic_confirm_msg_names_slug_and_keys() {
         let m = new_topic_confirm_msg("rust-cli");
         assert!(m.contains("rust-cli"));
-        assert!(m.contains("[y"));
-        assert!(!m.contains("[e")); // e silently accepted, never advertised
+        assert!(m.contains("(yes/no)"));
+        assert!(!m.contains("evet")); // Turkish variants silently accepted, never advertised
     }
 }

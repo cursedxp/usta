@@ -182,9 +182,9 @@ pub async fn run(
                         }
                         if crate::tui::ask::tui_confirm(
                             &mut tui,
-                            &editor,
+                            &mut editor,
                             &mut events,
-                            &format!("start with '{slug}'? [y/N]"),
+                            &format!("start with '{slug}'? (yes/no)"),
                         )
                         .await?
                         {
@@ -242,7 +242,7 @@ pub async fn run(
                         if local.is_empty()
                             || crate::tui::ask::tui_confirm(
                                 &mut tui,
-                                &editor,
+                                &mut editor,
                                 &mut events,
                                 &crate::topic::new_topic_confirm_msg(&slug),
                             )
@@ -272,9 +272,9 @@ pub async fn run(
     if lock.exists()
         && !crate::tui::ask::tui_confirm(
             &mut tui,
-            &editor,
+            &mut editor,
             &mut events,
-            "Another session may be open for this topic — progress could clash. Continue? [y/N]",
+            "Another session may be open for this topic — progress could clash. Continue? (yes/no)",
         )
         .await?
     {

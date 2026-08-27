@@ -84,10 +84,23 @@ pub(crate) async fn ask_live(
     }
 }
 
-/// Single-key confirmation in the TUI: print the message, wait for one key. `y`/`Y`/`e`/`E` → true, other → false.
+/// Interpret a typed confirmation line. `None` = not an answer — ask again.
+/// Only an explicit yes/no (English or Turkish, full word or initial) decides;
+/// a bare Enter or a stray word must never cancel (v0.24.7).
+pub(crate) fn parse_confirm_answer(line: &str) -> Option<bool> {
+    match line.trim().to_lowercase().as_str() {
+        "yes" | "y" | "evet" | "e" => Some(true),
+        "no" | "n" | "hayır" | "hayir" | "h" => Some(false),
+        _ => None,
+    }
+}
+
+/// Typed confirmation in the TUI: print the message, then read a full line —
+/// the user types yes/no and presses Enter (`parse_confirm_answer`). An
+/// unrecognized answer re-prompts instead of cancelling; Esc/Ctrl-C cancels.
 pub(crate) async fn tui_confirm(
     tui: &mut Tui,
-    editor: &InputBox,
+    editor: &mut InputBox,
     events: &mut EventStream,
     msg: &str,
 ) -> Result<bool> {
@@ -95,16 +108,51 @@ pub(crate) async fn tui_confirm(
     loop {
         crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
         match events.next().await {
-            Some(Ok(Event::Key(k))) => match k.code {
-                KeyCode::Char('y')
-                | KeyCode::Char('Y')
-                | KeyCode::Char('e')
-                | KeyCode::Char('E') => return Ok(true),
-                _ => return Ok(false),
-            },
+            Some(Ok(Event::Key(k))) => {
+                if matches!(k.code, KeyCode::Esc) {
+                    editor.clear();
+                    return Ok(false);
+                }
+                match editor.handle_key(k) {
+                    Action::Submit(line) => match parse_confirm_answer(&line) {
+                        Some(v) => return Ok(v),
+                        None => crate::tui::page::page_notice(tui, "please type yes or no")?,
+                    },
+                    Action::Exit => {
+                        editor.clear();
+                        return Ok(false);
+                    }
+                    Action::None => {}
+                }
+            }
+            Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
             Some(Ok(Event::Resize(_, _))) => crate::tui::page::handle_resize(tui)?,
             Some(Ok(_)) | Some(Err(_)) => {} // other events — ignore
             None => return Ok(false),        // stream ended — don't spin in a hot loop (spec B4)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_confirm_answer;
+
+    #[test]
+    fn parse_confirm_accepts_typed_yes_no_variants() {
+        for yes in ["yes", "y", "YES", " Yes ", "evet", "e", "E"] {
+            assert_eq!(parse_confirm_answer(yes), Some(true), "{yes:?}");
+        }
+        for no in ["no", "n", "NO", " No ", "hayır", "hayir", "h", "H"] {
+            assert_eq!(parse_confirm_answer(no), Some(false), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn parse_confirm_reasks_on_empty_or_unrecognized() {
+        // A stray key or bare Enter must never decide — the accidental-cancel
+        // bug this replaces (v0.24.7): any wrong key used to mean "no".
+        for other in ["", "  ", "x", "yep", "nope", "evt", "q"] {
+            assert_eq!(parse_confirm_answer(other), None, "{other:?}");
         }
     }
 }
