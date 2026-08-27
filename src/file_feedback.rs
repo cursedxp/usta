@@ -78,6 +78,12 @@ pub(crate) fn is_silent_skip(e: &anyhow::Error) -> bool {
         })
 }
 
+/// Shared exercise-review instruction (review-as-exercise, hint ladder, no
+/// solutions handed over) — the first-sight wording from `feedback_frame`,
+/// extracted so `flow_frame`'s exercise addendum doesn't duplicate it.
+/// Both callers must keep producing the exact same sentence.
+const EXERCISE_REVIEW_RULE: &str = "Review it AS AN EXERCISE: compare against the assignment, apply the hint ladder (start high), point at what to reconsider — do NOT rewrite or complete it for them. If no exercise was assigned this session, treat it as spontaneous practice work and review it the same way.";
+
 /// Build the injected user-turn for a watched-file change. Exercise files get
 /// an exercise-review frame (assignment comparison, hint ladder, no solutions);
 /// everything else keeps the original project-feedback wording VERBATIM.
@@ -95,12 +101,45 @@ pub(crate) fn feedback_frame(
             "[File changed: {path_display}]\nChange (unified diff):\n{body}\n\nGive project-grounded, Socratic feedback on this change — focus on what changed."
         ),
         (true, false) => format!(
-            "[Exercise submission saved: {path_display}]\n{body}\n\nThis is the user's deliverable for the exercise you assigned. Review it AS AN EXERCISE: compare against the assignment, apply the hint ladder (start high), point at what to reconsider — do NOT rewrite or complete it for them. If no exercise was assigned this session, treat it as spontaneous practice work and review it the same way."
+            "[Exercise submission saved: {path_display}]\n{body}\n\nThis is the user's deliverable for the exercise you assigned. {EXERCISE_REVIEW_RULE}"
         ),
         (true, true) => format!(
             "[Exercise submission changed: {path_display}]\nChange (unified diff):\n{body}\n\nReview the revision AS AN EXERCISE iteration: did it address your previous feedback? Move one rung down the hint ladder only if they're stuck — never hand over the solution."
         ),
     }
+}
+
+/// Build the injected user-turn for a polite-mode (lesson-flow) batch. Unlike
+/// `feedback_frame`'s plain review wording, this frame casts the model as the
+/// mentor mid-lesson, not a fresh reviewer — the four rules from the design
+/// spec ("Davranış > Çerçeve (polite=true, default)"): (1) check a requested
+/// step and advance on success, (2) keep any unanswered question of yours
+/// alive, (3) wave off tool-generated scaffold in one sentence and focus on
+/// the user's hand-written change, (4) answer an interruption then recall
+/// the task. `files_payload` is Task 2's pre-merged multi-file block (one or
+/// more `FILE: <path>` sections); this function does not build it.
+///
+/// `any_exercise` appends the shared exercise-review rule (see
+/// `EXERCISE_REVIEW_RULE`) when at least one file in the batch is an exercise
+/// submission.
+///
+/// Not yet called from production code — Task 2 wires it into the batch
+/// handler, so `cargo build` emits one expected `dead_code` warning until then.
+pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
+    let mut frame = format!(
+        "[Files changed]\n{files_payload}\n\n\
+This change is part of the ongoing lesson — respond as the mentor guiding it, not as a reviewer opening a fresh audit. Apply these rules:\n\
+1. If your last message asked for a step and this change satisfies it: confirm briefly, flag any errors, move to the next step.\n\
+2. If there's an unanswered question from you still pending: keep it alive briefly, don't drop it.\n\
+3. First-sight full-content files may be tool-generated scaffold (e.g. a `cargo new` template) — acknowledge scaffold in one sentence, don't review it line by line; focus on the user's hand-written change.\n\
+4. If the user asks a question in the middle of this, answer it, then recall the task."
+    );
+    if any_exercise {
+        frame.push_str(&format!(
+            "\n\nThis batch includes an exercise submission. {EXERCISE_REVIEW_RULE}"
+        ));
+    }
+    frame
 }
 
 /// Seed FileMemory with the mentor docs (`mentor/PROJECT.md`, `mentor/PROGRESS.md`)
@@ -286,5 +325,24 @@ mod tests {
         assert!(d.contains("[Exercise submission changed: exercises/gtm/brief.md]"));
         assert!(d.contains("previous feedback"));
         assert!(d.contains("never hand over the solution"));
+    }
+
+    #[test]
+    fn flow_frame_pins_the_four_lesson_rules() {
+        let s = flow_frame("FILE: src/main.rs\n...", false);
+        // (1) step check + advance, (2) keep open question alive,
+        // (3) scaffold in one sentence, (4) answer then recall the task
+        assert!(s.contains("part of the ongoing lesson"));
+        assert!(s.contains("next step"));
+        assert!(s.contains("unanswered question"));
+        assert!(s.contains("scaffold"));
+        assert!(s.contains("hand-written"));
+        assert!(!s.to_lowercase().contains("standalone code review"));
+    }
+
+    #[test]
+    fn flow_frame_carries_exercise_rule_when_flagged() {
+        assert!(flow_frame("x", true).contains("AS AN EXERCISE"));
+        assert!(!flow_frame("x", false).contains("AS AN EXERCISE"));
     }
 }
