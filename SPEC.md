@@ -245,15 +245,13 @@ Binding principle: nothing that can be resolved deterministically by the shell i
 
 Design detail: `docs/superpowers/specs/2026-08-16-prompt-diet-design.md`.
 
-## 4.21 Polite Watcher (v0.24)
+## 4.21 Polite Watcher (v0.24, superseded by v0.25.0 below)
 
-A `polite` flag sits alongside `watching` in TUI watch mode — **default ON**, unless the topic's approach file (project `.usta/approaches/<topic>.md` overriding global `approaches/<topic>.md`; missing/unreadable keeps it ON) has a `watch: live` line. `watching && !polite` is exactly the pre-v0.24 instant-feedback behavior, except that directory events are filtered in all modes (F4, v0.24.1).
+A `polite` flag sits alongside `watching` in TUI watch mode — **default ON**, unless the topic's approach file (project `.usta/approaches/<topic>.md` overriding global `approaches/<topic>.md`; missing/unreadable keeps it ON) has a `watch: live` line. As of v0.25.0, `polite` is a **prompt-frame switch, not a timing switch**: every debounce batch is processed immediately regardless of `polite`, and `polite` only chooses which frame wraps the batch (see the v0.25.0 paragraph below) — directory events are filtered in all modes (F4, v0.24.1).
 
-While polite is on and the mentor has an open question (heuristic: the last assistant message contains `?`, unset once the user replies — no separate LLM protocol field, see §11), file-change paths are withheld into an order-preserving, dedup'd queue instead of interrupting; the first path into an empty queue prints one dim notice (`change noticed — feedback after your answer`), later ones are silent. The bulk-batch limit (`max_feedback_batch`) is checked before the polite gate, and again when the queue flushes.
+The bulk-batch limit (`max_feedback_batch`) still caps how many files one batch can carry. `/watch polite` (toggle), `/watch polite on`, `/watch polite off` override the session only; the override is never written back to the approach file. Status line: `👁 watching·polite ` (polite on) vs `👁 watching ` (off) vs `watch off ` (not watching). Out of scope: the plain/pipe/CI path (`plain.rs`) and the exam flow are unchanged.
 
-The queue flushes at two points: unconditionally once the user's message and the mentor's reply for that turn land (even if the new reply also asks a question), and via a 180s backstop, anchored to the later of the last keystroke or queue-arm time (`POLITE_BACKSTOP`, `src/tui/polite.rs`), that re-arms after each firing — a fresh 180s window starts rather than the next change flushing immediately. `/watch polite` (toggle), `/watch polite on`, `/watch polite off` override the session only; the override is never written back to the approach file. Status line: `👁 watching·polite ` (polite on) vs `👁 watching ` (off) vs `watch off ` (not watching). Out of scope: the plain/pipe/CI path (`plain.rs`) and the exam flow are unchanged.
-
-Design detail: `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`.
+Design detail (historical — describes the retired queue/backstop mechanism below): `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`. Superseded by `docs/superpowers/specs/2026-08-27-flow-companion-design.md`.
 
 **v0.24.1 fixes:** the backstop deadline now anchors to the queue's arm time, not just the last keystroke, so it's never shorter than the time the queue has actually been armed (the "180s" claim above holds as a result — no wording change needed); `/watch off` drains the pending queue (syncing the diff baseline) and disarms the backstop instead of letting it still fire; directory events are filtered at the watcher source and `ErrorKind::IsADirectory` is a silent skip. `/watch polite [on|off]` is now documented in `/help` and the README.
 
@@ -262,6 +260,16 @@ Design detail: `docs/superpowers/specs/2026-08-26-polite-watcher-design.md`.
 **v0.24.3:** bulk absorbs the pending queue instead of stranding it; the delivery notice is gated on there being something to deliver; the polite wiring in `run.rs` is now pinned by a source test.
 
 **v0.24.4:** the polite-off mode-change confirmation is no longer swallowed on an over-limit queue (`deliver_queue_on_polite_off` returns whether it printed its own notice); the wiring pin also covers `bulk_skip_absorbing_queue` and `process_paths` (the post-turn flush included).
+
+**v0.24.1–v0.24.4 are superseded by v0.25.0:** the queue, the open-question heuristic, and the 180s backstop described above and in those four fix notes no longer exist in the source — they are kept here only as a changelog of what happened, not as a description of current behavior.
+
+**v0.25.0 — flow companion (queue retired):** the polite queue, the "open question" heuristic, and the 180s backstop (`PoliteQueue`, `POLITE_BACKSTOP`, `polite::process_paths`, `Route::Queue`, and related symbols) are removed. Timing is now uniform regardless of `polite`: every debounce batch — one or many files — is processed the instant the batch closes, as **one combined LLM turn** (`handle_batch_change`, one `cargo check` per turn instead of per file). `polite` no longer withholds anything; it only selects which frame wraps that one turn:
+- **`polite` on (default):** `flow_frame` — a lesson-flow companion framing. It tells the model this change is part of the ongoing lesson, not a fresh code review: confirm the step the user was asked to do and advance to the next one, keep an unanswered question of the mentor's alive instead of dropping it, wave off tool-generated scaffold (e.g. a `cargo new` template) in one sentence rather than reviewing it line by line, and answer any mid-batch question before recalling the task.
+- **`polite` off** (via `/watch polite off` or a `watch: live` line in the topic's approach file): `feedback_frame` — the same plain review framing that already existed pre-v0.24, now also applied to multi-file batches as one turn instead of one turn per file.
+
+Because there is no queue left to deliver, `/watch polite off` no longer has a "flush the withheld queue" step — it just switches the frame for the next batch, and the mode-change confirmation is worded accordingly (e.g. `polite mode off — plain review feedback`). `/watch off` still turns everything off, unchanged. `plain.rs` and the exam flow remain out of scope and unchanged — `plain.rs` still does one file per turn.
+
+Design detail: `docs/superpowers/specs/2026-08-27-flow-companion-design.md`.
 
 ## 5. Flow (one learning session)
 

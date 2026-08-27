@@ -112,7 +112,8 @@ pub(crate) fn feedback_frame(
 /// Build the injected user-turn for a polite-mode (lesson-flow) batch. Unlike
 /// `feedback_frame`'s plain review wording, this frame casts the model as the
 /// mentor mid-lesson, not a fresh reviewer — the four rules from the design
-/// spec ("Davranış > Çerçeve (polite=true, default)"): (1) check a requested
+/// spec (`docs/superpowers/specs/2026-08-27-flow-companion-design.md`,
+/// "Behavior" section, polite=true default): (1) check a requested
 /// step and advance on success, (2) keep any unanswered question of yours
 /// alive, (3) wave off tool-generated scaffold in one sentence and focus on
 /// the user's hand-written change, (4) answer an interruption then recall
@@ -302,7 +303,7 @@ fn build_batch_payload(
 
 /// Runs a whole debounce batch of saved files through `FileMemory` and turns
 /// it into ONE injected user turn → ONE LLM call, instead of one call per
-/// file (`handle_file_change`'s old per-file loop, see `polite::process_paths`).
+/// file (`handle_file_change`'s old per-file loop, see `polite::process_batch`).
 /// `.0` is notices the caller should print, in `paths` order, BEFORE the
 /// reply (dropped files that are still worth telling the user about);
 /// `.1` is `FileFeedback::Sessiz` when nothing made it into the payload (no
