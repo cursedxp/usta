@@ -89,11 +89,12 @@ mod tests {
         let term_src = include_str!("term.rs");
         let prod = term_src.split("#[cfg(test)]").next().unwrap();
         assert!(prod.contains("cursor::position()"));
-        assert!(prod.contains("TrackedBackend"));
+        // Named needle: the wiring call, not just the import at the top of the file.
+        assert!(prod.contains("TrackedBackend::new("));
         let run_src = include_str!("run.rs");
-        let setup_at = run_src.find("term::setup").expect("run.rs calls setup");
+        let setup_at = run_src.find("term::setup(").expect("run.rs calls setup");
         let stream_at = run_src
-            .find("EventStream::new")
+            .find("EventStream::new(")
             .expect("run.rs builds the stream");
         assert!(
             setup_at < stream_at,
