@@ -498,6 +498,26 @@ mod tests {
         assert!(!flow_frame("x", false).contains("AS AN EXERCISE"));
     }
 
+    #[test]
+    fn polite_branch_selecting_flow_frame_is_pinned() {
+        // `handle_batch_change` needs a live Backend, so its frame choice
+        // can't be driven from a unit test: deleting the `polite` branch
+        // would leave every test green while every batch silently fell back
+        // to the plain review frame. Pin the call site in this file's own
+        // production source instead (same crude-pin pattern as
+        // `run_rs_wiring_call_sites_are_pinned` in tui/polite.rs, which pins
+        // run.rs). Split at the test module so this assert's own text can't
+        // match itself.
+        let production_src = include_str!("file_feedback.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            production_src.contains("flow_frame(&payload, meta.any_exercise)"),
+            "handle_batch_change must select flow_frame when polite is on"
+        );
+    }
+
     /// Unique scratch dir per test so parallel `cargo test` runs don't collide
     /// (same pattern as `binary_file_read_error_classifies_as_silent_skip`).
     fn scratch_dir(tag: &str) -> std::path::PathBuf {

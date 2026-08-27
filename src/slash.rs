@@ -49,7 +49,9 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
     (next, msg)
 }
 
-/// Polite-mode toggle for `/watch polite`. Only ever called with the `Polite*`
+/// Frame toggle for `/watch polite`: on, file feedback is framed as part of
+/// the ongoing lesson; off, it's a plain code review. Timing is unaffected —
+/// feedback is immediate either way. Only ever called with the `Polite*`
 /// variants; other variants return `cur` unchanged (defensive, not `unreachable!`).
 pub(crate) fn apply_polite(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
     let next = match cmd {
@@ -59,9 +61,9 @@ pub(crate) fn apply_polite(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
         WatchCmd::On | WatchCmd::Off | WatchCmd::Toggle => return (cur, ""),
     };
     let msg = if next {
-        "polite mode on — file feedback waits while a question is open"
+        "polite mode on — companion follows your lesson flow"
     } else {
-        "polite mode off — instant file feedback"
+        "polite mode off — plain review feedback"
     };
     (next, msg)
 }
@@ -320,7 +322,14 @@ mod tests {
         assert!(!apply_polite(WatchCmd::PoliteOff, true).0);
         assert!(apply_polite(WatchCmd::PoliteToggle, false).0);
         assert!(!apply_polite(WatchCmd::PoliteToggle, true).0);
-        assert!(apply_polite(WatchCmd::PoliteOn, false).1.contains("polite"));
+        assert_eq!(
+            apply_polite(WatchCmd::PoliteOn, false).1,
+            "polite mode on — companion follows your lesson flow"
+        );
+        assert_eq!(
+            apply_polite(WatchCmd::PoliteOff, true).1,
+            "polite mode off — plain review feedback"
+        );
     }
 
     #[test]

@@ -406,15 +406,13 @@ pub async fn run(
     }
 
     let mut watching = true;
-    // Polite mode: file feedback waits while a mentor question is open. Default on;
-    // a `watch: live` line in the topic's approach file opts back into instant
-    // feedback. The opening turn usually ends with a question — seed from it.
+    // Polite mode picks the FRAME of file feedback, never its timing: on, the
+    // change is framed as part of the ongoing lesson (step check, open question
+    // kept alive, scaffold waved off); off, it's a plain code review. Every
+    // batch is processed immediately either way. Default on; a `watch: live`
+    // line in the topic's approach file opts into the plain review frame.
     let approach = crate::tui::polite::approach_text(project_root, global, &topic);
     let mut polite = !crate::tui::polite::live_from_approach(&approach);
-    let mut pq = crate::tui::polite::PoliteQueue::new();
-    let mut question_open = crate::visual::last_assistant_text(&session)
-        .is_some_and(|t| crate::tui::polite::question_open(&t));
-    let mut last_key = tokio::time::Instant::now();
     loop {
         // Drain the buffer at the start of every iteration — notices that
         // accumulate outside maybe_compact, like a transcript write error,
@@ -441,7 +439,6 @@ pub async fn run(
                     Event::Resize(_, _) => { crate::tui::page::handle_resize(&mut tui)?; continue }
                     _ => continue,
                 };
-                last_key = tokio::time::Instant::now(); // pushes the backstop deadline out
                 match editor.handle_key(k) {
                     Action::None => {}
                     Action::Exit => break,
@@ -451,17 +448,14 @@ pub async fn run(
                             use crate::slash::WatchCmd::*;
                             let msg = match cmd {
                                 PoliteOn | PoliteOff | PoliteToggle => {
+                                    // Frame switch only — nothing is pending to deliver.
                                     let (next, m) = crate::slash::apply_polite(cmd, polite);
                                     polite = next;
-                                    if crate::tui::polite::deliver_queue_on_polite_off(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, polite, &mut pq, max_feedback_batch).await? {
-                                        continue;
-                                    }
                                     m
                                 }
                                 On | Off | Toggle => {
                                     let (next, m) = crate::slash::apply_watch(cmd, watching);
                                     watching = next;
-                                    crate::tui::polite::silence_queue_on_watch_off_with_notice(&mut tui, watching, &mut pq, &mut files)?;
                                     m
                                 }
                             };
@@ -539,7 +533,6 @@ pub async fn run(
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
                             line.clone()
                         };
-                        question_open = false; // the user answered — the gate closes
                         session.push_user(&outgoing);
                         recorder.user(&outgoing);
                         match crate::tui::ask::ask_live(
@@ -549,7 +542,6 @@ pub async fn run(
                             Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
                                 last_tokens = reply.context_tokens;
                                 let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-                                question_open = crate::tui::polite::question_open(&clean);
                                 let w = crate::tui::page::current_width(&tui);
                                 crate::tui::page::page_reply(&mut tui, &clean, w)?;
                                 recorder.assistant(&clean);
@@ -566,9 +558,6 @@ pub async fn run(
                             }
                             Err(e) => crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?,
                         }
-                        // The turn is over — release whatever was withheld, even if this
-                        // reply asks a new question (spec). Empty queue = no-op.
-                        crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, pq.drain(), max_feedback_batch).await?;
                     }
                 }
             }
@@ -578,17 +567,13 @@ pub async fn run(
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 let batch = debouncer.flush();
                 use crate::tui::polite::Route;
-                match crate::tui::polite::route(batch.len(), max_feedback_batch, watching, polite, question_open) {
-                    Route::Bulk => crate::tui::polite::bulk_skip_absorbing_queue(&mut tui, &mut files, &mut pq, batch)?,
+                match crate::tui::polite::route(batch.len(), max_feedback_batch, watching) {
+                    Route::Bulk => crate::tui::polite::bulk_skip(&mut tui, &mut files, batch)?,
                     Route::ObserveOnly => crate::tui::polite::sync_baseline(&mut files, batch),
-                    Route::Queue => crate::tui::polite::queue_batch(&mut tui, &mut pq, batch)?,
-                    Route::Feedback => crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, batch, max_feedback_batch).await?,
+                    // One combined LLM turn for the whole batch, right now;
+                    // `polite` only decides which frame it is wrapped in.
+                    Route::Feedback => crate::tui::polite::process_batch(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &batch, polite).await?,
                 }
-            }
-            // Backstop: the user went quiet mid-question — don't sit on the queue forever.
-            // window anchoring in backstop_deadline covers re-arm; see spec v0.24.1 F1
-            _ = crate::lifecycle::sleep_until_deadline(crate::tui::polite::backstop_deadline(pq.armed_at(), last_key)), if watching && polite && !pq.is_empty() => {
-                crate::tui::polite::process_paths(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &mut question_open, pq.drain(), max_feedback_batch).await?;
             }
         }
     }
