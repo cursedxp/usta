@@ -16,19 +16,22 @@ anyhow = "1"
 dirs = "5"
 similar = "2"
 chrono = "0.4"
-termimad = "0.30"
-ratatui = "0.29"
-tui-input = "0.11"
-ansi-to-tui = "7"
+termimad = "0.35"
+ratatui = "0.30.2"
+tui-input = "0.15"
+ansi-to-tui = "8"
 unicode-width = "0.2"
-crossterm = { version = "0.28", features = ["event-stream"] }
-# coolor/crokey doğrudan kullanılmıyor — termimad'in transitive bağımlılığı.
-# crossterm tekilliğini manifest seviyesinde koru: coolor 1.1+/crokey 1.5+ crossterm ^0.29'a geçiyor,
-# bu da 0.28 + 0.29 ikili crossterm ağacına yol açar. Bare `cargo update` lockfile pinini yok sayabildiği
-# için tavanı burada, manifest'te sabitliyoruz.
-coolor = "=1.0.0"
-crokey = "=1.1.1"
-crokey-proc_macros = "=1.1.1"
+crossterm = { version = "0.29", features = ["event-stream"] }
+# coolor/crokey are not used directly — they are termimad's transitive dependencies.
+# Keep the crossterm singleton at the manifest level: the whole tree is unified on crossterm
+# 0.29 (ratatui 0.30's default `crossterm_0_29` feature, tui-input 0.15, coolor 1.1, crokey 1.5).
+# The moment coolor/crokey publish a release that moves to the next crossterm major, cargo would
+# happily resolve a split 0.29 + 0.3x tree, so we hold the ceiling here rather than in the
+# lockfile — a bare `cargo update` can ignore a lockfile pin, it cannot ignore a manifest one.
+# crokey-proc_macros must always carry the exact same version number as crokey.
+coolor = "=1.1.0"
+crokey = "=1.5.0"
+crokey-proc_macros = "=1.5.0"
 # Yalnız `StreamExt::next` için (crossterm EventStream.next()). default-features
 # kapalı: `async-await` özelliği futures-macro'yu çeker (bu ortamda 0.3.33 yok),
 # `std` StreamExt için yeterli.
