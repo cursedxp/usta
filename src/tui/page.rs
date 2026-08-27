@@ -73,13 +73,15 @@ pub(crate) fn current_width(tui: &Tui) -> u16 {
 /// Refresh the inline viewport after a terminal resize. Without this the
 /// viewport keeps drawing at its stale pre-resize area and the bottom region
 /// garbles (duplicated/shifted lines); the caller's loop redraws on its next
-/// iteration.
+/// iteration. A `Resize` event reporting an unchanged size is now a no-op:
+/// `autoresize()` only calls `resize()` when the area differs from before.
 pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
-    // ratatui 0.30 does the clearing inside autoresize() (PR #2355): on a size change it
-    // calls Terminal::resize(), which clears the whole screen and re-anchors the inline
-    // viewport at y=0 on horizontal shrink, then clear_viewport()s and resets the back
-    // buffer. The v0.24.6 manual clear() is now redundant — and harmful, since it adds a
-    // cursor-position (CPR) query that 0.30 deliberately removed from the resize path.
+    // ratatui 0.30's `resize()` (invoked by `autoresize()` on every size change) already
+    // clears the viewport unconditionally and full-clears on horizontal shrink, so a
+    // manual `clear()` here is redundant. It is also an avoidable second cursor-position
+    // (CPR) query: 0.30's public `clear()` added its own CPR read that 0.29's `clear()`
+    // never made — CPR itself was never removed from the resize path, it has always been
+    // queried unconditionally by the inline-viewport resize computation.
     tui.terminal.autoresize()?;
     Ok(())
 }
