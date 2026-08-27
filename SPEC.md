@@ -224,6 +224,8 @@ Design detail: `docs/superpowers/specs/2026-08-16-tui-design-apply-design.md`.
 
 **Resize (v0.24.6):** `Event::Resize` is handled in all event loops (main, ask_live, confirm, topic entry) via `page::handle_resize` — `autoresize` + `clear` re-anchors the inline viewport so the bottom region stops garbling after a terminal resize. Previously-printed scrollback stays as the terminal reflowed it (out of scope). Pinned by a source test. Design: `docs/superpowers/specs/2026-08-27-tui-resize-fix-design.md`.
 
+**v0.26.0 (ratatui 0.30 migration):** ratatui bumped 0.29.0 → 0.30.2. Upstream fixed the inline-viewport horizontal-resize garbling directly (ratatui issue #2086, resolved by PR #2355 — resize now clears the screen itself), so the v0.24.6 workaround above is superseded: `page::handle_resize`'s manual `clear()` call is removed, since 0.30's `resize()` (invoked by `autoresize()` on every size change) already clears and redraws the viewport unconditionally. The function is now `autoresize()` alone; a same-size `Resize` event is a no-op (accepted deviation — it used to force a redundant clear+redraw). Behavior otherwise unchanged (visual output, event-loop wiring, source-test pin all parity). Design: `docs/superpowers/specs/2026-08-27-ratatui-030-migration-design.md`.
+
 ## 4.20 Prompt Diet (v0.19)
 
 Binding principle: nothing that can be resolved deterministically by the shell is written into the prompt; a section whose condition the shell knows isn't loaded unconditionally.
