@@ -47,6 +47,21 @@ fn advanced_by_lines(pos: Position, n: u16, term_height: u16) -> Position {
     }
 }
 
+/// Clamp the tracked row onto the real screen. Terminal-initiated cursor moves
+/// (e.g. a vertical shrink reflowing the screen) never reach the tracked state,
+/// and an off-screen row would anchor the inline viewport below the terminal —
+/// ratatui's own guard covers only horizontal shrink. `None` (size unknown)
+/// leaves the position untouched: no guessing.
+fn clamp_to_screen(pos: Position, term_height: Option<u16>) -> Position {
+    match term_height {
+        Some(h) => Position {
+            x: pos.x,
+            y: pos.y.min(h.saturating_sub(1)),
+        },
+        None => pos,
+    }
+}
+
 /// The seed to use when the real cursor position cannot be read. Bottom-left:
 /// a CLI normally starts at the bottom of a filled screen, and `compute_inline_size`
 /// then reproduces exactly the scroll a bottom-anchored terminal performs. Guessing
@@ -79,7 +94,9 @@ impl<W: Write> RatatuiBackend for TrackedBackend<W> {
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
         self.inner.append_lines(n)?;
-        let height = self.inner.size()?.height;
+        // No `?` on size(): upstream append_lines has no such error path, and a
+        // failed ioctl must not kill the session — the clamp degrades instead.
+        let height = self.inner.size().map_or(u16::MAX, |s| s.height);
         self.pos = advanced_by_lines(self.pos, n, height);
         Ok(())
     }
@@ -93,8 +110,13 @@ impl<W: Write> RatatuiBackend for TrackedBackend<W> {
     }
 
     /// The whole point: answered from tracked state, never from the terminal.
+    /// Clamped to the current screen height (an ioctl, not a stdin round-trip)
+    /// so a vertical shrink can't anchor the viewport off-screen (v0.26.2).
     fn get_cursor_position(&mut self) -> io::Result<Position> {
-        Ok(self.pos)
+        Ok(clamp_to_screen(
+            self.pos,
+            self.inner.size().ok().map(|s| s.height),
+        ))
     }
 
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
@@ -261,15 +283,16 @@ mod tests {
 
     #[test]
     fn append_lines_through_the_backend_never_moves_the_column_backwards() {
-        // The clamp height comes from `size()`, a real ioctl, so off a TTY it may
-        // fail outright — but `append_lines` now forwards to the writer *before*
-        // calling `size()`, so the newlines below must reach the wire regardless
-        // of whether the overall call ends up `Ok` or `Err`. That write is the
-        // part this test must not let pass vacuously: if the `append_lines`
-        // override were deleted, the trait's provided default (`Ok(())`, a
-        // silent no-op) would leave `buf` empty and fail the assertion below.
+        // v0.26.2: `size()` is a real ioctl and may fail off a TTY, but that
+        // must never surface — upstream `CrosstermBackend::append_lines` has no
+        // such error path, and usta `?`-propagates backend errors to session
+        // exit. The unwrap below is the parity proof: the call succeeds even
+        // where `size()` errs (the clamp just degrades to a no-op). The wire
+        // assertion keeps the test non-vacuous: if the override were deleted,
+        // the trait's provided default (`Ok(())`, a silent no-op) would leave
+        // `buf` empty.
         let (mut tb, buf) = backend(Position { x: 2, y: 1 });
-        let _ = tb.append_lines(3);
+        tb.append_lines(3).unwrap();
         assert_eq!(
             buf.bytes(),
             b"\n\n\n".to_vec(),
@@ -296,6 +319,18 @@ mod tests {
         tb.show_cursor().unwrap();
         tb.flush().unwrap();
         assert_eq!(tb.get_cursor_position().unwrap(), Position { x: 9, y: 9 });
+    }
+
+    #[test]
+    fn clamp_keeps_the_row_on_screen() {
+        // v0.26.2: terminal-initiated moves (a vertical shrink) never reach the
+        // tracked state; an off-screen row would anchor the inline viewport
+        // below the terminal (upstream guards only horizontal shrink).
+        let p = Position { x: 3, y: 30 };
+        assert_eq!(clamp_to_screen(p, Some(10)), Position { x: 3, y: 9 });
+        assert_eq!(clamp_to_screen(p, Some(31)), p); // on screen — untouched
+        assert_eq!(clamp_to_screen(p, None), p); // size unknown — no guess
+        assert_eq!(clamp_to_screen(p, Some(0)), Position { x: 3, y: 0 }); // no panic
     }
 
     #[test]

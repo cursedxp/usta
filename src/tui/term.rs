@@ -88,7 +88,23 @@ mod tests {
     fn cpr_seed_happens_before_event_stream() {
         let term_src = include_str!("term.rs");
         let prod = term_src.split("#[cfg(test)]").next().unwrap();
-        assert!(prod.contains("cursor::position()"));
+        // Exactly ONE real CPR in the whole TUI layer — here in setup(). A second
+        // one anywhere would reintroduce the stdin race this fix exists to kill
+        // (v0.26.2: pin the absence, not just the presence).
+        assert_eq!(prod.matches("cursor::position()").count(), 1);
+        for (name, src) in [
+            ("backend_wrap.rs", include_str!("backend_wrap.rs")),
+            ("page.rs", include_str!("page.rs")),
+            ("run.rs", include_str!("run.rs")),
+            ("ask.rs", include_str!("ask.rs")),
+            ("entry.rs", include_str!("entry.rs")),
+        ] {
+            let p = src.split("#[cfg(test)]").next().unwrap();
+            assert!(
+                !p.contains("cursor::position()"),
+                "{name} must not issue a real CPR query"
+            );
+        }
         // Named needle: the wiring call, not just the import at the top of the file.
         assert!(prod.contains("TrackedBackend::new("));
         let run_src = include_str!("run.rs");
