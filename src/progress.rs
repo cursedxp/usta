@@ -149,6 +149,11 @@ pub fn closing_prompt(
          user was learned this session: name, background/experience, learning style, \
          preferences, recurring strengths/weaknesses. NO TOPIC KNOWLEDGE — 'learned \
          concept X' is progress's job; 'likes to learn from examples' goes in profile. \
+         Evidence rule: a profile fact must come from what the USER wrote or \
+         demonstrated in THIS session's transcript. Your own analogies, guesses and \
+         inferences are NOT evidence — never record them as fact. If an inference is \
+         worth keeping, mark it explicitly: append `(tahmin — kullanıcı doğrulamadı)` \
+         to that line, and remove it if the user later contradicts it. \
          KEEP the valid information already in the current profile (the user may have \
          hand-edited it), ~1 page cap, merge duplicates. If nothing changed, don't \
          generate this file at all.\n\

@@ -48,6 +48,16 @@ fn closing_prompt_requests_rich_sections() {
 }
 
 #[test]
+fn closing_prompt_forbids_unevidenced_profile_facts() {
+    // v0.24.5: the mentor once flushed its own analogy ("n8n experience") into
+    // USER.md as fact. Profile facts must trace to the user's own words; bare
+    // inferences must carry the explicit guess marker.
+    let s = closing_prompt("rust", None, None, None, None, None, None);
+    assert!(s.contains("NOT evidence"));
+    assert!(s.contains("(tahmin — kullanıcı doğrulamadı)"));
+}
+
+#[test]
 fn closing_prompt_defines_spaced_repetition_schedule() {
     let s = closing_prompt("rust", None, None, None, None, None, None);
     assert!(s.contains("due: YYYY-MM-DD"));

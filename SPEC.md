@@ -329,6 +329,7 @@ usta/
 ## 9. Memory & State
 
 - **Persistent (realized in v0.2).** At session close (`/quit`, Ctrl-C, Ctrl-D) Usta summarizes the session and rewrites `.usta/learner/progress/<topic>.md` in full as content (atomic: tmp+rename). The next session loads this file into the system prompt → doesn't re-explain. An empty session doesn't touch the file.
+- **Profile evidence rule (v0.24.5):** a `USER.md` fact must trace to what the user wrote or demonstrated in that session's transcript — the mentor's own analogies/inferences are not evidence and are either dropped or marked `(tahmin — kullanıcı doğrulamadı)`. Emsal: the mentor once guessed "n8n experience" from project context and flushed it as fact.
 - **Multiple terminals (post-MVP):** a shared brain, concurrent writes are rare → hardening comes later.
 
 ## 10. MVP Boundary
