@@ -11,10 +11,6 @@
 //! `TrackedBackend` tracks the cursor itself and answers those queries from
 //! tracked state, so no CPR query is ever issued while the app is running.
 
-// Wired into `term.rs` in the next step; until then nothing in the crate
-// constructs the wrapper, so every item here reads as dead to the bin target.
-#![allow(dead_code)]
-
 use std::io::{self, Write};
 
 // usta owns a `pub enum Backend` (`src/backend.rs`) — the ratatui trait comes in

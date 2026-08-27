@@ -9,13 +9,16 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Position;
 use ratatui::{Terminal, TerminalOptions, Viewport};
+
+use crate::tui::backend_wrap::{fallback_seed, TrackedBackend};
 
 /// Bottom region: input box (3-5 lines) + status line (1).
 pub const VIEWPORT_H: u16 = 6;
 
 pub struct Tui {
-    pub terminal: Terminal<CrosstermBackend<Stdout>>,
+    pub terminal: Terminal<TrackedBackend<Stdout>>,
 }
 
 /// Raw mode + inline viewport. Restore is chained onto the panic hook — the
@@ -42,8 +45,17 @@ pub fn setup() -> Result<Tui> {
         restore();
         prev(info);
     }));
+    // The ONE real CPR query in the whole app — safe here because no
+    // `EventStream` exists yet (run.rs constructs the first one only after
+    // setup() returns), so nothing else holds the stdin reader lock the query
+    // needs. Must never fail setup: both possible errors (the query itself, or
+    // the terminal-size lookup used only for the fallback) are swallowed into
+    // a silent bottom-row fallback.
+    let seed = crossterm::cursor::position()
+        .map(|(x, y)| Position { x, y })
+        .unwrap_or_else(|_| fallback_seed(crossterm::terminal::size().map_or(0, |(_, h)| h)));
     let terminal = Terminal::with_options(
-        CrosstermBackend::new(std::io::stdout()),
+        TrackedBackend::new(CrosstermBackend::new(std::io::stdout()), seed),
         TerminalOptions {
             viewport: Viewport::Inline(VIEWPORT_H),
         },
@@ -64,5 +76,28 @@ impl Drop for Tui {
         let _ = self.terminal.clear();
         restore();
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Source pin: the ONLY real CPR happens in setup(), before any
+    /// `EventStream` exists (run.rs creates the stream after calling setup).
+    /// Guards both halves so neither can silently regress.
+    #[test]
+    fn cpr_seed_happens_before_event_stream() {
+        let term_src = include_str!("term.rs");
+        let prod = term_src.split("#[cfg(test)]").next().unwrap();
+        assert!(prod.contains("cursor::position()"));
+        assert!(prod.contains("TrackedBackend"));
+        let run_src = include_str!("run.rs");
+        let setup_at = run_src.find("term::setup").expect("run.rs calls setup");
+        let stream_at = run_src
+            .find("EventStream::new")
+            .expect("run.rs builds the stream");
+        assert!(
+            setup_at < stream_at,
+            "EventStream must be created after setup's CPR seed"
+        );
     }
 }

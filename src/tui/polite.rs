@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn run_rs_wiring_call_sites_are_pinned() {
         // Crude source pin, not a unit test: the TUI loop in run.rs is bound
-        // to Terminal<CrosstermBackend<Stdout>> and can't be driven directly
+        // to Terminal<TrackedBackend<Stdout>> and can't be driven directly
         // from a test. Two release rounds in a row a reviewer found that
         // deleting the watcher wiring from run.rs left the whole suite green,
         // because everything below the call sites is unit-tested but the
