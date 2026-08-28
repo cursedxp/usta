@@ -802,6 +802,57 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn deliver_pending_collapses_repeated_saves_into_one_diff() {
+        // Key property: deliver_pending builds the payload at DELIVERY time,
+        // not at flush time. Because of this, multiple saves of the same file
+        // between deliveries collapse into ONE diff (from the FileMemory
+        // baseline to the final content). Intermediate states never reach the
+        // model — they don't appear in the payload.
+        let dir = scratch_dir("deliver-pending-collapse");
+        let file = dir.join("script.rs");
+
+        // Three distinct states
+        let original = "fn greet() {\n    println!(\"original\");\n}\n";
+        let intermediate = "fn greet() {\n    println!(\"intermediate\");\n}\n";
+        let final_state = "fn greet() {\n    println!(\"final\");\n}\n";
+
+        // Seed FileMemory baseline with the original content
+        let mut files = feedback::FileMemory::new();
+        files.seed(&file, original.to_string());
+
+        // User saves file twice before delivering: intermediate, then final.
+        // Neither save is observed by FileMemory yet — delivery will do it.
+        std::fs::write(&file, intermediate).unwrap();
+        std::fs::write(&file, final_state).unwrap();
+
+        // Deliver pending; payload is built at delivery time from the final state
+        let (notices, outgoing) =
+            deliver_pending(&mut files, &dir, &[file], "ready for review".to_string());
+
+        // Sanity checks
+        assert!(notices.is_empty());
+        assert!(outgoing.contains("FILE:"));
+        assert!(outgoing.contains("unified diff"));
+
+        // The critical assertion: diff goes from original to final
+        assert!(outgoing.contains("-    println!(\"original\");"));
+        assert!(outgoing.contains("+    println!(\"final\");"));
+
+        // The collapse property: intermediate MUST NOT appear in the payload.
+        // If deliver_pending built the payload eagerly (after the first save),
+        // the intermediate content would be visible here.
+        assert!(
+            !outgoing.contains("intermediate"),
+            "intermediate content must not appear in collapsed diff"
+        );
+
+        // User's message is at the end (spec: Sıralama ve içerik)
+        assert!(outgoing.trim_end().ends_with("ready for review"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn batch_change_skips_llm_call_when_everything_drops() {
         // Everything in the batch drops (unchanged file → Skip) — proves
