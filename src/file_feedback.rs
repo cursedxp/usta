@@ -137,7 +137,7 @@ pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
     let mut frame = format!(
         "[Files changed]\n{files_payload}\n\n\
 This change is part of the ongoing lesson — respond as the mentor guiding it, not as a reviewer opening a fresh audit. Apply these rules:\n\
-1. If your last message asked for a step and this change satisfies it: confirm briefly, flag any errors, move to the next step — unless rule 5 restricts it, in which case describe only the change.\n\
+1. If your last message asked for a step and this change satisfies it: confirm briefly, flag any errors, move to the next step — unless rule 5 restricts it, in which case only acknowledge that the step happened and say nothing about the artifact's content.\n\
 2. If there's an unanswered question from you still pending: nudge it in ONE short sentence — never repeat the full question text.\n\
 3. First-sight full-content files may be tool-generated scaffold (e.g. a `cargo new` template) — acknowledge scaffold in one sentence, don't review it line by line; focus on the user's hand-written change.\n\
 4. If the user asks a question in the middle of this, answer it, then recall the task.\n\
@@ -149,6 +149,16 @@ This change is part of the ongoing lesson — respond as the mentor guiding it, 
         ));
     }
     frame
+}
+
+/// The `cargo check` block appended to a file-feedback turn — the prediction
+/// protocol's raw input (spec §4.6). One definition, three call sites
+/// (single-file plain path, live batch, ride-along delivery), so the framing
+/// the model sees can never drift between paths.
+fn check_result_block(check_result: &str) -> String {
+    format!(
+        "\n\n[cargo check result — FOR YOUR EYES ONLY, don't pass this directly to the user; apply the prediction protocol]\n{check_result}"
+    )
 }
 
 /// Seed FileMemory with the mentor docs (`mentor/PROJECT.md`, `mentor/PROGRESS.md`)
@@ -202,9 +212,7 @@ pub(crate) async fn handle_file_change(
     };
     if !exercise {
         if let Some(check_result) = check::run_check(project_root).await {
-            injected.push_str(&format!(
-                "\n\n[cargo check result — FOR YOUR EYES ONLY, don't pass this directly to the user; apply the prediction protocol]\n{check_result}"
-            ));
+            injected.push_str(&check_result_block(&check_result));
         }
     }
     session.push_user(&injected);
@@ -348,9 +356,7 @@ pub(crate) async fn handle_batch_change(
     );
     if meta.any_non_exercise {
         if let Some(check_result) = check::run_check(project_root).await {
-            injected.push_str(&format!(
-                "\n\n[cargo check result — FOR YOUR EYES ONLY, don't pass this directly to the user; apply the prediction protocol]\n{check_result}"
-            ));
+            injected.push_str(&check_result_block(&check_result));
         }
     }
     session.push_user(&injected);
@@ -384,13 +390,26 @@ const PENDING_PREAMBLE: &str = "[The user changed the files below while working;
 
 /// Compose the combined outgoing turn for a ride-along delivery (spec K2):
 /// the one-line pending preamble, the lesson-flow-framed file block
-/// (companion frame axis, spec K4), then the user's own words LAST — their
-/// message is the one to answer (spec: Sıralama ve içerik).
-fn ride_along_turn(files_payload: &str, any_exercise: bool, user_text: &str) -> String {
-    format!(
-        "{PENDING_PREAMBLE}\n{}\n\n{user_text}",
+/// (companion frame axis, spec K4), the optional eyes-only `cargo check`
+/// block, then the user's own words LAST — their message is the one to answer
+/// (spec: Sıralama ve içerik). The check block sits with the files it
+/// describes, ahead of the user's text, so the user still gets the last word.
+fn ride_along_turn(
+    files_payload: &str,
+    any_exercise: bool,
+    check_block: Option<&str>,
+    user_text: &str,
+) -> String {
+    let mut turn = format!(
+        "{PENDING_PREAMBLE}\n{}",
         flow_frame(files_payload, any_exercise)
-    )
+    );
+    if let Some(block) = check_block {
+        turn.push_str(block);
+    }
+    turn.push_str("\n\n");
+    turn.push_str(user_text);
+    turn
 }
 
 /// Deterministic ride-along delivery (spec K2): build the payload NOW — at
@@ -401,7 +420,15 @@ fn ride_along_turn(files_payload: &str, any_exercise: bool, user_text: &str) -> 
 /// made it into the payload. No LLM call happens here — the caller sends the
 /// returned string through the normal ask path (prompt diet: only payload and
 /// frame ever reach the model).
-pub(crate) fn deliver_pending(
+///
+/// `cargo check` runs here too, under exactly the live path's condition (at
+/// least one included file is NOT an exercise submission), and its result is
+/// appended in the same eyes-only block — without this the prediction protocol
+/// (spec §4.6) would never fire in the default companion mode, since delivery
+/// is the only path a companion-mode save takes. Running it at DELIVERY rather
+/// than at every flush also keeps the silent accumulation phase free of
+/// compiles.
+pub(crate) async fn deliver_pending(
     files: &mut feedback::FileMemory,
     project_root: &Path,
     paths: &[PathBuf],
@@ -411,7 +438,14 @@ pub(crate) fn deliver_pending(
     if meta.total_included == 0 {
         return (meta.notices, user_text);
     }
-    let turn = ride_along_turn(&payload, meta.any_exercise, &user_text);
+    let check = if meta.any_non_exercise {
+        check::run_check(project_root)
+            .await
+            .map(|r| check_result_block(&r))
+    } else {
+        None
+    };
+    let turn = ride_along_turn(&payload, meta.any_exercise, check.as_deref(), &user_text);
     (meta.notices, turn)
 }
 
@@ -538,6 +572,13 @@ mod tests {
         assert!(s.contains("hand-written"));
         assert!(s.contains("OFF-LIMITS"));
         assert!(s.contains("verify it against"));
+        // Rule 1's rule-5 escape hatch must license ACKNOWLEDGEMENT ONLY.
+        // The old wording ("describe only the change") licensed exactly the
+        // leak rule 5 forbids: for a first-sight file the change IS the whole
+        // content, so a restricted artifact could be reproduced verbatim.
+        assert!(s.contains("only acknowledge that the step happened"));
+        assert!(s.contains("say nothing about the artifact's content"));
+        assert!(!s.contains("describe only the change"));
         assert!(!s.to_lowercase().contains("standalone code review"));
     }
 
@@ -755,6 +796,7 @@ mod tests {
         let t = ride_along_turn(
             "FILE: src/main.rs (full contents)\nfn main() {}",
             false,
+            None,
             "here is my report",
         );
         assert!(t.starts_with(PENDING_PREAMBLE));
@@ -764,14 +806,14 @@ mod tests {
         assert!(t.trim_end().ends_with("here is my report"));
     }
 
-    #[test]
-    fn deliver_pending_rides_payload_before_user_text() {
+    #[tokio::test]
+    async fn deliver_pending_rides_payload_before_user_text() {
         let dir = scratch_dir("deliver-pending");
         let file = dir.join("main.rs");
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let mut files = feedback::FileMemory::new();
         let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], "done, take a look".to_string());
+            deliver_pending(&mut files, &dir, &[file], "done, take a look".to_string()).await;
         assert!(notices.is_empty());
         assert!(outgoing.starts_with(PENDING_PREAMBLE));
         let pos_payload = outgoing.find("FILE:").unwrap();
@@ -783,8 +825,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn deliver_pending_everything_dropped_returns_user_text_unchanged() {
+    #[tokio::test]
+    async fn deliver_pending_everything_dropped_returns_user_text_unchanged() {
         // A vanished file (deleted between hold and delivery) is a silent
         // skip; with nothing left, NO payload is attached (spec:
         // total_included == 0 → payload eklenmez).
@@ -792,14 +834,14 @@ mod tests {
         let gone = dir.join("gone.rs");
         let mut files = feedback::FileMemory::new();
         let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[gone], "just a question".to_string());
+            deliver_pending(&mut files, &dir, &[gone], "just a question".to_string()).await;
         assert!(notices.is_empty());
         assert_eq!(outgoing, "just a question");
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn deliver_pending_flags_exercise_batches_and_keeps_notices() {
+    #[tokio::test]
+    async fn deliver_pending_flags_exercise_batches_and_keeps_notices() {
         let dir = scratch_dir("deliver-pending-exercise");
         let ex = dir.join("exercises").join("rust").join("notes.md");
         std::fs::create_dir_all(ex.parent().unwrap()).unwrap();
@@ -809,15 +851,16 @@ mod tests {
         let big = dir.join("big.rs");
         std::fs::write(&big, "x".repeat(feedback::MAX_FILE_BYTES + 1)).unwrap();
         let mut files = feedback::FileMemory::new();
-        let (notices, outgoing) = deliver_pending(&mut files, &dir, &[ex, big], "done".to_string());
+        let (notices, outgoing) =
+            deliver_pending(&mut files, &dir, &[ex, big], "done".to_string()).await;
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains("large file"));
         assert!(outgoing.contains("AS AN EXERCISE"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn deliver_pending_collapses_repeated_saves_into_one_diff() {
+    #[tokio::test]
+    async fn deliver_pending_collapses_repeated_saves_into_one_diff() {
         // Key property: deliver_pending builds the payload at DELIVERY time,
         // not at flush time. Because of this, multiple saves of the same file
         // between deliveries collapse into ONE diff (from the FileMemory
@@ -842,7 +885,7 @@ mod tests {
 
         // Deliver pending; payload is built at delivery time from the final state
         let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], "ready for review".to_string());
+            deliver_pending(&mut files, &dir, &[file], "ready for review".to_string()).await;
 
         // Sanity checks
         assert!(notices.is_empty());
@@ -864,6 +907,64 @@ mod tests {
         // User's message is at the end (spec: Sıralama ve içerik)
         assert!(outgoing.trim_end().ends_with("ready for review"));
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A minimal, compiling cargo project in a scratch dir — so `run_check`
+    /// actually runs instead of short-circuiting on `is_cargo_project`.
+    fn scratch_cargo_project(tag: &str) -> std::path::PathBuf {
+        let dir = scratch_dir(tag);
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"scratch\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_runs_the_check_for_non_exercise_files() {
+        // Prediction protocol (spec §4.6): in the DEFAULT companion mode
+        // delivery is the only path a save takes, so if the check doesn't run
+        // here it never runs at all — which is what SPEC/README promise.
+        let dir = scratch_cargo_project("deliver-pending-check");
+        let file = dir.join("src").join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let mut files = feedback::FileMemory::new();
+        let (_, outgoing) =
+            deliver_pending(&mut files, &dir, &[file], "have a look".to_string()).await;
+        assert!(
+            outgoing.contains("[cargo check result — FOR YOUR EYES ONLY"),
+            "a non-exercise delivery must carry the eyes-only check block"
+        );
+        assert!(outgoing.contains("apply the prediction protocol"));
+        // The user still gets the last word — the check block rides in front.
+        let pos_check = outgoing.find("[cargo check result").unwrap();
+        let pos_user = outgoing.rfind("have a look").unwrap();
+        assert!(
+            pos_check < pos_user,
+            "the check block must precede the user's text"
+        );
+        assert!(outgoing.trim_end().ends_with("have a look"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_skips_the_check_for_exercise_only_batches() {
+        // Same gate the live path uses: no non-exercise file in the batch,
+        // no check — the check doesn't apply to review-only submissions.
+        let dir = scratch_cargo_project("deliver-pending-check-exercise");
+        let ex = dir.join("exercises").join("answer.md");
+        std::fs::create_dir_all(ex.parent().unwrap()).unwrap();
+        std::fs::write(&ex, "my answer\n").unwrap();
+        let mut files = feedback::FileMemory::new();
+        let (_, outgoing) = deliver_pending(&mut files, &dir, &[ex], "done".to_string()).await;
+        assert!(outgoing.contains("AS AN EXERCISE"));
+        assert!(
+            !outgoing.contains("cargo check result"),
+            "an exercise-only delivery must not run the check"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

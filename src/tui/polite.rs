@@ -1,6 +1,8 @@
 //! The watcher's decision layer: which route a flushed debounce batch takes,
 //! and what happens on each route. The watcher NEVER initiates an LLM turn on
-//! its own (spec K1, no exceptions): the companion default HOLDS flushed
+//! its own (spec K1; TUI path only — the plain/pipe path in `plain.rs` still
+//! opens an immediate turn per save, a deliberate exception): the companion
+//! default HOLDS flushed
 //! batches in `PendingChanges` and delivers them with the user's next submit
 //! (`attach_pending` — ride along, spec K2). An immediate turn at flush exists
 //! only as the user's explicit choice (`live`: `/watch live` or a
@@ -91,29 +93,72 @@ impl PendingChanges {
     }
 }
 
-/// Ride-along delivery at the user's submit (spec K2): with nothing pending
-/// the user's text passes through untouched; otherwise the pending paths are
-/// drained (counter reset, spec K3), the payload is built at THIS moment, its
-/// notices are printed, and the combined turn — file block first, the user's
-/// words last — is returned for the normal ask path. Deterministic shell
-/// work; no LLM call here.
-pub(crate) fn attach_pending(
+/// Ride-along delivery at the user's submit (spec K2): with watching off or
+/// nothing pending the user's text passes through untouched; otherwise the
+/// pending paths are drained (counter reset, spec K3), the payload is built at
+/// THIS moment, and the combined turn — file block first, the user's words
+/// last — is returned for the normal ask path. Deterministic shell work; no
+/// LLM call here.
+///
+/// Split in two: this is the `Tui` shell (it only prints the notices the core
+/// returns), and `drain_and_deliver` below is the testable core. A `Tui` needs
+/// a real terminal in raw mode, so without the split the drain itself — the
+/// whole point of the function — could only be source-pinned.
+pub(crate) async fn attach_pending(
     tui: &mut Tui,
+    watching: bool,
     pending: &mut PendingChanges,
     files: &mut FileMemory,
     project_root: &Path,
     user_text: String,
 ) -> Result<String> {
-    if pending.is_empty() {
-        return Ok(user_text);
-    }
-    let paths = pending.take();
     let (notices, outgoing) =
-        crate::file_feedback::deliver_pending(files, project_root, &paths, user_text);
+        drain_and_deliver(watching, pending, files, project_root, user_text).await;
     for notice in &notices {
         crate::tui::page::page_notice(tui, notice)?;
     }
     Ok(outgoing)
+}
+
+/// `attach_pending` without the terminal: decide, drain, deliver. `.0` is the
+/// notice channel the caller prints, `.1` the outgoing turn.
+///
+/// Watching off is a hard gate, not just an optimization: `/watch off` already
+/// drops the queue (`drop_pending_on_watch_off`), and this makes sure no queue
+/// filled by some other route can survive the toggle either — "stop watching
+/// my files" must hold for what is already queued too.
+pub(crate) async fn drain_and_deliver(
+    watching: bool,
+    pending: &mut PendingChanges,
+    files: &mut FileMemory,
+    project_root: &Path,
+    user_text: String,
+) -> (Vec<String>, String) {
+    if !watching || pending.is_empty() {
+        return (Vec::new(), user_text);
+    }
+    let paths = pending.take();
+    crate::file_feedback::deliver_pending(files, project_root, &paths, user_text).await
+}
+
+/// Turning watching OFF discards whatever the watcher already queued. Without
+/// this, a save made just before `/watch off` still shipped its file contents
+/// with the user's next message — the explicit "stop watching my files"
+/// silently disregarded, and invisible on the way in because the status line
+/// hides the counter as soon as watching is off. Returns the one-line notice
+/// to print when something was actually dropped; `None` when there was
+/// nothing to drop or watching is still on.
+pub(crate) fn drop_pending_on_watch_off(
+    watching: bool,
+    pending: &mut PendingChanges,
+) -> Option<String> {
+    if watching || pending.is_empty() {
+        return None;
+    }
+    let dropped = pending.take().len();
+    Some(format!(
+        "{dropped} noted change(s) dropped — they will not be sent"
+    ))
 }
 
 /// Whether any line in `text`, trimmed and lowercased, is `watch: live`.
@@ -415,6 +460,12 @@ mod tests {
             "polite::PendingChanges::new(",
             "polite::dispatch_flush(",
             "polite::attach_pending(",
+            "polite::drop_pending_on_watch_off(",
+            // The visible half of the feature: the status line must be fed
+            // the REAL pending count. A reviewer's mutation replacing this
+            // argument with a literal `0` killed the counter with the whole
+            // suite still green — this needle is the tripwire for that.
+            "Some((watching, live, pending.len()))",
         ] {
             assert!(
                 src.contains(needle),
@@ -461,22 +512,27 @@ mod tests {
         // branches: the user's own typed line, /exam's synthesized exam
         // prompt, and /game's mode directives. Pending file changes may ride
         // along ONLY with the user's own words — in front of an operational
-        // directive they would feed file feedback into an exam (where it is
-        // suspended by design) or into a game toggle, and neither is a report
-        // on the learner's work. The /exam and /game branches must therefore
-        // leave the queue intact, so the changes deliver on the next real
-        // message. Crude source pin, same class as
+        // directive they would feed file feedback into the exam prompt or into
+        // a game toggle, and neither is a report on the learner's work. The
+        // /exam and /game branches must therefore leave the queue intact, so
+        // the changes deliver on the next real message. Note what this does
+        // NOT do: /exam is only a prompt injection — the loop, the watcher and
+        // the debouncer keep running through an exam, so a save made during
+        // one still accumulates and rides the learner's next exam ANSWER,
+        // wrapped in the lesson-flow frame. Known limitation, recorded in
+        // SPEC.md §4.21; exam-state tracking is out of scope.
+        // Crude source pin, same class as
         // run_rs_wiring_call_sites_are_pinned: the branch structure is inside
         // a TUI select! loop that can't be driven from a unit test.
         let src = include_str!("run.rs");
         assert!(
             src.contains(
-                "attach_pending(&mut tui, &mut pending, &mut files, project_root, line.clone())"
+                "attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, line.clone())"
             ),
             "ride-along must take the user's own line, not the shared `outgoing` binding"
         );
         assert!(
-            !src.contains("attach_pending(&mut tui, &mut pending, &mut files, project_root, outgoing)"),
+            !src.contains("project_root, outgoing)"),
             "ride-along must not wrap `outgoing`: that attaches pending changes to /exam and /game directives"
         );
         // The positive needle above only forbids one exact spelling — it says
@@ -498,5 +554,107 @@ mod tests {
             src.contains("crate::slash::game_on_turn("),
             "/game must build its directive directly, leaving pending changes queued"
         );
+    }
+
+    /// Scratch project dir for the delivery tests — unique per test tag.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("usta_polite_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn drain_and_deliver_empties_the_queue_after_one_delivery() {
+        // The drain IS the feature: without it the same file block re-rides
+        // on every later message and the status counter never resets. A
+        // reviewer's mutation (take() -> a clone leaving the queue intact)
+        // kept the whole suite green, so this test drives the real thing.
+        let dir = scratch("drain");
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let mut files = FileMemory::new();
+        let mut pending = PendingChanges::new();
+        pending.hold(vec![file.clone()]);
+        assert_eq!(pending.len(), 1);
+
+        let (_, first) =
+            drain_and_deliver(true, &mut pending, &mut files, &dir, "look".to_string()).await;
+        assert!(
+            first.contains("FILE:"),
+            "first delivery carries the payload"
+        );
+        // Drained: the counter is back to zero...
+        assert_eq!(pending.len(), 0, "delivery must drain the pending queue");
+        assert!(pending.is_empty());
+
+        // ...and the next message rides alone, with no file block at all.
+        let (_, second) =
+            drain_and_deliver(true, &mut pending, &mut files, &dir, "and now?".to_string()).await;
+        assert_eq!(
+            second, "and now?",
+            "a drained queue must not re-attach the same files to the next message"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn drain_and_deliver_passes_text_through_when_nothing_is_queued() {
+        let dir = scratch("drain-empty");
+        let mut files = FileMemory::new();
+        let mut pending = PendingChanges::new();
+        let (notices, out) = drain_and_deliver(
+            true,
+            &mut pending,
+            &mut files,
+            &dir,
+            "just asking".to_string(),
+        )
+        .await;
+        assert!(notices.is_empty());
+        assert_eq!(out, "just asking");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn drain_and_deliver_is_a_no_op_while_watching_is_off() {
+        // Belt to drop_pending_on_watch_off's braces: even if a queue somehow
+        // survives the toggle, nothing it holds reaches the model.
+        let dir = scratch("drain-watch-off");
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let mut files = FileMemory::new();
+        let mut pending = PendingChanges::new();
+        pending.hold(vec![file]);
+        let (notices, out) =
+            drain_and_deliver(false, &mut pending, &mut files, &dir, "hello".to_string()).await;
+        assert!(notices.is_empty());
+        assert_eq!(out, "hello", "watching off must attach nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn watch_off_drops_the_queued_changes_and_says_so() {
+        // `/watch off` is an explicit "stop watching my files" — what is
+        // already queued must go with it, and the user must be told, because
+        // the status counter disappears the moment watching goes off.
+        let mut pending = PendingChanges::new();
+        pending.hold(vec![PathBuf::from("/tmp/a.rs"), PathBuf::from("/tmp/b.rs")]);
+        let notice = drop_pending_on_watch_off(false, &mut pending).expect("a notice is due");
+        assert!(
+            notice.contains('2'),
+            "the notice names how many were dropped: {notice}"
+        );
+        assert!(pending.is_empty(), "the queue must be dropped");
+        // Nothing left to drop -> no second notice.
+        assert!(drop_pending_on_watch_off(false, &mut pending).is_none());
+    }
+
+    #[test]
+    fn watch_on_never_drops_the_queue() {
+        let mut pending = PendingChanges::new();
+        pending.hold(vec![PathBuf::from("/tmp/a.rs")]);
+        assert!(drop_pending_on_watch_off(true, &mut pending).is_none());
+        assert_eq!(pending.len(), 1, "turning watching ON must keep the queue");
     }
 }

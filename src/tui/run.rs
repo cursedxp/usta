@@ -469,6 +469,10 @@ pub async fn run(
                                 On | Off | Toggle => {
                                     let (next, m) = crate::slash::apply_watch(cmd, watching);
                                     watching = next;
+                                    // Watching off drops what is already queued (spec K2): the queued payload must not outlive the user's "stop watching my files".
+                                    if let Some(n) = crate::tui::polite::drop_pending_on_watch_off(watching, &mut pending) {
+                                        crate::tui::page::page_notice(&mut tui, &n)?;
+                                    }
                                     m
                                 }
                             };
@@ -545,7 +549,7 @@ pub async fn run(
                             // Push the submitted line to scrollback as a distinct user block.
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
                             // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
-                            crate::tui::polite::attach_pending(&mut tui, &mut pending, &mut files, project_root, line.clone())?
+                            crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, line.clone()).await?
                         };
                         session.push_user(&outgoing);
                         recorder.user(&outgoing);

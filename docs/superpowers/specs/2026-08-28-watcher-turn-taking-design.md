@@ -167,13 +167,27 @@ aldı. Filtre satırı her tasarım altında doğrudur.
 
 ### Kenar durumlar
 
-- **Oturum kapanışı `PendingChanges` doluyken:** teslim edilmez, kaybolur. Kapanış
-  flush'ı zaten diskteki güncel hâli okuyor; ayrı bir teslim turu açmak K1'i ihlal
-  ederdi.
+- **Oturum kapanışı `PendingChanges` doluyken:** teslim edilmez, kaybolur. Ayrı bir
+  teslim turu açmak K1'i ihlal ederdi, o yüzden düşme kararı yerinde kalıyor.
+  **Düzeltme (2026-08-28):** buradaki eski gerekçe ("kapanış flush'ı zaten diski
+  okuyor") yanlıştı — `lifecycle::flush_core` yalnız altı brain dosyasını ve oturum
+  geçmişini okur, izlenen çalışma dosyalarını hiç okumaz. Dürüst sonuç: kaydedilmiş
+  ama hakkında hiç konuşulmamış iş kapanış flush'ına da girmez.
 - **`/quit` bekleyen değişiklikle:** aynı — sessizce düşer.
 - **Bulk skip:** batch tavanı aşarsa bugünkü gibi atlanır ve baseline senkronlanır;
   `PendingChanges`'e girmez (aksi hâlde tavan anlamsızlaşır).
 - **Watching kapalıyken:** hiçbir şey birikmez; sayaç görünmez.
+- **`/watch off` bekleyen değişiklikle (2026-08-28):** kuyruk DÜŞÜRÜLÜR ve tek satırlık
+  bir notis yazılır. Aksi hâlde kullanıcının açık "dosyalarımı izlemeyi bırak"
+  kararı, zaten kuyruktaki payload için sessizce çiğnenirdi — üstelik sayaç
+  watching kapanır kapanmaz gizlendiği için görünmeden. `attach_pending` da
+  watching kapalıyken no-op'tur (ikinci hat).
+- **`/exam` sırasında kayıt (bilinen sınır, 2026-08-28):** `/exam` yalnız bir prompt
+  enjeksiyonudur; run loop, watcher ve debouncer sınav boyunca çalışmaya devam eder.
+  Sınav sırasında kaydedilen dosya normal şekilde birikir ve öğrencinin bir sonraki
+  sınav CEVABINA binerek, lesson-flow çerçevesiyle gider. Sınav durumu takibi kapsam
+  dışı; ride-along kablolaması yalnız sentezlenmiş `/exam` ve `/game` direktiflerinin
+  kendisine hiçbir şeyin binmemesini garanti eder.
 
 ## Kapsam dışı (bilinçli)
 
@@ -183,6 +197,12 @@ aldı. Filtre satırı her tasarım altında doğrudur.
   koşacaktı; ayrıca derleme hatası tam olarak öğrencinin debelenmesi gereken an.
   Kapı açık: ileride durum satırında dim bir `✗ check failing` işareti olabilir —
   tur değil.
+  **Geri alındı (2026-08-28, kullanıcı onaylı):** check'in tamamen düşmesi varsayılan
+  modda tahmin protokolünü (SPEC §4.6) ölü bırakıyordu — SPEC ve README hâlâ söz
+  verirken. `deliver_pending` artık check'i canlı yolun kullandığı aynı koşulla
+  (batch'te en az bir non-exercise dosya) ama TESLİM anında koşuyor: sessiz birikim
+  sırasında derleme olmuyor, tur açılmıyor, sonuç aynı "FOR YOUR EYES ONLY" bloğuyla
+  gidiyor.
 - **`/check` komutu** (mesaj yazmadan teslim tetikleme). "Kullanıcı turu"nun şekeri;
   ride-along yetersiz kalırsa eklenir. YAGNI.
 - **Takılma/sessizlik sezgisi.** Reddedildi: "beş dakikadır `main.rs` okuyorum"

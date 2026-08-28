@@ -76,8 +76,8 @@ A learning session:
 usta start gtm            # could be rust, gtm, anything
   → new topic (no progress) → INTRODUCTION: Usta derives the approach + curriculum map
   → (if any) opening drill: 2-3 recall questions from the map + "where we are, what's next"
-  → you work (code / plan.md / whatever), you save
-  → Usta gives proactive Socratic feedback (without doing the work)
+  → you work (code / plan.md / whatever), you save — quietly noted, never interrupted
+  → you write; your saves ride along with your message and Usta answers both, Socratically (without doing the work)
   → on a cargo check error: it won't tell you — "where does this blow up?" — predict first
   → /quit → progress + approach + curriculum updated, catalog refreshed
 ```
@@ -90,7 +90,7 @@ In-session commands: `/watch on|off` (file feedback) · `/watch live` (immediate
 
 Usta watches your files but never interrupts. By default, saves accumulate quietly and ride along with your next message — the mentor sees your changes and your words together, in one turn, and your words are the last word. The status line counts what's noted (`👁 watching · 2 changes noted`); the counter resets when delivered. Files saved together are merged into a single block, and repeated saves of the same file collapse into one diff at delivery time.
 
-Want a review the moment you save? Turn live mode on: `/watch live` (toggle; `on`/`off` also work) for the session, or add a `watch: live` line to the topic's approach file (`.usta/approaches/<topic>.md`, project override first) to make it the topic's default — the session-only command never writes back to the file. Live feedback uses plain review framing. `/watch off` stops watching entirely.
+Want a review the moment you save? Turn live mode on: `/watch live` (toggle; `on`/`off` also work) for the session, or add a `watch: live` line to the topic's approach file (`.usta/approaches/<topic>.md`, project override first) to make it the topic's default — the session-only command never writes back to the file. Live feedback uses plain review framing. `/watch off` stops watching entirely — anything already noted but not yet delivered is dropped, with a one-line notice saying so.
 
 ### Project context: the `mentor/` folder
 
