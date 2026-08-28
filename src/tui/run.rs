@@ -59,6 +59,11 @@ pub async fn run(
     // conversational start suggestion) — stitched into the session after
     // build_session; when set, the opening turn is NOT injected.
     let mut intro_turns: Option<Vec<crate::tui::intro::IntroTurn>> = None;
+    // Set only when `run_first_run` (not `run_suggest`, not `usta start
+    // <topic>`) reaches IntroOutcome::Topic — gates the "introduction
+    // completed" marker write below, which must fire once a real session
+    // exists (after the lock), not the moment the model returns a topic.
+    let mut first_run_completed = false;
     let topic = match topic_arg {
         Some(t) => {
             intro = Some(t.clone());
@@ -127,6 +132,7 @@ pub async fn run(
                     crate::tui::intro::IntroOutcome::Topic { slug, turns } => {
                         intro_turns = Some(turns);
                         preset_topic = Some(slug);
+                        first_run_completed = true;
                     }
                     crate::tui::intro::IntroOutcome::Quit => return Ok(None),
                     crate::tui::intro::IntroOutcome::Fallback => {}
@@ -296,6 +302,15 @@ pub async fn run(
     // build_session writes its own lock; the returned lock = same path.
     let (mut session, recorder, lock, has_progress) =
         crate::lifecycle::build_session(global, project_root, &topic, today)?;
+
+    // The first-run introduction only counts as completed once a real session
+    // exists — writing this any earlier (e.g. the moment the model returns a
+    // topic) would strand the marker on disk if the lock-conflict confirmation
+    // above is declined, and the user would never be introduced (SPEC §4.22
+    // review, Fix 1).
+    if first_run_completed {
+        crate::setup::mark_intro_done(global, "completed");
+    }
 
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();

@@ -175,9 +175,19 @@ pub(crate) async fn run_intro(
                 return Ok(IntroOutcome::Fallback);
             }
             Ok(crate::tui::ask::AskOutcome::Cancelled) => {
+                // The turns list stays as-is (the user keeps typing); the CLI
+                // session is half-done — don't resume it, the next call should
+                // go with the full transcript (run.rs main-loop precedent).
+                backend.reset_session();
                 crate::tui::page::page_notice(tui, "cancelled — keep typing, or /quit")?;
             }
-            Err(e) => crate::tui::page::page_error(tui, &format!("error: {e}"))?,
+            Err(e) => {
+                // Same reasoning as the Cancelled arm above: the CLI session is
+                // half-done, so reset uniformly rather than rely on backend.rs's
+                // partial self-heal on the error path.
+                backend.reset_session();
+                crate::tui::page::page_error(tui, &format!("error: {e}"))?
+            }
         }
         // User turn.
         loop {
@@ -271,9 +281,10 @@ pub(crate) async fn run_first_run(
     let system = intro_system(global, project_root, today);
     let opening = crate::progress::introduction_prompt(project_known, digest.as_deref());
     let outcome = run_intro(tui, editor, events, backend, &system, &opening).await?;
-    if matches!(outcome, IntroOutcome::Topic { .. }) {
-        crate::setup::mark_intro_done(global, "completed");
-    }
+    // NOTE: the "introduction completed" marker is NOT written here — it moves
+    // to run.rs, after the lock is acquired and the session is built, so a
+    // rejected lock-conflict confirmation (no session, no lock) doesn't strand
+    // the marker on disk with nothing to show for it (SPEC §4.22 review).
     report(tui, outcome, "introduction failed — type a topic")
 }
 
@@ -369,9 +380,13 @@ mod tests {
     /// (`run_first_run`/`run_suggest`, because run.rs is at its 600-line
     /// budget) and a self-`include_str!` would be satisfied by the needle list
     /// below. The in-module wiring (`run_intro`, `introduction_prompt`,
-    /// `start_here_prompt`, `mark_intro_done`) is pinned mechanically instead:
-    /// each has exactly one caller, so dropping it turns the callee into dead
-    /// code and trips the zero-warning clippy rule.
+    /// `start_here_prompt`) is pinned mechanically instead: each has exactly
+    /// one caller, so dropping it turns the callee into dead code and trips
+    /// the zero-warning clippy rule. `mark_intro_done` is explicitly needled
+    /// below instead — it has a SECOND caller (the seeding path in
+    /// `setup::intro_needed`), so losing the run.rs call would NOT produce a
+    /// dead-code warning; that silent gap is exactly what re-runs the
+    /// introduction on every launch (SPEC §4.22 review, Fix 1).
     #[test]
     fn run_wires_intro_flow() {
         let src = include_str!("run.rs");
@@ -380,8 +395,13 @@ mod tests {
             "run_first_run",
             "run_suggest",
             "IntroOutcome",
-            "stitch(",
-            "reset_session()",
+            "mark_intro_done",
+            // Pins the STITCH-PATH reset specifically (Fix 3): "reset_session()"
+            // alone occurs 4 times in run.rs, 3 of them pre-existing and
+            // unrelated — a needle that only matches the substring would stay
+            // green even if this exact reset were deleted, which would leave
+            // the CLI backend resuming under the pre-lock system prompt.
+            "crate::tui::intro::stitch(turns, &mut session, &recorder);\n            backend.reset_session();",
         ] {
             assert!(
                 src.contains(needle),
