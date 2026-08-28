@@ -464,6 +464,22 @@ fn start_here_prompt_embeds_material_digest() {
     assert!(!start_here_prompt(None).contains("[COURSE MATERIAL FOUND]"));
 }
 
+// Review fix: on the returning-user Enter path, pressing Enter already WAS
+// "just pick" — a marker rule that still offers that clause would let a
+// compliant model lock the topic on its first reply, before the user gets a
+// chance to say "no, something easier" (SPEC §4.22 "steer it in
+// conversation instead of a yes/no confirm").
+#[test]
+fn start_here_prompt_marker_rule_drops_the_just_pick_clause() {
+    let intro = introduction_prompt(false, None);
+    assert!(intro.contains("or asks you to just pick"));
+    let suggest = start_here_prompt(None);
+    assert!(!suggest.contains("or asks you to just pick"));
+    // Both still carry the marker contract itself.
+    assert!(intro.contains(crate::tokens::TOPIC_MARKER));
+    assert!(suggest.contains(crate::tokens::TOPIC_MARKER));
+}
+
 #[test]
 fn closing_prompt_defines_role_line_and_observation_map_exception() {
     let s = closing_prompt("rust", None, None, None, None, None, None);

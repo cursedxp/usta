@@ -117,6 +117,19 @@ async fn read_user_line(
     }
 }
 
+/// What to page for one intro reply: strip a trailing `[[show: ...]]` marker
+/// from the DISPLAYED text, using the same `extract_show_marker` helper
+/// every other reply path uses (SOUL.md contract) — a model may end a reply
+/// with the marker mid-introduction just as well as post-lock. The marker is
+/// NOT acted on here: launching the visual explainer during the pre-lock
+/// introduction is out of scope for this stage, it is simply not shown.
+/// `text` is either `parse_topic_marker`'s `display` (TOPIC: line already
+/// stripped) or the raw reply — `run_intro`'s `turns` always keeps the RAW
+/// reply, this only affects the screen.
+fn strip_show_for_display(text: &str) -> String {
+    crate::visual::extract_show_marker(text).0
+}
+
 /// The pre-lock conversation loop (SPEC §4.22). `opening` is the hidden first
 /// user turn (`introduction_prompt` or `start_here_prompt`); the model speaks
 /// first. Every model reply is checked for the final-line `TOPIC:` marker —
@@ -152,8 +165,9 @@ pub(crate) async fn run_intro(
                 let w = crate::tui::page::current_width(tui);
                 match crate::topic::parse_topic_marker(&reply.text) {
                     Some((slug, display)) => {
-                        if !display.is_empty() {
-                            crate::tui::page::page_reply(tui, &display, w)?;
+                        let clean = strip_show_for_display(&display);
+                        if !clean.is_empty() {
+                            crate::tui::page::page_reply(tui, &clean, w)?;
                         }
                         turns.push(IntroTurn {
                             user: false,
@@ -162,7 +176,8 @@ pub(crate) async fn run_intro(
                         return Ok(IntroOutcome::Topic { slug, turns });
                     }
                     None => {
-                        crate::tui::page::page_reply(tui, &reply.text, w)?;
+                        let clean = strip_show_for_display(&reply.text);
+                        crate::tui::page::page_reply(tui, &clean, w)?;
                         turns.push(IntroTurn {
                             user: false,
                             text: reply.text,
@@ -314,6 +329,17 @@ mod tests {
     use crate::session::Session;
     use crate::transcript::Recorder;
 
+    #[test]
+    fn strip_show_for_display_strips_trailing_show_marker() {
+        let stripped = strip_show_for_display("Let's start.\n[[show: tcp handshake]]");
+        assert_eq!(stripped, "Let's start.");
+    }
+
+    #[test]
+    fn strip_show_for_display_leaves_text_without_marker_untouched() {
+        assert_eq!(strip_show_for_display("no marker here"), "no marker here");
+    }
+
     fn sample_turns() -> Vec<IntroTurn> {
         vec![
             IntroTurn {
@@ -386,7 +412,15 @@ mod tests {
     /// below instead — it has a SECOND caller (the seeding path in
     /// `setup::intro_needed`), so losing the run.rs call would NOT produce a
     /// dead-code warning; that silent gap is exactly what re-runs the
-    /// introduction on every launch (SPEC §4.22 review, Fix 1).
+    /// introduction on every launch (SPEC §4.22 review, Fix 1). The needle
+    /// pins its POSITION, not just its presence (Fix 3): a bare
+    /// `"mark_intro_done"` substring needle stays green even if the call
+    /// moves back above the lock-conflict confirmation, which re-opens the
+    /// bug commit 8bd72ba fixed — a user who declines that confirmation gets
+    /// no session but does get the marker, and is never introduced. Pinning
+    /// the exact contiguous text from `build_session` through the
+    /// `mark_intro_done` call means any code moved in between (or the call
+    /// relocated elsewhere) breaks the match.
     #[test]
     fn run_wires_intro_flow() {
         let src = include_str!("run.rs");
@@ -395,13 +429,17 @@ mod tests {
             "run_first_run",
             "run_suggest",
             "IntroOutcome",
-            "mark_intro_done",
             // Pins the STITCH-PATH reset specifically (Fix 3): "reset_session()"
             // alone occurs 4 times in run.rs, 3 of them pre-existing and
             // unrelated — a needle that only matches the substring would stay
             // green even if this exact reset were deleted, which would leave
             // the CLI backend resuming under the pre-lock system prompt.
             "crate::tui::intro::stitch(turns, &mut session, &recorder);\n            backend.reset_session();",
+            // Pins mark_intro_done AFTER build_session (Fix 3, see doc comment
+            // above): the doc comment between them is part of the needle on
+            // purpose, so an edit that merely reorders statements without
+            // touching the comment still breaks this exact contiguous match.
+            "let (mut session, recorder, lock, has_progress) =\n        crate::lifecycle::build_session(global, project_root, &topic, today)?;\n\n    // The first-run introduction only counts as completed once a real session\n    // exists — writing this any earlier (e.g. the moment the model returns a\n    // topic) would strand the marker on disk if the lock-conflict confirmation\n    // above is declined, and the user would never be introduced (SPEC §4.22\n    // review, Fix 1).\n    if first_run_completed {\n        crate::setup::mark_intro_done(global, \"completed\");\n    }",
         ] {
             assert!(
                 src.contains(needle),

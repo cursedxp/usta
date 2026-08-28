@@ -286,7 +286,13 @@ Design detail: `docs/superpowers/specs/2026-08-27-flow-companion-design.md`.
   the exit is announced once and honored without argument). The model locks the
   topic with a final-line `TOPIC: <slug>` marker; the conversation is stitched
   into the real session (history + transcript) and no opening/onboarding turn is
-  injected. Quit before lock writes nothing.
+  injected. Quit before lock writes no session, no lock, no learner files — but
+  the introduction runs `materials::convert_pdfs` before any lock exists, so a
+  quit mid-conversation may still leave `materials/*.txt` conversions on disk
+  from PDFs it scanned. Declining the lock-conflict confirmation after a
+  first-run introduction (session/lock rejected, `build_session` never runs)
+  writes no "introduction completed" marker either — the introduction runs
+  again on the next launch.
 - The marker file is self-seeding: a filled profile or any catalog record
   grandfathers existing users (`seeded`); completion writes `completed`. Profile
   reset keeps the marker; factory reset removes it (introduction runs again).
@@ -402,7 +408,7 @@ usta/
 - **Gamification (v0.17):** `/game` is not a static intercept but a prompt-injection command like `/exam` — the shell only holds the toggle persistence (USER.md `## Preferences`, `set_game_pref` idempotent) and the opening streak line (`game_streak_line`; `streak: 0` is structurally impossible to produce — an ADHD-safe shell guarantee); the XP/level/badge narrative flows entirely in the LLM via the TEACHING.md `## Gamification` rules ("thin shell"). Version: `0.17.0`.
 - **TUI design system (v0.18):** the visual language was pulled to a single source (`src/tui/theme.rs`) — semantic color `Color::Indexed` + glyph pairs, all TUI modules + `ui.rs` plain-ANSI + termimad skin fed from here (no scattered `Color::` literals). Color reinforces the glyph, it isn't status (color-blind/monochrome safety); orange = identity, ≤2 on a static screen (test-locked). The exam card isn't drawn in the shell — the model draws it via the GOAL.md `## Mock Exams` format rule, the shell doesn't parse question-state ("thin shell" preserved). Behavior/text unchanged, only presentation. Version: `0.18.0`.
 - **Module size budget (v0.22.0):** a module whose production code (test module excluded) exceeds 600 lines needs a documented reason to stay unsplit. A test module that bloats a file moves to its own file instead (`#[cfg(test)] #[path = "..."] mod tests;`), it doesn't count against the budget. A file carrying that pattern must not become a directory module (`foo.rs` → `foo/mod.rs`) without moving its test file alongside — dropping the `mod tests;` line leaves the test file uncompiled and its tests silently gone, and nothing in CI pins the test count to catch it. Grew out of `main.rs` reaching 3045 lines with no rubric anywhere ever asking "has this file grown too large" — see `docs/superpowers/specs/2026-08-16-module-split-design.md`. Version: `0.22.0`.
-- **Module size budget, status (v0.23.0):** the two modules over budget when the rule shipped — `tui/run.rs` (1185) and `tui/welcome.rs` (797) — were split (cleanup round); no module in the crate exceeds the budget now. `run()` itself stays 562 lines inside the 591-line `tui/run.rs` by documented exception (zero test coverage on the function, five mutable values live across `.await` in its `select!`) — see `docs/superpowers/specs/2026-08-17-cleanup-round-design.md`. Version: `0.23.0`.
+- **Module size budget, status (v0.23.0):** the two modules over budget when the rule shipped — `tui/run.rs` (1185) and `tui/welcome.rs` (797) — were split (cleanup round); no module in the crate exceeds the budget now. `run()` itself stays 565 lines inside the 598-line `tui/run.rs` by documented exception (zero test coverage on the function, five mutable values live across `.await` in its `select!`) — see `docs/superpowers/specs/2026-08-17-cleanup-round-design.md`. Version: `0.23.0`.
 - **Polite watcher (v0.24.0):** the `?` heuristic is enough to track an open question — deliberately no LLM protocol flag for "awaiting answer" (prompt diet, §4.20 principle applied here too). The session's `/watch polite` override is not persisted to the approach file — it's a per-session choice, `watch: live` in the approach file remains the only durable opt-out. Version: `0.24.0`.
 - **Entry flow 13a (v0.27.0):** the introduction moved BEFORE topic lock as a
   re-ordering of the existing MEET_BLOCK conversation, not a new gated phase —

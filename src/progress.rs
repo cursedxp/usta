@@ -311,9 +311,25 @@ fn material_block(materials: Option<&str>) -> String {
 /// Shared topic-lock contract for the pre-lock conversation prompts
 /// (SPEC §4.22): the reply's FINAL line locks the topic; the shell parses
 /// nothing else out of the conversation (prompt diet).
-fn topic_marker_rule() -> String {
+///
+/// `offer_pick`: whether the rule also lets the model lock on "just pick for
+/// me". `introduction_prompt` passes `true` — a first-run user hasn't spent
+/// that "let it decide" moment yet. `start_here_prompt` passes `false`
+/// (review fix): on the returning-user path, pressing Enter at the topic
+/// prompt already WAS "just pick" — keeping the clause let a compliant model
+/// lock the topic on its very first reply, before the user got a chance to
+/// say "no, something easier". That recreated in the prompt exactly the
+/// friction the yes/no confirm gate was deleted to remove. Without the
+/// clause, the model must propose first and only emit the marker once the
+/// user actually agrees in a later turn.
+fn topic_marker_rule(offer_pick: bool) -> String {
+    let trigger = if offer_pick {
+        "When the user agrees to start — or asks you to just pick —"
+    } else {
+        "When the user agrees to start,"
+    };
     format!(
-        "When the user agrees to start — or asks you to just pick — end that \
+        "{trigger} end that \
          reply with a FINAL line exactly `{marker} <topic-slug>` (lowercase, \
          hyphenated, 1-3 words; nothing after that line; never emit it before \
          agreement). The shell locks the topic on that line and the session \
@@ -374,7 +390,7 @@ pub fn introduction_prompt(project_known: bool, materials: Option<&str>) -> Stri
         observation = tokens::ROLE_OBSERVATION,
         project_block = project_block,
         material_block = material_block(materials),
-        marker_rule = topic_marker_rule(),
+        marker_rule = topic_marker_rule(true),
     )
 }
 
@@ -401,7 +417,7 @@ pub fn start_here_prompt(materials: Option<&str>) -> String {
          At session close you'll be asked for the approach + FULL curriculum \
          map content; the shell writes the files — never write files yourself \
          during the session (Hard Rule 6).",
-        marker_rule = topic_marker_rule(),
+        marker_rule = topic_marker_rule(false),
         material_block = material_block(materials),
     )
 }
