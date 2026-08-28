@@ -134,11 +134,11 @@ pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
     let mut frame = format!(
         "[Files changed]\n{files_payload}\n\n\
 This change is part of the ongoing lesson — respond as the mentor guiding it, not as a reviewer opening a fresh audit. Apply these rules:\n\
-1. If your last message asked for a step and this change satisfies it: confirm briefly, flag any errors, move to the next step.\n\
+1. If your last message asked for a step and this change satisfies it: confirm briefly, flag any errors, move to the next step — unless rule 5 restricts it, in which case describe only the change.\n\
 2. If there's an unanswered question from you still pending: nudge it in ONE short sentence — never repeat the full question text.\n\
 3. First-sight full-content files may be tool-generated scaffold (e.g. a `cargo new` template) — acknowledge scaffold in one sentence, don't review it line by line; focus on the user's hand-written change.\n\
 4. If the user asks a question in the middle of this, answer it, then recall the task.\n\
-5. If your assignment asked the user to read, run, or describe an artifact, its content in this block is FOR YOUR EYES ONLY until the user reports on it: do not quote, summarize, or explain it — when the report comes, verify it against what you saw."
+5. If your assignment asked the user to read, run, or describe an artifact, that artifact is OFF-LIMITS to discuss until the user reports on it: do not quote, summarize, or explain it. When their report arrives, verify it against what you saw."
     );
     if any_exercise {
         frame.push_str(&format!(
@@ -499,7 +499,7 @@ mod tests {
         assert!(s.contains("never repeat the full question"));
         assert!(s.contains("scaffold"));
         assert!(s.contains("hand-written"));
-        assert!(s.contains("FOR YOUR EYES ONLY"));
+        assert!(s.contains("OFF-LIMITS"));
         assert!(s.contains("verify it against"));
         assert!(!s.to_lowercase().contains("standalone code review"));
     }
