@@ -251,7 +251,7 @@ Binding principle: nothing that can be resolved deterministically by the shell i
 
 Design detail: `docs/superpowers/specs/2026-08-16-prompt-diet-design.md`.
 
-## 4.21 Polite Watcher (v0.24, superseded by v0.25.0 below)
+## 4.21 Polite Watcher (v0.24, superseded by v0.25.0 and v0.28.0 below)
 
 A `polite` flag sits alongside `watching` in TUI watch mode — **default ON**, unless the topic's approach file (project `.usta/approaches/<topic>.md` overriding global `approaches/<topic>.md`; missing/unreadable keeps it ON) has a `watch: live` line. As of v0.25.0, `polite` is a **prompt-frame switch, not a timing switch**: every debounce batch is processed immediately regardless of `polite`, and `polite` only chooses which frame wraps the batch (see the v0.25.0 paragraph below) — directory events are filtered in all modes (F4, v0.24.1).
 
@@ -276,6 +276,8 @@ Design detail (historical — describes the retired queue/backstop mechanism bel
 Because there is no queue left to deliver, `/watch polite off` no longer has a "flush the withheld queue" step — it just switches the frame for the next batch, and the mode-change confirmation is worded accordingly (e.g. `polite mode off — plain review feedback`). `/watch off` still turns everything off, unchanged. `plain.rs` and the exam flow remain out of scope and unchanged — `plain.rs` still does one file per turn.
 
 Design detail: `docs/superpowers/specs/2026-08-27-flow-companion-design.md`.
+
+**v0.28.0 — watcher turn-taking (accumulate & ride along):** the watcher never initiates an LLM turn (spec K1, no exceptions — `exercises/` included). The default (**companion**) holds flushed batches in `PendingChanges` (paths only; the payload is built at delivery via the existing batch merger, so intermediate saves collapse into one diff) and delivers them WITH the user's next message in a single call — a one-line `pending_preamble`, the `flow_frame`-framed file block, then the user's own words last. The status line shows a deterministic counter (`👁 watching · N changes noted`), reset on delivery; live mode shows `👁 watching·live` and no counter. Immediate feedback is an explicit user choice: `/watch live [on|off]` (replacing `/watch polite`) session-only, or a `watch: live` approach line as the per-topic default — both now select TIMING, collapsing the old `watching`+`polite` pair into one honest axis (companion = accumulate + `flow_frame` · live = immediate + `feedback_frame`). Bulk and observe-only routes are unchanged and a bulk batch never enters the pending set; pending changes are dropped silently at `/quit`/close (the closing flush already reads the disk). `Cargo.lock` is ignored at the watcher. Prompt side (backup layer): `flow_frame` gains an eyes-only rule and a one-sentence-nudge rule; TEACHING.md's exercise flow now says the user reports when done instead of promising an automatic review on save. The flush policy lives in `polite::dispatch_flush`; ride-along delivery in `polite::attach_pending` + `file_feedback::deliver_pending` — `run.rs` keeps thin call sites (its 600-line budget). Design: `docs/superpowers/specs/2026-08-28-watcher-turn-taking-design.md`.
 
 ## 4.22 Entry Flow — Introduction Before Topic Lock (v0.27)
 

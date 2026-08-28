@@ -82,13 +82,15 @@ usta start gtm            # could be rust, gtm, anything
   → /quit → progress + approach + curriculum updated, catalog refreshed
 ```
 
-Practice: Usta assigns exercises into `exercises/` — write, save, get reviewed. No solutions handed over.
+Practice: Usta assigns exercises into `exercises/` — write, save, and say you're done: the review comes with your message. No solutions handed over.
 
-In-session commands: `/watch on|off` (file feedback) · `/show [topic]` (animated visual explainer) · `/exam` (goal mode: mock exam) · `/game on|off` (gamification) · `/help` · `/quit`.
+In-session commands: `/watch on|off` (file feedback) · `/watch live` (immediate review per save) · `/show [topic]` (animated visual explainer) · `/exam` (goal mode: mock exam) · `/game on|off` (gamification) · `/help` · `/quit`.
 
-### Polite watching
+### Companion watching
 
-Every save is processed immediately — polite only changes the *framing*, not the timing. By default (polite on), file feedback is a lesson-flow companion: it treats your change as part of the ongoing lesson rather than a fresh code review, briefly confirms the step you were asked to do and moves you to the next one, keeps an open question of its own alive instead of dropping it, waves off tool-generated scaffold (e.g. a `cargo new` template) in one sentence instead of reviewing it line by line, and answers any question you ask in between before recalling the task. Several files saved in one debounce window are batched into a single reply instead of one message per file. `/watch polite off` switches to plain review feedback for the rest of the session; `/watch polite on` / `/watch polite` (toggle) switch it back. To make plain review the default for a topic, add a `watch: live` line to its approach file (`.usta/approaches/<topic>.md`, project override first) — the session-only `/watch polite` commands never write back to it. `/watch off` turns file feedback off entirely.
+Usta watches your files but never interrupts. By default, saves accumulate quietly and ride along with your next message — the mentor sees your changes and your words together, in one turn, and your words are the last word. The status line counts what's noted (`👁 watching · 2 changes noted`); the counter resets when delivered. Files saved together are merged into a single block, and repeated saves of the same file collapse into one diff at delivery time.
+
+Want a review the moment you save? Turn live mode on: `/watch live` (toggle; `on`/`off` also work) for the session, or add a `watch: live` line to the topic's approach file (`.usta/approaches/<topic>.md`, project override first) to make it the topic's default — the session-only command never writes back to the file. Live feedback uses plain review framing. `/watch off` stops watching entirely.
 
 ### Project context: the `mentor/` folder
 
