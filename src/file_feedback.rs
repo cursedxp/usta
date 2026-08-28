@@ -113,7 +113,7 @@ pub(crate) fn feedback_frame(
 /// `feedback_frame`'s plain review wording, this frame casts the model as the
 /// mentor mid-lesson, not a fresh reviewer — the five rules from the design
 /// spec (`docs/superpowers/specs/2026-08-27-flow-companion-design.md`,
-/// "Behavior" section, polite=true default): (1) check a requested
+/// "Behavior" section, companion default): (1) check a requested
 /// step and advance on success, (2) nudge any unanswered question of yours
 /// in one short sentence, never a full repeat, (3) wave off tool-generated
 /// scaffold in one sentence and focus on the user's hand-written change,
@@ -129,7 +129,10 @@ pub(crate) fn feedback_frame(
 /// Rules 2 and 5 are the K5 backup layer for ride-along payloads — K1 removes
 /// the leak opportunity, these guard the payload itself.
 ///
-/// Called from `handle_batch_change` (below) when `polite` is true.
+/// Called from `ride_along_turn` (below), the companion default's delivery
+/// path: the frame ships with the batch that rides along on the user's next
+/// submit (spec K2). `handle_batch_change` no longer chooses between frames —
+/// the only path left through it is live, which is plain review by definition.
 pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
     let mut frame = format!(
         "[Files changed]\n{files_payload}\n\n\
@@ -318,10 +321,11 @@ fn build_batch_payload(
 /// large-file notice AND a reply, which a single `FileFeedback` can't express;
 /// that variant stays in the enum for `handle_file_change`'s single-file path.
 ///
-/// Frame choice: `polite` selects the lesson-flow frame (`flow_frame`) or the
-/// same review frame `handle_file_change` uses (`feedback_frame`, given the
-/// whole merged payload as one block, exercise-flagged when any file in the
-/// batch is an exercise submission). `cargo check` runs at most once per
+/// Frame: always the plain review frame (feedback_frame) — only the live path
+/// calls this, and live is plain review by definition (spec K4); the companion
+/// frame ships with ride-along delivery (deliver_pending). The payload goes in
+/// as one block, exercise-flagged when any file in the batch is an exercise
+/// submission. `cargo check` runs at most once per
 /// batch — only when at least one included file is not an exercise
 /// submission — instead of once per file.
 pub(crate) async fn handle_batch_change(
@@ -331,22 +335,17 @@ pub(crate) async fn handle_batch_change(
     project_root: &Path,
     paths: &[PathBuf],
     recorder: &transcript::Recorder,
-    polite: bool,
 ) -> Result<(Vec<String>, FileFeedback)> {
     let (payload, meta) = build_batch_payload(files, project_root, paths);
     if meta.total_included == 0 {
         return Ok((meta.notices, FileFeedback::Sessiz));
     }
-    let mut injected = if polite {
-        flow_frame(&payload, meta.any_exercise)
-    } else {
-        feedback_frame(
-            meta.any_exercise,
-            &meta.displays.join(", "),
-            &payload,
-            false,
-        )
-    };
+    let mut injected = feedback_frame(
+        meta.any_exercise,
+        &meta.displays.join(", "),
+        &payload,
+        false,
+    );
     if meta.any_non_exercise {
         if let Some(check_result) = check::run_check(project_root).await {
             injected.push_str(&format!(
@@ -402,7 +401,6 @@ fn ride_along_turn(files_payload: &str, any_exercise: bool, user_text: &str) -> 
 /// made it into the payload. No LLM call happens here — the caller sends the
 /// returned string through the normal ask path (prompt diet: only payload and
 /// frame ever reach the model).
-#[allow(dead_code)] // staged: consumed by the timing-flip task
 pub(crate) fn deliver_pending(
     files: &mut feedback::FileMemory,
     project_root: &Path,
@@ -547,26 +545,6 @@ mod tests {
     fn flow_frame_carries_exercise_rule_when_flagged() {
         assert!(flow_frame("x", true).contains("AS AN EXERCISE"));
         assert!(!flow_frame("x", false).contains("AS AN EXERCISE"));
-    }
-
-    #[test]
-    fn polite_branch_selecting_flow_frame_is_pinned() {
-        // `handle_batch_change` needs a live Backend, so its frame choice
-        // can't be driven from a unit test: deleting the `polite` branch
-        // would leave every test green while every batch silently fell back
-        // to the plain review frame. Pin the call site in this file's own
-        // production source instead (same crude-pin pattern as
-        // `run_rs_wiring_call_sites_are_pinned` in tui/polite.rs, which pins
-        // run.rs). Split at the test module so this assert's own text can't
-        // match itself.
-        let production_src = include_str!("file_feedback.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap();
-        assert!(
-            production_src.contains("flow_frame(&payload, meta.any_exercise)"),
-            "handle_batch_change must select flow_frame when polite is on"
-        );
     }
 
     /// Unique scratch dir per test so parallel `cargo test` runs don't collide
@@ -881,7 +859,6 @@ mod tests {
             &dir,
             &paths,
             &recorder,
-            false,
         )
         .await
         .unwrap();

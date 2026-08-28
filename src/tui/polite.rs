@@ -1,10 +1,12 @@
 //! The watcher's decision layer: which route a flushed debounce batch takes,
-//! and the feedback turn itself. Mostly pure logic; `process_batch` is the one
-//! impure piece — the single file-feedback cycle `run.rs` starts from the
-//! watcher's debounce flush, kept here so `run.rs` stays connective tissue.
-//!
-//! Timing is uniform: every batch is handled the moment it flushes. `polite`
-//! is a prompt-frame switch, not a delay — see `process_batch`.
+//! and what happens on each route. The watcher NEVER initiates an LLM turn on
+//! its own (spec K1, no exceptions): the companion default HOLDS flushed
+//! batches in `PendingChanges` and delivers them with the user's next submit
+//! (`attach_pending` — ride along, spec K2). An immediate turn at flush exists
+//! only as the user's explicit choice (`live`: `/watch live` or a
+//! `watch: live` approach line), framed as plain review. Mostly pure logic;
+//! `dispatch_flush` and `process_batch` are the impure pieces, kept here so
+//! `run.rs` stays connective tissue.
 
 use std::path::{Path, PathBuf};
 
@@ -18,29 +20,35 @@ use crate::transcript::Recorder;
 use crate::tui::editor::InputBox;
 use crate::tui::term::Tui;
 
-/// The three ways a flushed file-change batch can be handled — decided once,
-/// up front, so `run.rs` only matches on the outcome.
+/// The four ways a flushed file-change batch can be handled — decided once,
+/// up front, so the dispatcher only matches on the outcome.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Route {
     /// Too many files at once — feedback skipped, baseline still synced.
     Bulk,
-    /// Companion off — baseline synced, no LLM feedback.
+    /// Companion off — baseline synced, no LLM feedback, nothing accumulates.
     ObserveOnly,
-    /// Give feedback now.
+    /// Live mode (explicit user choice): give feedback now, plain review frame.
     Feedback,
+    /// Companion default: hold — paths accumulate in `PendingChanges` and
+    /// ride along with the user's next submit. No turn (spec K1).
+    Hold,
 }
 
-/// Picks the route for a flushed batch. Order matters, same as the run loop's
-/// original if/else chain: a bulk save is skipped before the companion-off
-/// gate is consulted. `polite` is deliberately NOT an input — it selects the
-/// prompt frame inside `process_batch`, it never delays or withholds a batch.
-pub(crate) fn route(batch_len: usize, max_batch: usize, watching: bool) -> Route {
+/// Picks the route for a flushed batch. Order matters, same as the original
+/// if/else chain: a bulk save is skipped before the watching gate, and the
+/// watching gate before the timing axis. `live` selects timing (spec K4):
+/// an immediate turn only on the user's explicit say-so — the default is
+/// Hold, because the watcher never initiates (spec K1).
+pub(crate) fn route(batch_len: usize, max_batch: usize, watching: bool, live: bool) -> Route {
     if batch_len > max_batch {
         Route::Bulk
     } else if !watching {
         Route::ObserveOnly
-    } else {
+    } else if live {
         Route::Feedback
+    } else {
+        Route::Hold
     }
 }
 
@@ -55,7 +63,6 @@ pub(crate) struct PendingChanges {
     paths: Vec<PathBuf>,
 }
 
-#[allow(dead_code)] // staged: consumed by the timing-flip task
 impl PendingChanges {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -90,7 +97,6 @@ impl PendingChanges {
 /// notices are printed, and the combined turn — file block first, the user's
 /// words last — is returned for the normal ask path. Deterministic shell
 /// work; no LLM call here.
-#[allow(dead_code)] // staged: consumed by the timing-flip task
 pub(crate) fn attach_pending(
     tui: &mut Tui,
     pending: &mut PendingChanges,
@@ -156,8 +162,9 @@ pub(crate) fn bulk_skip(tui: &mut Tui, files: &mut FileMemory, paths: Vec<PathBu
 /// The file-feedback cycle for one flushed debounce batch: `handle_batch_change`
 /// merges every changed file into ONE injected turn and makes ONE LLM call,
 /// and this function presents the result — the per-file notices it returns
-/// first, in `paths` order, then the reply. `polite` picks the prompt frame
-/// there: the lesson-flow companion frame when on, plain review when off.
+/// first, in `paths` order, then the reply. Only the live path reaches here,
+/// and live is plain review by definition (spec K4) — the companion frame
+/// travels with ride-along delivery instead (attach_pending).
 ///
 /// No batch-size check here: `Route::Feedback` is the only way in, and `route`
 /// has already sent anything over `max_feedback_batch` to `bulk_skip`. The
@@ -177,7 +184,6 @@ pub(crate) async fn process_batch(
     topic: &str,
     last_tokens: &mut Option<u64>,
     paths: &[PathBuf],
-    polite: bool,
 ) -> Result<()> {
     match crate::file_feedback::handle_batch_change(
         backend,
@@ -186,7 +192,6 @@ pub(crate) async fn process_batch(
         project_root,
         paths,
         recorder,
-        polite,
     )
     .await
     {
@@ -229,6 +234,55 @@ pub(crate) async fn process_batch(
             }
         }
         Err(e) => crate::tui::page::page_error(tui, &format!("file feedback skipped: {e}"))?,
+    }
+    Ok(())
+}
+
+/// The single flush entry point `run.rs` calls from the debounce deadline arm:
+/// route the batch, then act — so the whole watcher policy lives here and
+/// run.rs keeps one thin call site (its 600-line budget is why). Bulk and
+/// observe-only are unchanged; a bulk batch never enters `PendingChanges`
+/// (spec: Kenar durumlar), so the cap keeps meaning.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn dispatch_flush(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    session: &mut Session,
+    files: &mut FileMemory,
+    recorder: &Recorder,
+    project_root: &Path,
+    topic: &str,
+    last_tokens: &mut Option<u64>,
+    batch: Vec<PathBuf>,
+    max_batch: usize,
+    watching: bool,
+    live: bool,
+    pending: &mut PendingChanges,
+) -> Result<()> {
+    match route(batch.len(), max_batch, watching, live) {
+        Route::Bulk => bulk_skip(tui, files, batch)?,
+        Route::ObserveOnly => sync_baseline(files, batch),
+        // Live mode — the user's explicit timing choice: immediate turn.
+        Route::Feedback => {
+            process_batch(
+                tui,
+                editor,
+                events,
+                backend,
+                session,
+                files,
+                recorder,
+                project_root,
+                topic,
+                last_tokens,
+                &batch,
+            )
+            .await?
+        }
+        // Companion default: accumulate; delivery rides the next submit (K2).
+        Route::Hold => pending.hold(batch),
     }
     Ok(())
 }
@@ -300,17 +354,21 @@ mod tests {
     #[test]
     fn route_truth_table() {
         use Route::*;
-        // bulk wins over everything, watching or not
-        assert_eq!(route(11, 10, true), Bulk);
-        assert_eq!(route(11, 10, false), Bulk);
-        // watching off → observe only
-        assert_eq!(route(1, 10, false), ObserveOnly);
-        assert_eq!(route(0, 10, false), ObserveOnly);
-        // watching on, within the limit → immediate feedback, always
-        assert_eq!(route(1, 10, true), Feedback);
-        assert_eq!(route(5, 10, true), Feedback);
+        // bulk wins over everything, watching/live or not
+        assert_eq!(route(11, 10, true, false), Bulk);
+        assert_eq!(route(11, 10, true, true), Bulk);
+        assert_eq!(route(11, 10, false, false), Bulk);
+        // watching off → observe only, live or not
+        assert_eq!(route(1, 10, false, false), ObserveOnly);
+        assert_eq!(route(1, 10, false, true), ObserveOnly);
+        // watching on, within the limit: live → immediate feedback,
+        // companion default → hold, NEVER a turn (spec K1)
+        assert_eq!(route(1, 10, true, true), Feedback);
+        assert_eq!(route(1, 10, true, false), Hold);
+        assert_eq!(route(5, 10, true, false), Hold);
         // boundary: exactly max is NOT bulk (existing `>` comparison)
-        assert_eq!(route(10, 10, true), Feedback);
+        assert_eq!(route(10, 10, true, false), Hold);
+        assert_eq!(route(10, 10, true, true), Feedback);
     }
 
     #[test]
@@ -346,17 +404,90 @@ mod tests {
         // silent deletion by asserting the wiring is still called from
         // run.rs's source text. Every needle names a symbol run.rs itself
         // calls — a needle for a symbol living elsewhere would be a fake pin.
+        // v0.28.0: the four route arms moved into polite::dispatch_flush, so
+        // the old per-arm needles went vacuous — replaced by needles for the
+        // two new call sites plus the state wiring that feeds them. The arms
+        // themselves are pinned by dispatch_flush_route_arms_are_pinned.
         let src = include_str!("run.rs");
         for needle in [
-            "polite::route(",
-            "polite::bulk_skip(",
-            "polite::sync_baseline(",
-            "polite::process_batch(",
+            "polite::approach_text(",
+            "polite::live_from_approach(",
+            "polite::PendingChanges::new(",
+            "polite::dispatch_flush(",
+            "polite::attach_pending(",
         ] {
             assert!(
                 src.contains(needle),
                 "run.rs lost its watcher wiring: {needle}"
             );
         }
+    }
+
+    #[test]
+    fn dispatch_flush_route_arms_are_pinned() {
+        // dispatch_flush needs a live Backend + Tui, so its arms can't be
+        // driven from a unit test (same class as
+        // run_rs_wiring_call_sites_are_pinned): pin this file's own
+        // production source, split at the test module so this assert's own
+        // text can't match itself. Deleting an arm's body would otherwise
+        // leave the suite green while a whole route silently died — the
+        // exact failure class these pins exist for.
+        let production_src = include_str!("polite.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        for needle in [
+            "match route(batch.len()",
+            "Route::Bulk => bulk_skip(",
+            "Route::ObserveOnly => sync_baseline(",
+            "Route::Hold => pending.hold(",
+        ] {
+            assert!(
+                production_src.contains(needle),
+                "dispatch_flush lost an arm: {needle}"
+            );
+        }
+        // process_batch appears once as its own definition; the second
+        // occurrence is dispatch_flush's live-arm call.
+        assert!(
+            production_src.matches("process_batch(").count() >= 2,
+            "dispatch_flush no longer calls process_batch on the live route"
+        );
+    }
+
+    #[test]
+    fn ride_along_attaches_only_to_genuine_user_text() {
+        // run.rs's submit arm builds one `outgoing` binding from three
+        // branches: the user's own typed line, /exam's synthesized exam
+        // prompt, and /game's mode directives. Pending file changes may ride
+        // along ONLY with the user's own words — in front of an operational
+        // directive they would feed file feedback into an exam (where it is
+        // suspended by design) or into a game toggle, and neither is a report
+        // on the learner's work. The /exam and /game branches must therefore
+        // leave the queue intact, so the changes deliver on the next real
+        // message. Crude source pin, same class as
+        // run_rs_wiring_call_sites_are_pinned: the branch structure is inside
+        // a TUI select! loop that can't be driven from a unit test.
+        let src = include_str!("run.rs");
+        assert!(
+            src.contains(
+                "attach_pending(&mut tui, &mut pending, &mut files, project_root, line.clone())"
+            ),
+            "ride-along must take the user's own line, not the shared `outgoing` binding"
+        );
+        assert!(
+            !src.contains("attach_pending(&mut tui, &mut pending, &mut files, project_root, outgoing)"),
+            "ride-along must not wrap `outgoing`: that attaches pending changes to /exam and /game directives"
+        );
+        // The two synthesized-directive branches still build their text
+        // directly — nothing drains `pending` on the way.
+        assert!(
+            src.contains("progress::exam_prompt(&topic)"),
+            "/exam must build its directive directly, leaving pending changes queued"
+        );
+        assert!(
+            src.contains("crate::slash::game_on_turn("),
+            "/game must build its directive directly, leaving pending changes queued"
+        );
     }
 }

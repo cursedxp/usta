@@ -419,12 +419,13 @@ pub async fn run(
     }
 
     let mut watching = true;
-    // One honest axis (spec K4): `live` = immediate feedback at every flush,
-    // only by the user's explicit choice (`/watch live` or a `watch: live`
-    // approach line). Off (default) = companion: lesson-flow framing — and,
-    // once the timing flip lands, accumulate-and-ride-along delivery.
+    // One honest axis (spec K4): `live` = immediate plain-review turn at
+    // every flush, only by the user's explicit choice (`/watch live` or a
+    // `watch: live` approach line). Off (default) = companion: accumulate,
+    // deliver on the user's next submit with the lesson-flow frame (K1/K2).
     let approach = crate::tui::polite::approach_text(project_root, global, &topic);
     let mut live = crate::tui::polite::live_from_approach(&approach);
+    let mut pending = crate::tui::polite::PendingChanges::new();
     loop {
         // Drain the buffer at the start of every iteration — notices that
         // accumulate outside maybe_compact, like a transcript write error,
@@ -436,7 +437,7 @@ pub async fn run(
             &Status::Idle,
             last_tokens,
             window,
-            Some((watching, live, 0)),
+            Some((watching, live, pending.len())),
         )?;
         tokio::select! {
             maybe_ev = events.next() => {
@@ -543,7 +544,8 @@ pub async fn run(
                         } else {
                             // Push the submitted line to scrollback as a distinct user block.
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            line.clone()
+                            // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
+                            crate::tui::polite::attach_pending(&mut tui, &mut pending, &mut files, project_root, line.clone())?
                         };
                         session.push_user(&outgoing);
                         recorder.user(&outgoing);
@@ -577,15 +579,8 @@ pub async fn run(
                 debouncer.push(path, tokio::time::Instant::now());
             }
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
-                let batch = debouncer.flush();
-                use crate::tui::polite::Route;
-                match crate::tui::polite::route(batch.len(), max_feedback_batch, watching) {
-                    Route::Bulk => crate::tui::polite::bulk_skip(&mut tui, &mut files, batch)?,
-                    Route::ObserveOnly => crate::tui::polite::sync_baseline(&mut files, batch),
-                    // One combined LLM turn for the whole batch, right now;
-                    // `live` picks the plain-review frame (timing flips next).
-                    Route::Feedback => crate::tui::polite::process_batch(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &batch, !live).await?,
-                }
+                // Watcher flush: routing + action live in polite::dispatch_flush (spec K1/K2) — run.rs keeps the call site only.
+                crate::tui::polite::dispatch_flush(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, debouncer.flush(), max_feedback_batch, watching, live, &mut pending).await?;
             }
         }
     }
