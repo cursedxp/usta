@@ -6,6 +6,7 @@ pub(crate) mod backend_wrap;
 pub mod convert;
 pub mod editor;
 pub mod entry;
+pub mod intro;
 pub mod page;
 pub mod paint;
 pub mod polite;
