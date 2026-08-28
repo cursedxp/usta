@@ -345,6 +345,7 @@ pub(crate) async fn handle_batch_change(
     project_root: &Path,
     paths: &[PathBuf],
     recorder: &transcript::Recorder,
+    monitor: &mut check::VerifyMonitor,
 ) -> Result<(Vec<String>, FileFeedback)> {
     let (payload, meta) = build_batch_payload(files, project_root, paths);
     if meta.total_included == 0 {
@@ -358,6 +359,7 @@ pub(crate) async fn handle_batch_change(
     );
     if meta.any_non_exercise {
         if let Some(check_result) = check::run_check(project_root).await {
+            monitor.record(&check_result);
             injected.push_str(&check_result_block(&check_result));
         }
     }
@@ -442,6 +444,7 @@ pub(crate) async fn deliver_pending(
     project_root: &Path,
     paths: &[PathBuf],
     notes: &[String],
+    monitor: &mut check::VerifyMonitor,
     user_text: String,
 ) -> (Vec<String>, String) {
     let (mut payload, meta) = build_batch_payload(files, project_root, paths);
@@ -471,16 +474,38 @@ pub(crate) async fn deliver_pending(
         };
     }
     if meta.total_included == 0 && notes.is_empty() {
-        return (meta.notices, user_text);
+        // Controller correction: a turn with no payload at all is exactly
+        // when remembering matters most (spec C2) — nothing else rides to
+        // remind the mentor the project is still broken, so the remembered
+        // red-state note attaches here too, not only on the checked path.
+        let outgoing = match monitor.note() {
+            Some(n) => format!("{n}\n\n{user_text}"),
+            None => user_text,
+        };
+        return (meta.notices, outgoing);
     }
-    let check = if meta.any_non_exercise {
-        check::run_check(project_root)
-            .await
-            .map(|r| check_result_block(&r))
+    // The check runs exactly where it ran before — a delivery carrying at
+    // least one non-exercise file (spec C2: finding C adds MEMORY, not
+    // executions). When it runs, the verdict is recorded; when it doesn't
+    // (exercise-only, structure-only, run_check unavailable), a remembered
+    // red verdict rides as the one-line note instead.
+    let check_block = if meta.any_non_exercise {
+        match check::run_check(project_root).await {
+            Some(raw) => {
+                monitor.record(&raw);
+                Some(check_result_block(&raw))
+            }
+            None => monitor.note().map(|n| format!("\n\n{n}")),
+        }
     } else {
-        None
+        monitor.note().map(|n| format!("\n\n{n}"))
     };
-    let turn = ride_along_turn(&payload, meta.any_exercise, check.as_deref(), &user_text);
+    let turn = ride_along_turn(
+        &payload,
+        meta.any_exercise,
+        check_block.as_deref(),
+        &user_text,
+    );
     (meta.notices, turn)
 }
 
@@ -864,11 +889,13 @@ mod tests {
         let file = dir.join("main.rs");
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let mut files = feedback::FileMemory::new();
+        let mut monitor = check::VerifyMonitor::new(&dir);
         let (notices, outgoing) = deliver_pending(
             &mut files,
             &dir,
             &[file],
             &[],
+            &mut monitor,
             "done, take a look".to_string(),
         )
         .await;
@@ -891,11 +918,13 @@ mod tests {
         let dir = scratch_dir("deliver-pending-empty");
         let gone = dir.join("gone.rs");
         let mut files = feedback::FileMemory::new();
+        let mut monitor = check::VerifyMonitor::new(&dir);
         let (notices, outgoing) = deliver_pending(
             &mut files,
             &dir,
             &[gone],
             &[],
+            &mut monitor,
             "just a question".to_string(),
         )
         .await;
@@ -915,8 +944,16 @@ mod tests {
         let big = dir.join("big.rs");
         std::fs::write(&big, "x".repeat(feedback::MAX_FILE_BYTES + 1)).unwrap();
         let mut files = feedback::FileMemory::new();
-        let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[ex, big], &[], "done".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (notices, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[ex, big],
+            &[],
+            &mut monitor,
+            "done".to_string(),
+        )
+        .await;
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains("large file"));
         assert!(outgoing.contains("AS AN EXERCISE"));
@@ -947,12 +984,14 @@ mod tests {
         std::fs::write(&file, intermediate).unwrap();
         std::fs::write(&file, final_state).unwrap();
 
+        let mut monitor = check::VerifyMonitor::new(&dir);
         // Deliver pending; payload is built at delivery time from the final state
         let (notices, outgoing) = deliver_pending(
             &mut files,
             &dir,
             &[file],
             &[],
+            &mut monitor,
             "ready for review".to_string(),
         )
         .await;
@@ -981,12 +1020,20 @@ mod tests {
     }
 
     /// A minimal, compiling cargo project in a scratch dir — so `run_check`
-    /// actually runs instead of short-circuiting on `is_cargo_project`.
+    /// actually runs instead of short-circuiting on `is_cargo_project`. The
+    /// package name is derived from `tag` (not a shared "scratch" literal):
+    /// this repo's `~/.cargo/config.toml` points every project at one
+    /// machine-wide `target-dir`, and two concurrently running `cargo check`
+    /// invocations for identically-named packages can cross-contaminate each
+    /// other's build fingerprint there — a passing scratch project's cached
+    /// success leaking into a deliberately-broken one running in parallel.
     fn scratch_cargo_project(tag: &str) -> std::path::PathBuf {
         let dir = scratch_dir(tag);
         std::fs::write(
             dir.join("Cargo.toml"),
-            "[package]\nname = \"scratch\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+            format!(
+                "[package]\nname = \"scratch-{tag}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n"
+            ),
         )
         .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -1002,8 +1049,16 @@ mod tests {
         let file = dir.join("src").join("main.rs");
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let mut files = feedback::FileMemory::new();
-        let (_, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], &[], "have a look".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (_, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[file],
+            &[],
+            &mut monitor,
+            "have a look".to_string(),
+        )
+        .await;
         assert!(
             outgoing.contains("[cargo check result — FOR YOUR EYES ONLY"),
             "a non-exercise delivery must carry the eyes-only check block"
@@ -1029,7 +1084,16 @@ mod tests {
         std::fs::create_dir_all(ex.parent().unwrap()).unwrap();
         std::fs::write(&ex, "my answer\n").unwrap();
         let mut files = feedback::FileMemory::new();
-        let (_, outgoing) = deliver_pending(&mut files, &dir, &[ex], &[], "done".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (_, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[ex],
+            &[],
+            &mut monitor,
+            "done".to_string(),
+        )
+        .await;
         assert!(outgoing.contains("AS AN EXERCISE"));
         assert!(
             !outgoing.contains("cargo check result"),
@@ -1047,8 +1111,16 @@ mod tests {
         let dir = scratch_dir("deliver-structure-only");
         let notes = vec!["+ brands/marka-a/ (new directory)".to_string()];
         let mut files = feedback::FileMemory::new();
-        let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[], &notes, "done".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (notices, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[],
+            &notes,
+            &mut monitor,
+            "done".to_string(),
+        )
+        .await;
         assert!(notices.is_empty());
         assert!(outgoing.starts_with(PENDING_PREAMBLE));
         assert!(outgoing.contains("STRUCTURE: project tree changes"));
@@ -1065,8 +1137,16 @@ mod tests {
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let notes = vec!["- src/old.rs (no longer present)".to_string()];
         let mut files = feedback::FileMemory::new();
-        let (_, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], &notes, "take a look".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (_, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[file],
+            &notes,
+            &mut monitor,
+            "take a look".to_string(),
+        )
+        .await;
         let pos_structure = outgoing.find("STRUCTURE: project tree changes").unwrap();
         let pos_file = outgoing.find("FILE:").unwrap();
         let pos_user = outgoing.rfind("take a look").unwrap();
@@ -1087,8 +1167,16 @@ mod tests {
             "- brands/marka-a/ (no longer present)".to_string(),
         ];
         let mut files = feedback::FileMemory::new();
-        let (_, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], &notes, "done".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (_, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[file],
+            &notes,
+            &mut monitor,
+            "done".to_string(),
+        )
+        .await;
         assert!(outgoing.contains("STRUCTURE: project tree changes"));
         assert!(outgoing.contains("+ brands/marka-b/ (new directory)"));
         assert!(outgoing.contains("- brands/marka-a/ (no longer present)"));
@@ -1113,8 +1201,16 @@ mod tests {
             "- old2.rs (no longer present)".to_string(),
         ];
         let mut files = feedback::FileMemory::new();
-        let (_, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], &notes, "done".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (_, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[file],
+            &notes,
+            &mut monitor,
+            "done".to_string(),
+        )
+        .await;
         assert!(outgoing.contains("STRUCTURE: project tree changes"));
         assert!(!outgoing.contains("may be two halves"));
         std::fs::remove_dir_all(&dir).ok();
@@ -1132,8 +1228,16 @@ mod tests {
             "+ new2/ (new directory)".to_string(),
         ];
         let mut files = feedback::FileMemory::new();
-        let (_, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], &notes, "done".to_string()).await;
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let (_, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[file],
+            &notes,
+            &mut monitor,
+            "done".to_string(),
+        )
+        .await;
         assert!(outgoing.contains("STRUCTURE: project tree changes"));
         assert!(!outgoing.contains("may be two halves"));
         std::fs::remove_dir_all(&dir).ok();
@@ -1159,6 +1263,7 @@ mod tests {
         let recorder_path = dir.join("transcript.jsonl");
         let recorder = transcript::Recorder::new(recorder_path.clone());
         let paths = vec![unchanged.clone()];
+        let mut monitor = check::VerifyMonitor::new(&dir);
 
         let (notices, result) = handle_batch_change(
             &mut backend,
@@ -1167,6 +1272,7 @@ mod tests {
             &dir,
             &paths,
             &recorder,
+            &mut monitor,
         )
         .await
         .unwrap();
@@ -1176,6 +1282,87 @@ mod tests {
         assert!(session.history().is_empty());
         assert!(!recorder_path.exists());
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_records_the_verdict_and_red_note_rides_later_turns() {
+        // Finding C end to end at the delivery layer: a delivery whose
+        // inline check fails RECORDS the verdict; the next delivery that
+        // runs no check (exercise-only) still carries the one-line note, so
+        // the mentor cannot declare a step finished on a red project.
+        let dir = scratch_cargo_project("deliver-verdict-memory");
+        // A deliberately broken main.rs — the same E0308 class the live
+        // session exercised.
+        std::fs::write(
+            dir.join("src").join("main.rs"),
+            "fn main() { let _x: i32 = (); }\n",
+        )
+        .unwrap();
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        let mut files = feedback::FileMemory::new();
+        let (_, first) = deliver_pending(
+            &mut files,
+            &dir,
+            &[dir.join("src").join("main.rs")],
+            &[],
+            &mut monitor,
+            "wrote it".to_string(),
+        )
+        .await;
+        assert!(
+            first.contains("[cargo check result — FOR YOUR EYES ONLY"),
+            "the fresh eyes-only block still rides the checked delivery"
+        );
+        assert!(monitor.is_failing(), "the verdict must be remembered");
+        // Exercise-only delivery: no check runs (v0.28.0 gate stands), but
+        // the remembered red state rides as one line.
+        let ex = dir.join("exercises").join("a.md");
+        std::fs::create_dir_all(ex.parent().unwrap()).unwrap();
+        std::fs::write(&ex, "answer\n").unwrap();
+        let (_, second) = deliver_pending(
+            &mut files,
+            &dir,
+            &[ex],
+            &[],
+            &mut monitor,
+            "done".to_string(),
+        )
+        .await;
+        assert!(!second.contains("FOR YOUR EYES ONLY"));
+        assert!(second.contains("[build state: the last cargo check was still failing"));
+        assert!(second.trim_end().ends_with("done"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_attaches_red_note_even_when_everything_drops() {
+        // Controller correction: the early-return path (nothing survived
+        // into the payload, no structure notes) is exactly the bare-turn
+        // scenario the whole feature exists for — a turn with no payload is
+        // exactly when remembering matters, because nothing else reminds the
+        // mentor the project is still broken. The remembered red verdict
+        // must not be silently dropped here.
+        let dir = scratch_dir("deliver-pending-drop-red-note");
+        std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
+        let unchanged = dir.join("unchanged.rs");
+        std::fs::write(&unchanged, "same\n").unwrap();
+        let mut files = feedback::FileMemory::new();
+        files.seed(&unchanged, "same\n".to_string());
+        let mut monitor = check::VerifyMonitor::new(&dir);
+        monitor.record("src/main.rs:3:18: error[E0308]: mismatched types");
+        let (notices, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[unchanged],
+            &[],
+            &mut monitor,
+            "just a question".to_string(),
+        )
+        .await;
+        assert!(notices.is_empty());
+        assert!(outgoing.starts_with("[build state:"));
+        assert!(outgoing.trim_end().ends_with("just a question"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

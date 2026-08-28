@@ -57,7 +57,6 @@ pub async fn run_check(root: &Path) -> Option<String> {
 /// verification signal, when it has one" — the Cargo check is merely
 /// today's only implementation, and adding another later is a new arm, not
 /// a redesign. No verifier registry, no per-language detection (YAGNI).
-#[allow(dead_code)] // staged: consumed by the verification-wiring task
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verdict {
     Pass,
@@ -66,7 +65,6 @@ pub enum Verdict {
 
 /// Classify raw `run_check` output. The clean case is pinned to
 /// run_check's own sentence; anything else fails, with a one-line summary.
-#[allow(dead_code)] // staged: consumed by the verification-wiring task
 pub fn verdict_of(raw: &str) -> Verdict {
     if raw.starts_with("CLEAN") {
         Verdict::Pass
@@ -78,7 +76,6 @@ pub fn verdict_of(raw: &str) -> Verdict {
 }
 
 /// First error-carrying line of a failing check, capped for a one-line note.
-#[allow(dead_code)] // staged: consumed by the verification-wiring task
 pub fn error_summary(raw: &str) -> String {
     let line = raw
         .lines()
@@ -99,13 +96,11 @@ pub fn error_summary(raw: &str) -> String {
 /// and every method is a silent no-op — zero behavior change (spec C1).
 /// Never opens a turn (K1): everything it produces is a status-line pixel
 /// or a line attached to a turn the user already opened.
-#[allow(dead_code)] // staged: consumed by the verification-wiring task
 pub struct VerifyMonitor {
     enabled: bool,
     verdict: Option<Verdict>,
 }
 
-#[allow(dead_code)] // staged: consumed by the verification-wiring task
 impl VerifyMonitor {
     pub fn new(project_root: &Path) -> Self {
         VerifyMonitor {

@@ -94,13 +94,17 @@ pub(crate) fn draw(
     tokens: Option<u64>,
     window: u64,
     watch: Option<(bool, bool, usize)>,
+    verify_failing: bool,
 ) -> Result<()> {
     tui.terminal.draw(|f| {
         let [box_area, status_area] =
             Layout::vertical([Constraint::Length(VIEWPORT_H - 1), Constraint::Length(1)])
                 .areas(f.area());
         editor.render(f, box_area);
-        f.render_widget(render_status(status, tokens, window, watch), status_area);
+        f.render_widget(
+            render_status(status, tokens, window, watch, verify_failing),
+            status_area,
+        );
     })?;
     Ok(())
 }

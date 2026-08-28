@@ -48,6 +48,7 @@ pub(crate) async fn ask_live(
             tokens,
             window,
             None,
+            false,
         )?;
         tokio::select! {
             r = &mut fut => return Ok(AskOutcome::Reply(r?)),
@@ -106,7 +107,7 @@ pub(crate) async fn tui_confirm(
 ) -> Result<bool> {
     crate::tui::page::page_notice(tui, msg)?;
     loop {
-        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
+        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None, false)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => {
                 if matches!(k.code, KeyCode::Esc) {

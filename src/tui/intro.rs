@@ -96,7 +96,7 @@ async fn read_user_line(
     events: &mut EventStream,
 ) -> Result<Option<String>> {
     loop {
-        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
+        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None, false)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => match editor.handle_key(k) {
                 Action::Submit(line) => {

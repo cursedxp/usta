@@ -177,10 +177,11 @@ pub(crate) async fn attach_pending(
     pending: &mut PendingChanges,
     files: &mut FileMemory,
     project_root: &Path,
+    monitor: &mut crate::check::VerifyMonitor,
     user_text: String,
 ) -> Result<String> {
     let (notices, outgoing) =
-        drain_and_deliver(watching, pending, files, project_root, user_text).await;
+        drain_and_deliver(watching, pending, files, project_root, monitor, user_text).await;
     for notice in &notices {
         crate::tui::page::page_notice(tui, notice)?;
     }
@@ -199,13 +200,25 @@ pub(crate) async fn drain_and_deliver(
     pending: &mut PendingChanges,
     files: &mut FileMemory,
     project_root: &Path,
+    monitor: &mut crate::check::VerifyMonitor,
     user_text: String,
 ) -> (Vec<String>, String) {
-    if !watching || pending.is_empty() {
+    if !watching {
         return (Vec::new(), user_text);
     }
+    if pending.is_empty() {
+        // No delivery — but a red verdict still rides as one line (spec
+        // C2): the bare-message turn is exactly where the mentor used to
+        // forget the project was broken. Green/unknown stays silent.
+        let outgoing = match monitor.note() {
+            Some(n) => format!("{n}\n\n{user_text}"),
+            None => user_text,
+        };
+        return (Vec::new(), outgoing);
+    }
     let (paths, notes) = pending.take();
-    crate::file_feedback::deliver_pending(files, project_root, &paths, &notes, user_text).await
+    crate::file_feedback::deliver_pending(files, project_root, &paths, &notes, monitor, user_text)
+        .await
 }
 
 /// Turning watching OFF discards whatever the watcher already queued. Without
@@ -227,6 +240,38 @@ pub(crate) fn drop_pending_on_watch_off(
     Some(format!(
         "{dropped} noted change(s) dropped — they will not be sent"
     ))
+}
+
+/// `/watch` family handling, displaced from run.rs's submit arm (600-line
+/// budget): applies the toggle and returns the notices to print, in order —
+/// the queue-drop notice BEFORE the toggle message, exactly as the inline
+/// block printed them. Watching off drops what is already queued (spec K2),
+/// structure notes included.
+pub(crate) fn handle_watch_command(
+    cmd: crate::slash::WatchCmd,
+    watching: &mut bool,
+    live: &mut bool,
+    pending: &mut PendingChanges,
+) -> Vec<String> {
+    use crate::slash::WatchCmd::*;
+    let mut notices = Vec::new();
+    match cmd {
+        LiveOn | LiveOff | LiveToggle => {
+            // Session-only timing choice (spec K4).
+            let (next, m) = crate::slash::apply_live(cmd, *live);
+            *live = next;
+            notices.push(m.to_string());
+        }
+        On | Off | Toggle => {
+            let (next, m) = crate::slash::apply_watch(cmd, *watching);
+            *watching = next;
+            if let Some(n) = drop_pending_on_watch_off(*watching, pending) {
+                notices.push(n);
+            }
+            notices.push(m.to_string());
+        }
+    }
+    notices
 }
 
 /// Whether any line in `text`, trimmed and lowercased, is `watch: live`.
@@ -297,6 +342,7 @@ pub(crate) async fn process_batch(
     topic: &str,
     last_tokens: &mut Option<u64>,
     paths: &[PathBuf],
+    monitor: &mut crate::check::VerifyMonitor,
 ) -> Result<()> {
     match crate::file_feedback::handle_batch_change(
         backend,
@@ -305,6 +351,7 @@ pub(crate) async fn process_batch(
         project_root,
         paths,
         recorder,
+        monitor,
     )
     .await
     {
@@ -374,6 +421,7 @@ pub(crate) async fn dispatch_flush(
     live: bool,
     pending: &mut PendingChanges,
     tracker: &mut crate::watcher::StructureTracker,
+    monitor: &mut crate::check::VerifyMonitor,
 ) -> Result<()> {
     // Flush-time classification (spec D1): existence is probed NOW; the
     // tracker updates even with watching off, so re-enabling stays honest.
@@ -401,6 +449,7 @@ pub(crate) async fn dispatch_flush(
                 topic,
                 last_tokens,
                 &content,
+                monitor,
             )
             .await?
         }
@@ -625,12 +674,16 @@ mod tests {
             "polite::PendingChanges::new(",
             "polite::dispatch_flush(",
             "polite::attach_pending(",
-            "polite::drop_pending_on_watch_off(",
+            "polite::handle_watch_command(",
             // The visible half of the feature: the status line must be fed
             // the REAL pending count. A reviewer's mutation replacing this
             // argument with a literal `0` killed the counter with the whole
             // suite still green — this needle is the tripwire for that.
             "Some((watching, live, pending.len()))",
+            // The verification memory's status marker (spec C2): a reviewer
+            // replacing this with a bare `false` kills the marker with the
+            // suite green — same mutation class as the counter literal above.
+            "watching && monitor.is_failing()",
         ] {
             assert!(
                 src.contains(needle),
@@ -695,7 +748,7 @@ mod tests {
         let src = include_str!("run.rs");
         assert!(
             src.contains(
-                "attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, line.clone())"
+                "attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, &mut monitor, line.clone())"
             ),
             "ride-along must take the user's own line, not the shared `outgoing` binding"
         );
@@ -743,11 +796,19 @@ mod tests {
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let mut files = FileMemory::new();
         let mut pending = PendingChanges::new();
+        let mut monitor = crate::check::VerifyMonitor::new(&dir);
         pending.hold(vec![file.clone()]);
         assert_eq!(pending.len(), 1);
 
-        let (_, first) =
-            drain_and_deliver(true, &mut pending, &mut files, &dir, "look".to_string()).await;
+        let (_, first) = drain_and_deliver(
+            true,
+            &mut pending,
+            &mut files,
+            &dir,
+            &mut monitor,
+            "look".to_string(),
+        )
+        .await;
         assert!(
             first.contains("FILE:"),
             "first delivery carries the payload"
@@ -757,8 +818,15 @@ mod tests {
         assert!(pending.is_empty());
 
         // ...and the next message rides alone, with no file block at all.
-        let (_, second) =
-            drain_and_deliver(true, &mut pending, &mut files, &dir, "and now?".to_string()).await;
+        let (_, second) = drain_and_deliver(
+            true,
+            &mut pending,
+            &mut files,
+            &dir,
+            &mut monitor,
+            "and now?".to_string(),
+        )
+        .await;
         assert_eq!(
             second, "and now?",
             "a drained queue must not re-attach the same files to the next message"
@@ -771,11 +839,13 @@ mod tests {
         let dir = scratch("drain-empty");
         let mut files = FileMemory::new();
         let mut pending = PendingChanges::new();
+        let mut monitor = crate::check::VerifyMonitor::new(&dir);
         let (notices, out) = drain_and_deliver(
             true,
             &mut pending,
             &mut files,
             &dir,
+            &mut monitor,
             "just asking".to_string(),
         )
         .await;
@@ -793,9 +863,17 @@ mod tests {
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let mut files = FileMemory::new();
         let mut pending = PendingChanges::new();
+        let mut monitor = crate::check::VerifyMonitor::new(&dir);
         pending.hold(vec![file]);
-        let (notices, out) =
-            drain_and_deliver(false, &mut pending, &mut files, &dir, "hello".to_string()).await;
+        let (notices, out) = drain_and_deliver(
+            false,
+            &mut pending,
+            &mut files,
+            &dir,
+            &mut monitor,
+            "hello".to_string(),
+        )
+        .await;
         assert!(notices.is_empty());
         assert_eq!(out, "hello", "watching off must attach nothing");
         std::fs::remove_dir_all(&dir).ok();
@@ -825,5 +903,67 @@ mod tests {
         pending.hold(vec![PathBuf::from("/tmp/a.rs")]);
         assert!(drop_pending_on_watch_off(true, &mut pending).is_none());
         assert_eq!(pending.len(), 1, "turning watching ON must keep the queue");
+    }
+
+    #[tokio::test]
+    async fn drain_and_deliver_attaches_red_note_to_bare_messages() {
+        // The core of finding C: turns WITHOUT any pending delivery are
+        // exactly where the mentor used to forget the project was broken
+        // (transcript turns 14–15). While the last verdict is red, every
+        // outgoing turn carries the one-line note — remembering IS the fix.
+        let dir = scratch("drain-red-note");
+        std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
+        let mut monitor = crate::check::VerifyMonitor::new(&dir);
+        monitor.record("src/main.rs:3:18: error[E0308]: mismatched types");
+        let mut files = FileMemory::new();
+        let mut pending = PendingChanges::new();
+        let (notices, out) = drain_and_deliver(
+            true,
+            &mut pending,
+            &mut files,
+            &dir,
+            &mut monitor,
+            "so is this part finished?".to_string(),
+        )
+        .await;
+        assert!(notices.is_empty());
+        assert!(out.starts_with("[build state:"));
+        assert!(out.trim_end().ends_with("so is this part finished?"));
+        // Green (or no) verdict: the text passes through untouched.
+        monitor.record("CLEAN — cargo check passed with no errors.");
+        let (_, quiet) = drain_and_deliver(
+            true,
+            &mut pending,
+            &mut files,
+            &dir,
+            &mut monitor,
+            "and now?".to_string(),
+        )
+        .await;
+        assert_eq!(quiet, "and now?");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn handle_watch_command_applies_toggles_and_drops_queue_on_off() {
+        // Displaced from run.rs's submit arm (600-line budget): same
+        // behavior, now directly testable — toggle applied, notices in
+        // print order (drop notice BEFORE the toggle message, as before).
+        use crate::slash::WatchCmd;
+        let (mut watching, mut live) = (true, false);
+        let mut pending = PendingChanges::new();
+        pending.hold(vec![PathBuf::from("/tmp/a.rs")]);
+        let notices = handle_watch_command(WatchCmd::Off, &mut watching, &mut live, &mut pending);
+        assert!(!watching);
+        assert_eq!(notices.len(), 2);
+        assert!(notices[0].contains("dropped"), "drop notice prints first");
+        assert!(notices[1].contains("off"));
+        assert!(pending.is_empty());
+        // Live toggle touches only the live axis.
+        let notices =
+            handle_watch_command(WatchCmd::LiveOn, &mut watching, &mut live, &mut pending);
+        assert!(live);
+        assert!(!watching, "live toggle must not touch watching");
+        assert_eq!(notices.len(), 1);
     }
 }

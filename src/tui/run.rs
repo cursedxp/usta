@@ -318,6 +318,7 @@ pub async fn run(
     // unchanged re-save is a Skip, not a redundant full re-send (FIX: first-sight seed).
     crate::file_feedback::seed_mentor_baseline(&mut files, project_root);
     let mut tracker = watcher::StructureTracker::seed(project_root);
+    let mut monitor = crate::check::VerifyMonitor::new(project_root);
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
 
@@ -439,6 +440,7 @@ pub async fn run(
             last_tokens,
             window,
             Some((watching, live, pending.len())),
+            watching && monitor.is_failing(),
         )?;
         tokio::select! {
             maybe_ev = events.next() => {
@@ -459,25 +461,8 @@ pub async fn run(
                     Action::Submit(line) => {
                         if let Some(cmd) = crate::slash::parse_watch_command(&line) {
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            use crate::slash::WatchCmd::*;
-                            let msg = match cmd {
-                                LiveOn | LiveOff | LiveToggle => {
-                                    // Session-only timing choice (spec K4).
-                                    let (next, m) = crate::slash::apply_live(cmd, live);
-                                    live = next;
-                                    m
-                                }
-                                On | Off | Toggle => {
-                                    let (next, m) = crate::slash::apply_watch(cmd, watching);
-                                    watching = next;
-                                    // Watching off drops what is already queued (spec K2): the queued payload must not outlive the user's "stop watching my files".
-                                    if let Some(n) = crate::tui::polite::drop_pending_on_watch_off(watching, &mut pending) {
-                                        crate::tui::page::page_notice(&mut tui, &n)?;
-                                    }
-                                    m
-                                }
-                            };
-                            crate::tui::page::page_notice(&mut tui, msg)?;
+                            // Toggle handling + queue drop live in polite::handle_watch_command (600-line budget displacement).
+                            for n in crate::tui::polite::handle_watch_command(cmd, &mut watching, &mut live, &mut pending) { crate::tui::page::page_notice(&mut tui, &n)?; }
                             continue;
                         }
                         if crate::help::is_help_command(&line) {
@@ -550,7 +535,7 @@ pub async fn run(
                             // Push the submitted line to scrollback as a distinct user block.
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
                             // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
-                            crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, line.clone()).await?
+                            crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, &mut monitor, line.clone()).await?
                         };
                         session.push_user(&outgoing);
                         recorder.user(&outgoing);
@@ -585,7 +570,7 @@ pub async fn run(
             }
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 // Watcher flush: routing + action live in polite::dispatch_flush (spec K1/K2) — run.rs keeps the call site only.
-                crate::tui::polite::dispatch_flush(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, debouncer.flush(), max_feedback_batch, watching, live, &mut pending, &mut tracker).await?;
+                crate::tui::polite::dispatch_flush(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, debouncer.flush(), max_feedback_batch, watching, live, &mut pending, &mut tracker, &mut monitor).await?;
             }
         }
     }

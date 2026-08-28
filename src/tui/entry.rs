@@ -281,7 +281,7 @@ pub(crate) async fn ask_topic(
     }
 
     loop {
-        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
+        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None, false)?;
         match events.next().await {
             Some(Ok(Event::Key(k))) => {
                 // Empty Enter = resume sentinel (only when there's a topic to resume) —

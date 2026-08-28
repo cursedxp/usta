@@ -28,6 +28,7 @@ pub fn render_status(
     tokens: Option<u64>,
     window: u64,
     watch: Option<(bool, bool, usize)>,
+    verify_failing: bool,
 ) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
     // (watching, live, pending): `pending` is the accumulated-but-undelivered
@@ -42,6 +43,12 @@ pub fn render_status(
             (true, false) => "👁 watching ".to_string(),
         };
         spans.push(Span::styled(txt, theme::info()));
+    }
+    // Dim verification marker (spec C2): deterministic presence, zero
+    // tokens, never a turn — only ever true for a project that HAS a
+    // verifier (spec C1 gates it at VerifyMonitor).
+    if verify_failing {
+        spans.push(Span::styled("✗ check failing ".to_string(), theme::info()));
     }
     if let Status::Thinking { frame, cancel_hint } = s {
         let hint = if *cancel_hint {
@@ -85,7 +92,7 @@ mod tests {
     #[test]
     fn idle_without_tokens_is_empty() {
         assert_eq!(
-            text(&render_status(&Status::Idle, None, 1_000_000, None)),
+            text(&render_status(&Status::Idle, None, 1_000_000, None, false)),
             ""
         );
     }
@@ -100,6 +107,7 @@ mod tests {
             None,
             1_000_000,
             None,
+            false,
         );
         assert!(text(&l).contains("thinking"));
         assert!(text(&l).contains("esc to stop"));
@@ -115,13 +123,14 @@ mod tests {
             None,
             1_000_000,
             None,
+            false,
         );
         assert!(text(&l).contains("ctrl-c again"));
     }
 
     #[test]
     fn gauge_shows_ratio() {
-        let l = render_status(&Status::Idle, Some(500_000), 1_000_000, None);
+        let l = render_status(&Status::Idle, Some(500_000), 1_000_000, None, false);
         assert!(text(&l).contains("context 500k/1000k"));
         assert!(text(&l).contains("▓▓▓▓░░░░"));
     }
@@ -151,6 +160,7 @@ mod tests {
                 None,
                 1,
                 None,
+                false,
             );
             assert!(text(&l).starts_with(*f), "frame {i} should lead with {f}");
         }
@@ -162,17 +172,21 @@ mod tests {
             &Status::Idle,
             None,
             1_000_000,
-            Some((true, false, 0))
+            Some((true, false, 0)),
+            false,
         ))
         .contains("watching"));
         assert!(text(&render_status(
             &Status::Idle,
             None,
             1_000_000,
-            Some((false, false, 0))
+            Some((false, false, 0)),
+            false,
         ))
         .contains("watch off"));
-        assert!(!text(&render_status(&Status::Idle, None, 1_000_000, None)).contains("watch"));
+        assert!(
+            !text(&render_status(&Status::Idle, None, 1_000_000, None, false)).contains("watch")
+        );
     }
 
     #[test]
@@ -183,6 +197,7 @@ mod tests {
             None,
             1_000_000,
             Some((true, true, 3)),
+            false,
         ));
         assert!(live.contains("watching·live"));
         assert!(!live.contains("changes noted"));
@@ -192,6 +207,7 @@ mod tests {
             None,
             1_000_000,
             Some((true, false, 0)),
+            false,
         ));
         assert!(idle.contains("👁 watching"));
         assert!(!idle.contains("live") && !idle.contains("noted"));
@@ -201,6 +217,7 @@ mod tests {
             None,
             1_000_000,
             Some((true, false, 2)),
+            false,
         ));
         assert!(noted.contains("👁 watching · 2 changes noted"));
         // watch off wins regardless of the rest
@@ -209,7 +226,31 @@ mod tests {
             None,
             1_000_000,
             Some((false, true, 5)),
+            false,
         ));
         assert!(off.contains("watch off") && !off.contains("noted"));
+    }
+
+    #[test]
+    fn verify_failing_marker_shows_only_when_flagged() {
+        // Finding C's visible half: a dim, deterministic marker while the
+        // last known check verdict is red — presence costs zero tokens and
+        // never a turn (the navigator's raised eyebrow).
+        let on = text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((true, false, 0)),
+            true,
+        ));
+        assert!(on.contains("✗ check failing"));
+        let off = text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((true, false, 0)),
+            false,
+        ));
+        assert!(!off.contains("check failing"));
     }
 }
