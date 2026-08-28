@@ -242,7 +242,7 @@ pub(crate) async fn process_batch(
 /// route the batch, then act — so the whole watcher policy lives here and
 /// run.rs keeps one thin call site (its 600-line budget is why). Bulk and
 /// observe-only are unchanged; a bulk batch never enters `PendingChanges`
-/// (spec: Kenar durumlar), so the cap keeps meaning.
+/// (spec: Edge Cases section), so the cap keeps meaning.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_flush(
     tui: &mut Tui,
@@ -301,7 +301,7 @@ mod tests {
         std::fs::create_dir_all(project.join(".usta/approaches")).unwrap();
         std::fs::create_dir_all(global.join("approaches")).unwrap();
 
-        // no file at all → empty (so live_from_approach is false → polite stays on)
+        // no file at all → empty (so live_from_approach is false → companion default stays on)
         assert_eq!(approach_text(&project, &global, "rust"), "");
 
         // only global → global content
@@ -478,6 +478,15 @@ mod tests {
         assert!(
             !src.contains("attach_pending(&mut tui, &mut pending, &mut files, project_root, outgoing)"),
             "ride-along must not wrap `outgoing`: that attaches pending changes to /exam and /game directives"
+        );
+        // The positive needle above only forbids one exact spelling — it says
+        // nothing about a SECOND call site being added elsewhere in the file
+        // (e.g. inside the /exam branch). An occurrence count catches that:
+        // exactly one `polite::attach_pending(` call may exist in run.rs.
+        assert_eq!(
+            src.matches("polite::attach_pending(").count(),
+            1,
+            "run.rs must call attach_pending exactly once — a second call site would let pending file changes ride into an operational directive (e.g. /exam) instead of only the user's own words"
         );
         // The two synthesized-directive branches still build their text
         // directly — nothing drains `pending` on the way.

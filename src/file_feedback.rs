@@ -109,7 +109,7 @@ pub(crate) fn feedback_frame(
     }
 }
 
-/// Build the injected user-turn for a polite-mode (lesson-flow) batch. Unlike
+/// Build the injected user-turn for a companion-mode (lesson-flow) batch. Unlike
 /// `feedback_frame`'s plain review wording, this frame casts the model as the
 /// mentor mid-lesson, not a fresh reviewer — the five rules from the design
 /// spec (`docs/superpowers/specs/2026-08-27-flow-companion-design.md`,
@@ -545,6 +545,42 @@ mod tests {
     fn flow_frame_carries_exercise_rule_when_flagged() {
         assert!(flow_frame("x", true).contains("AS AN EXERCISE"));
         assert!(!flow_frame("x", false).contains("AS AN EXERCISE"));
+    }
+
+    #[test]
+    fn batch_change_selects_feedback_frame_not_flow_frame() {
+        // `handle_batch_change` needs a live Backend, so its frame choice
+        // can't be driven from a unit test: switching the call to
+        // `flow_frame` would leave every test green while the live path
+        // silently adopted the companion frame. Pin the call site in this
+        // file's own production source (same crude-pin pattern as the old,
+        // deleted `polite_branch_selecting_flow_frame_is_pinned` — restored
+        // here because its replacement,
+        // `ride_along_turn_selects_flow_frame_and_keeps_user_words_last`,
+        // only covers the OTHER branch, `ride_along_turn`). Split at the
+        // test module so this assert's own text can't satisfy it, then
+        // scope to `handle_batch_change`'s own body so the legitimate
+        // `flow_frame(` call in `ride_along_turn` doesn't false-positive.
+        let production_src = include_str!("file_feedback.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let body_start = production_src
+            .find("pub(crate) async fn handle_batch_change")
+            .expect("handle_batch_change definition not found");
+        let body_end = production_src[body_start..]
+            .find("fn ride_along_turn(")
+            .map(|offset| body_start + offset)
+            .expect("handle_batch_change body end marker not found");
+        let body = &production_src[body_start..body_end];
+        assert!(
+            body.contains("feedback_frame("),
+            "handle_batch_change must select feedback_frame (plain review) on the live path — it is plain review by definition (spec K4)"
+        );
+        assert!(
+            !body.contains("flow_frame("),
+            "handle_batch_change must never call flow_frame — the companion frame ships with ride-along delivery instead"
+        );
     }
 
     /// Unique scratch dir per test so parallel `cargo test` runs don't collide
