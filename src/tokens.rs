@@ -22,6 +22,14 @@ pub fn map_state_of(line: &str) -> Option<&'static str> {
     STATES.iter().find(|s| **s == state).copied()
 }
 
+// Approach-file role field (SPEC §4.22): inferred, never asked as a menu.
+// The shell does NOT parse it in 13a (13b adds the reader) — single-sourced
+// here because two prompts embed the same strings.
+pub const ROLE_PREFIX: &str = "role: ";
+pub const ROLE_GUIDED: &str = "guided";
+pub const ROLE_PROJECT: &str = "project";
+pub const ROLE_OBSERVATION: &str = "observation";
+
 // Bare section names (used with the `section()` helpers, no `## ` prefix).
 pub const S_LEVEL: &str = "Level";
 pub const S_RECALL: &str = "Recall questions";

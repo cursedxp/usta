@@ -412,3 +412,62 @@ fn write_atomic_backs_up_previous_version() {
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "ikinci sürüm");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn introduction_prompt_carries_rules_marker_and_role() {
+    let p = introduction_prompt(false, None);
+    assert!(p.contains("[FIRST RUN — INTRODUCTION]"));
+    assert!(p.contains("changes what you do next")); // rule (i)
+    assert!(p.contains("accumulation, not interrogation")); // rule (ii)
+    assert!(p.contains("honor it without argument")); // rule (iii)
+    assert!(p.contains("short answers")); // no boredom inference from terse replies
+    assert!(p.contains(crate::tokens::TOPIC_MARKER));
+    assert!(p.contains("never ask as a menu"));
+    assert!(p.contains("role: guided|project|observation"));
+    assert!(p.contains("Hard Rule 6"));
+    // The old 1-2 question cap must NOT ride in this prompt (spec A).
+    assert!(!p.contains("1-2 questions"));
+    // project-unknown flavor asks for the project naturally.
+    assert!(p.contains("There is no mentor/PROJECT.md yet"));
+    let known = introduction_prompt(true, None);
+    assert!(known.contains("do NOT re-ask project basics"));
+}
+
+#[test]
+fn introduction_prompt_embeds_material_digest() {
+    let p = introduction_prompt(false, Some("DIGEST-X"));
+    assert!(p.contains("[COURSE MATERIAL FOUND]"));
+    assert!(p.contains("DIGEST-X"));
+    assert!(!introduction_prompt(false, None).contains("[COURSE MATERIAL FOUND]"));
+}
+
+#[test]
+fn start_here_prompt_calibrates_and_uses_marker() {
+    let s = start_here_prompt(None);
+    assert!(s.contains("[START SUGGESTION]"));
+    assert!(s.contains("CALIBRATED"));
+    assert!(s.contains("mentor/PROJECT.md"));
+    assert!(s.contains("USER.md"));
+    assert!(s.contains(crate::tokens::TOPIC_MARKER));
+    assert!(s.contains("Hard Rule 6"));
+}
+
+// Deviation from the brief (controller pre-flight review): start_here_prompt gets
+// the same materials parameter shape as introduction_prompt, reusing the shared
+// material_block helper — without this, the returning-user Enter path would
+// silently drop material anchoring that the new-topic path already has.
+#[test]
+fn start_here_prompt_embeds_material_digest() {
+    let s = start_here_prompt(Some("DIGEST-Y"));
+    assert!(s.contains("[COURSE MATERIAL FOUND]"));
+    assert!(s.contains("DIGEST-Y"));
+    assert!(!start_here_prompt(None).contains("[COURSE MATERIAL FOUND]"));
+}
+
+#[test]
+fn closing_prompt_defines_role_line_and_observation_map_exception() {
+    let s = closing_prompt("rust", None, None, None, None, None, None);
+    assert!(s.contains("role: guided|project|observation"));
+    assert!(s.contains("role: observation"));
+    assert!(s.contains("evidenced in sessions"));
+}
