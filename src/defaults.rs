@@ -109,4 +109,14 @@ mod tests {
             "gömülü profil kişisel isim taşıyor — jenerik olmalı"
         );
     }
+
+    #[test]
+    fn teaching_promise_matches_ride_along_watcher() {
+        // Spec K5.3: saving a file must not promise an automatic review turn —
+        // the watcher accumulates and the review comes with the user's next
+        // message (spec K1/K2). Pins the embedded default TEACHING.md.
+        let teaching = include_str!("../TEACHING.md");
+        assert!(!teaching.contains("triggers your review automatically"));
+        assert!(teaching.contains("saving alone does not start your review"));
+    }
 }

@@ -111,18 +111,23 @@ pub(crate) fn feedback_frame(
 
 /// Build the injected user-turn for a polite-mode (lesson-flow) batch. Unlike
 /// `feedback_frame`'s plain review wording, this frame casts the model as the
-/// mentor mid-lesson, not a fresh reviewer — the four rules from the design
+/// mentor mid-lesson, not a fresh reviewer — the five rules from the design
 /// spec (`docs/superpowers/specs/2026-08-27-flow-companion-design.md`,
 /// "Behavior" section, polite=true default): (1) check a requested
-/// step and advance on success, (2) keep any unanswered question of yours
-/// alive, (3) wave off tool-generated scaffold in one sentence and focus on
-/// the user's hand-written change, (4) answer an interruption then recall
-/// the task. `files_payload` is Task 2's pre-merged multi-file block (one or
-/// more `FILE: <path>` sections); this function does not build it.
+/// step and advance on success, (2) nudge any unanswered question of yours
+/// in one short sentence, never a full repeat, (3) wave off tool-generated
+/// scaffold in one sentence and focus on the user's hand-written change,
+/// (4) answer an interruption then recall the task, (5) treat an assigned
+/// artifact's content as eyes-only until the user reports on it. `files_payload`
+/// is Task 2's pre-merged multi-file block (one or more `FILE: <path>`
+/// sections); this function does not build it.
 ///
 /// `any_exercise` appends the shared exercise-review rule (see
 /// `EXERCISE_REVIEW_RULE`) when at least one file in the batch is an exercise
 /// submission.
+///
+/// Rules 2 and 5 are the K5 backup layer for ride-along payloads — K1 removes
+/// the leak opportunity, these guard the payload itself.
 ///
 /// Called from `handle_batch_change` (below) when `polite` is true.
 pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
@@ -130,9 +135,10 @@ pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
         "[Files changed]\n{files_payload}\n\n\
 This change is part of the ongoing lesson — respond as the mentor guiding it, not as a reviewer opening a fresh audit. Apply these rules:\n\
 1. If your last message asked for a step and this change satisfies it: confirm briefly, flag any errors, move to the next step.\n\
-2. If there's an unanswered question from you still pending: keep it alive briefly, don't drop it.\n\
+2. If there's an unanswered question from you still pending: nudge it in ONE short sentence — never repeat the full question text.\n\
 3. First-sight full-content files may be tool-generated scaffold (e.g. a `cargo new` template) — acknowledge scaffold in one sentence, don't review it line by line; focus on the user's hand-written change.\n\
-4. If the user asks a question in the middle of this, answer it, then recall the task."
+4. If the user asks a question in the middle of this, answer it, then recall the task.\n\
+5. If your assignment asked the user to read, run, or describe an artifact, its content in this block is FOR YOUR EYES ONLY until the user reports on it: do not quote, summarize, or explain it — when the report comes, verify it against what you saw."
     );
     if any_exercise {
         frame.push_str(&format!(
@@ -481,15 +487,20 @@ mod tests {
     }
 
     #[test]
-    fn flow_frame_pins_the_four_lesson_rules() {
+    fn flow_frame_pins_the_five_lesson_rules() {
         let s = flow_frame("FILE: src/main.rs\n...", false);
-        // (1) step check + advance, (2) keep open question alive,
-        // (3) scaffold in one sentence, (4) answer then recall the task
+        // (1) step check + advance, (2) one-sentence nudge — never a full
+        // repeat (spec K5.2), (3) scaffold in one sentence, (4) answer then
+        // recall the task, (5) eyes-only until the user reports (spec K5.1)
         assert!(s.contains("part of the ongoing lesson"));
         assert!(s.contains("next step"));
         assert!(s.contains("unanswered question"));
+        assert!(s.contains("ONE short sentence"));
+        assert!(s.contains("never repeat the full question"));
         assert!(s.contains("scaffold"));
         assert!(s.contains("hand-written"));
+        assert!(s.contains("FOR YOUR EYES ONLY"));
+        assert!(s.contains("verify it against"));
         assert!(!s.to_lowercase().contains("standalone code review"));
     }
 
