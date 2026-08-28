@@ -5,17 +5,23 @@
 //! the session, not a separate phase (that is what closes blocker H2: by any
 //! flush, the topic exists, so the ordinary closing contract owns the output).
 //!
-//! Task 5 wires the interactive loop and `run.rs` call sites; until then this
-//! module's public surface has no non-test caller (per-item `#[allow]` would
-//! just repeat across every item, so the allow is scoped to the module —
-//! matching the convention in `src/tui/theme.rs`).
-#![allow(dead_code)]
+//! The two branch bodies (`run_first_run`, `run_suggest`) live here rather than
+//! inline in `run.rs` so that file stays inside its 600-line budget — `run.rs`
+//! keeps only the call sites.
 
 use std::path::Path;
 
+use anyhow::Result;
+use crossterm::event::{Event, EventStream};
+use futures_util::StreamExt;
+
 use crate::anthropic::Message;
+use crate::backend::Backend;
 use crate::session::Session;
 use crate::transcript::Recorder;
+use crate::tui::editor::{Action, InputBox};
+use crate::tui::status::Status;
+use crate::tui::term::Tui;
 
 /// One conversation turn — plain text, so it can be replayed into both the
 /// Session history and the transcript without unwrapping serde values.
@@ -80,6 +86,217 @@ pub(crate) fn intro_system(global: &Path, project_root: &Path, today: &str) -> S
     )
 }
 
+/// Wait for one submitted user line at the intro prompt. `None` = quit
+/// (Esc/Ctrl-C via `Action::Exit`, or the event stream ended). Empty Enter is
+/// swallowed — there is no resume sentinel before a topic exists. Modeled on
+/// `entry::ask_topic`'s event loop.
+async fn read_user_line(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+) -> Result<Option<String>> {
+    loop {
+        crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None)?;
+        match events.next().await {
+            Some(Ok(Event::Key(k))) => match editor.handle_key(k) {
+                Action::Submit(line) => {
+                    let raw = line.trim().to_string();
+                    if raw.is_empty() {
+                        continue;
+                    }
+                    return Ok(Some(raw));
+                }
+                Action::Exit => return Ok(None),
+                Action::None => {}
+            },
+            Some(Ok(Event::Paste(s))) => editor.insert_str(&s),
+            Some(Ok(Event::Resize(_, _))) => crate::tui::page::handle_resize(tui)?,
+            Some(Ok(_)) | Some(Err(_)) => {}
+            None => return Ok(None), // stream ended — don't spin (spec B4)
+        }
+    }
+}
+
+/// The pre-lock conversation loop (SPEC §4.22). `opening` is the hidden first
+/// user turn (`introduction_prompt` or `start_here_prompt`); the model speaks
+/// first. Every model reply is checked for the final-line `TOPIC:` marker —
+/// on a hit the RAW reply stays in the turns (role alternation is preserved
+/// even for a marker-only reply) while only the stripped text is displayed.
+/// A failed/cancelled FIRST call returns `Fallback` (manual topic entry);
+/// mid-conversation failures wait for the user instead of aborting.
+pub(crate) async fn run_intro(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    system: &str,
+    opening: &str,
+) -> Result<IntroOutcome> {
+    let mut turns = vec![IntroTurn {
+        user: true,
+        text: opening.to_string(),
+    }];
+    loop {
+        match crate::tui::ask::ask_live(
+            tui,
+            editor,
+            events,
+            backend,
+            system,
+            &messages(&turns),
+            None,
+        )
+        .await
+        {
+            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
+                let w = crate::tui::page::current_width(tui);
+                match crate::topic::parse_topic_marker(&reply.text) {
+                    Some((slug, display)) => {
+                        if !display.is_empty() {
+                            crate::tui::page::page_reply(tui, &display, w)?;
+                        }
+                        turns.push(IntroTurn {
+                            user: false,
+                            text: reply.text,
+                        });
+                        return Ok(IntroOutcome::Topic { slug, turns });
+                    }
+                    None => {
+                        crate::tui::page::page_reply(tui, &reply.text, w)?;
+                        turns.push(IntroTurn {
+                            user: false,
+                            text: reply.text,
+                        });
+                    }
+                }
+            }
+            Ok(crate::tui::ask::AskOutcome::Cancelled) | Err(_) if turns.len() == 1 => {
+                backend.reset_session();
+                return Ok(IntroOutcome::Fallback);
+            }
+            Ok(crate::tui::ask::AskOutcome::Cancelled) => {
+                crate::tui::page::page_notice(tui, "cancelled — keep typing, or /quit")?;
+            }
+            Err(e) => crate::tui::page::page_error(tui, &format!("error: {e}"))?,
+        }
+        // User turn.
+        loop {
+            let Some(raw) = read_user_line(tui, editor, events).await? else {
+                return Ok(IntroOutcome::Quit);
+            };
+            if crate::help::is_help_command(&raw) {
+                crate::tui::page::page_notice(tui, crate::help::help_text())?;
+                continue;
+            }
+            if raw.eq_ignore_ascii_case("/quit") {
+                return Ok(IntroOutcome::Quit);
+            }
+            if crate::visual::parse_show_command(&raw).is_some()
+                || crate::slash::parse_watch_command(&raw).is_some()
+            {
+                crate::tui::page::page_notice(
+                    tui,
+                    "that command works inside a session — we're still getting acquainted",
+                )?;
+                continue;
+            }
+            crate::tui::page::page_user_echo(tui, &raw)?;
+            turns.push(IntroTurn {
+                user: true,
+                text: raw,
+            });
+            break;
+        }
+    }
+}
+
+/// Materials side of both pre-lock branches: convert any new PDFs (notices go
+/// to the screen) and return the digest that anchors the opening prompt. The
+/// `else` branch of the ordinary opening turn does exactly this — the intro
+/// paths run it here instead, because they skip that turn.
+fn materials_digest(tui: &mut Tui, project_root: &Path) -> Result<Option<String>> {
+    for note in crate::materials::convert_pdfs(project_root) {
+        crate::tui::page::page_notice(tui, &note)?;
+    }
+    Ok(crate::materials::combined_digests(&crate::materials::scan(
+        project_root,
+    )))
+}
+
+/// Print the outcome's notice/error and hand the outcome back unchanged.
+fn report(tui: &mut Tui, outcome: IntroOutcome, failed: &str) -> Result<IntroOutcome> {
+    match &outcome {
+        IntroOutcome::Topic { slug, .. } => {
+            crate::tui::page::page_notice(tui, &format!("topic: {slug}"))?
+        }
+        IntroOutcome::Fallback => crate::tui::page::page_error(tui, failed)?,
+        IntroOutcome::Quit => {}
+    }
+    Ok(outcome)
+}
+
+/// First run ever (no marker, no evidence): the introduction REPLACES the topic
+/// prompt — the identity welcome is printed without its question line and the
+/// model opens the conversation; its `TOPIC:` line locks the slug. `Fallback`
+/// leaves the caller's manual entry loop in charge.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_first_run(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    global: &Path,
+    project_root: &Path,
+    today: &str,
+    local: &[String],
+    other: &[String],
+    project_known: bool,
+    week_sessions: u32,
+    streak: u32,
+) -> Result<IntroOutcome> {
+    let profile = std::fs::read_to_string(global.join("USER.md")).ok();
+    crate::tui::entry::print_identity_welcome(
+        tui,
+        profile.as_deref(),
+        &backend.label(),
+        &crate::tui::paint::short_dir(project_root),
+        local,
+        other,
+        project_known,
+        week_sessions,
+        streak,
+        false,
+    )?;
+    let digest = materials_digest(tui, project_root)?;
+    let system = intro_system(global, project_root, today);
+    let opening = crate::progress::introduction_prompt(project_known, digest.as_deref());
+    let outcome = run_intro(tui, editor, events, backend, &system, &opening).await?;
+    if matches!(outcome, IntroOutcome::Topic { .. }) {
+        crate::setup::mark_intro_done(global, "completed");
+    }
+    report(tui, outcome, "introduction failed — type a topic")
+}
+
+/// Conversational start suggestion: a returning user pressed Enter with a
+/// filled `mentor/PROJECT.md`. Runs on the FULL brain — profile and PROJECT.md
+/// ride along — and agreement happens in conversation instead of a yes/no gate,
+/// so "no, something easier" now works.
+pub(crate) async fn run_suggest(
+    tui: &mut Tui,
+    editor: &mut InputBox,
+    events: &mut EventStream,
+    backend: &mut Backend,
+    global: &Path,
+    project_root: &Path,
+    today: &str,
+) -> Result<IntroOutcome> {
+    let digest = materials_digest(tui, project_root)?;
+    let system = intro_system(global, project_root, today);
+    let opening = crate::progress::start_here_prompt(digest.as_deref());
+    let outcome = run_intro(tui, editor, events, backend, &system, &opening).await?;
+    report(tui, outcome, "suggestion failed — type a topic")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,13 +336,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let recorder = Recorder::new(dir.join("rec.jsonl"));
-        stitch(&sample_turns(), &mut session, &recorder);
-        assert_eq!(session.history().len(), 3);
-        assert_eq!(session.history()[0].role, "user");
-        assert_eq!(session.history()[1].role, "assistant");
+        let turns = sample_turns();
+        stitch(&turns, &mut session, &recorder);
+        // EVERY replayed role is pinned on BOTH surfaces, and the transcript is
+        // parsed rather than counted — a corrupted role on the final turn used
+        // to slip through the old count-only assertions.
+        let want: Vec<&str> = turns
+            .iter()
+            .map(|t| if t.user { "user" } else { "assistant" })
+            .collect();
+        let history: Vec<&str> = session.history().iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(history, want);
         let raw = std::fs::read_to_string(dir.join("rec.jsonl")).unwrap();
-        assert_eq!(raw.lines().count(), 3);
+        let logged: Vec<serde_json::Value> = raw
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("transcript line is JSON"))
+            .collect();
+        let roles: Vec<&str> = logged
+            .iter()
+            .map(|v| v["role"].as_str().expect("transcript line has a role"))
+            .collect();
+        assert_eq!(roles, want);
+        let texts: Vec<&str> = logged.iter().map(|v| v["text"].as_str().unwrap()).collect();
+        let sent: Vec<&str> = turns.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, sent);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Wiring pin (polite.rs H3 precedent): if the entry path stops calling the
+    /// introduction, this test fails instead of the flow silently disappearing.
+    /// Asserted against `run.rs` only — the branch BODIES live in this file
+    /// (`run_first_run`/`run_suggest`, because run.rs is at its 600-line
+    /// budget) and a self-`include_str!` would be satisfied by the needle list
+    /// below. The in-module wiring (`run_intro`, `introduction_prompt`,
+    /// `start_here_prompt`, `mark_intro_done`) is pinned mechanically instead:
+    /// each has exactly one caller, so dropping it turns the callee into dead
+    /// code and trips the zero-warning clippy rule.
+    #[test]
+    fn run_wires_intro_flow() {
+        let src = include_str!("run.rs");
+        for needle in [
+            "intro_needed",
+            "run_first_run",
+            "run_suggest",
+            "IntroOutcome",
+            "stitch(",
+            "reset_session()",
+        ] {
+            assert!(
+                src.contains(needle),
+                "run.rs lost its intro wiring: {needle}"
+            );
+        }
+        // The one-shot suggestion must be GONE from run.rs.
+        assert!(!src.contains("start_suggest_system"));
+        assert!(!src.contains("parse_start_suggestion"));
     }
 
     #[test]

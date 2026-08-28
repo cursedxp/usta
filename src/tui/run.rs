@@ -55,6 +55,10 @@ pub async fn run(
                              // turn as the "first answer"; reducing it to a slug and discarding it would
                              // force the model to re-ask what was already said. Not used in the resume flow.
     let mut intro: Option<String> = None;
+    // 13a: turns of a pre-lock conversation (first-run introduction or
+    // conversational start suggestion) — stitched into the session after
+    // build_session; when set, the opening turn is NOT injected.
+    let mut intro_turns: Option<Vec<crate::tui::intro::IntroTurn>> = None;
     let topic = match topic_arg {
         Some(t) => {
             intro = Some(t.clone());
@@ -98,7 +102,41 @@ pub async fn run(
             // printed again if the new-topic confirmation is rejected and we go back
             // to the entry question.
             let mut welcome_shown = false;
+            // First run ever (no marker, no evidence): the introduction replaces
+            // the topic prompt — the model's `TOPIC:` line locks the slug
+            // (SPEC §4.22). Fallback keeps the manual entry loop below.
+            let mut preset_topic: Option<String> = None;
+            if crate::setup::intro_needed(global, &index_content) {
+                welcome_shown = true;
+                match crate::tui::intro::run_first_run(
+                    &mut tui,
+                    &mut editor,
+                    &mut events,
+                    backend,
+                    global,
+                    project_root,
+                    today,
+                    &local,
+                    &other,
+                    project_known,
+                    week_sessions,
+                    streak,
+                )
+                .await?
+                {
+                    crate::tui::intro::IntroOutcome::Topic { slug, turns } => {
+                        intro_turns = Some(turns);
+                        preset_topic = Some(slug);
+                    }
+                    crate::tui::intro::IntroOutcome::Quit => return Ok(None),
+                    crate::tui::intro::IntroOutcome::Fallback => {}
+                }
+            }
             loop {
+                // The introduction already agreed a topic — skip the prompt.
+                if let Some(t) = preset_topic.take() {
+                    break t;
+                }
                 let raw = match crate::tui::entry::ask_topic(
                     &mut tui,
                     &mut editor,
@@ -148,54 +186,27 @@ pub async fn run(
                     // counterpart in the loop is "swallow, ask again" — this is the safe fallback.
                     None => {}
                     Some(crate::topic::TopicChoice::Suggest) => {
-                        // One-shot suggestion from mentor/PROJECT.md (spec: project-aware
-                        // start). Same mechanics as the slug mini-session: single call,
-                        // then ALWAYS reset.
-                        let project_md =
-                            read(progress::project_md_path(project_root)).unwrap_or_default();
-                        let outcome = crate::tui::ask::ask_live(
+                        // Conversational start suggestion (SPEC §4.22): the whole
+                        // brain rides along and agreement happens in conversation
+                        // instead of a yes/no gate ("no, something easier" works).
+                        match crate::tui::intro::run_suggest(
                             &mut tui,
                             &mut editor,
                             &mut events,
                             backend,
-                            &crate::topic::start_suggest_system(),
-                            &[Message::user(project_md.as_str())],
-                            None,
-                        )
-                        .await;
-                        backend.reset_session(); // suggestion chat must not leak into the session
-                        let parsed = match outcome {
-                            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
-                                crate::topic::parse_start_suggestion(&reply.text)
-                            }
-                            Ok(crate::tui::ask::AskOutcome::Cancelled) | Err(_) => None,
-                        };
-                        let Some((slug, text)) = parsed else {
-                            crate::tui::page::page_error(
-                                &mut tui,
-                                "suggestion failed — type a topic",
-                            )?;
-                            continue;
-                        };
-                        if !text.is_empty() {
-                            crate::tui::page::page_notice(&mut tui, &text)?;
-                        }
-                        if crate::tui::ask::tui_confirm(
-                            &mut tui,
-                            &mut editor,
-                            &mut events,
-                            &format!("start with '{slug}'? (yes/no)"),
+                            global,
+                            project_root,
+                            today,
                         )
                         .await?
                         {
-                            crate::tui::page::page_notice(&mut tui, &format!("topic: {slug}"))?;
-                            intro = Some(format!(
-                                "Usta's own opening suggestion (already shown to the user, \
-                                 they accepted it — continue from its first step, don't repeat it):\n{text}"
-                            ));
-                            break slug;
+                            crate::tui::intro::IntroOutcome::Topic { slug, turns } => {
+                                intro_turns = Some(turns);
+                                break slug;
+                            }
+                            crate::tui::intro::IntroOutcome::Quit => return Ok(None),
+                            crate::tui::intro::IntroOutcome::Fallback => {}
                         }
-                        crate::tui::page::page_notice(&mut tui, "cancelled — type a topic")?;
                     }
                     Some(crate::topic::TopicChoice::Resume(t)) => {
                         crate::tui::page::page_notice(&mut tui, &format!("resuming: {t}"))?;
@@ -328,81 +339,68 @@ pub async fn run(
         }
     }
 
-    // Opening drill / intro (the TUI counterpart of plain.rs's plain path). If the
-    // profile is still the embedded generic template (or doesn't exist at all),
-    // Usta doesn't know the user yet — a short introduction instruction is added
-    // to the opening turn (spec Ç3a).
-    let profile_generic = read(global.join("USER.md"))
-        .as_deref()
-        .map(crate::setup::profile_is_generic)
-        .unwrap_or(true);
-    let project_known = progress::project_md_path(project_root).exists();
-    let opening = if has_progress {
-        let gs = crate::slash::game_streak_line(global, today);
-        let progress_content =
-            read(progress::progress_path(project_root, &topic)).unwrap_or_default();
-        let due = welcome_data::due_questions(&progress_content, today);
-        let has_questions = welcome_data::drill_count(&progress_content) > 0;
-        progress::opening_prompt(
-            &topic,
-            profile_generic,
-            project_known,
-            gs.as_deref(),
-            &due,
-            has_questions,
-        )
-    } else {
-        for note in crate::materials::convert_pdfs(project_root) {
-            crate::tui::page::page_notice(&mut tui, &note)?;
-        }
-        let mats = crate::materials::scan(project_root);
-        let material_digest = crate::materials::combined_digests(&mats);
-        progress::onboarding_prompt(
-            &topic,
-            intro.as_deref(),
-            profile_generic,
-            project_known,
-            material_digest.as_deref(),
-        )
-    };
-    session.push_user(&opening);
-    recorder.user(&opening);
-    match crate::tui::ask::ask_live(
-        &mut tui,
-        &mut editor,
-        &mut events,
-        backend,
-        &session.system,
-        session.history(),
-        last_tokens,
-    )
-    .await
-    {
-        Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
-            last_tokens = reply.context_tokens;
-            let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-            let w = crate::tui::page::current_width(&tui);
-            crate::tui::page::page_reply(&mut tui, &clean, w)?;
-            recorder.assistant(&clean);
-            session.push_assistant(clean);
-            crate::tui::entry::trigger_auto_visual(
-                &mut tui,
-                &mut editor,
-                &mut events,
-                backend,
-                &session,
-                project_root,
-                &topic,
-                show_topic,
-                last_tokens,
-            )
-            .await?;
-        }
-        Ok(crate::tui::ask::AskOutcome::Cancelled) => {
+    // 13a: the pre-lock conversation becomes the head of the real session —
+    // replayed into history + transcript. `build_session` rebuilt the system
+    // prompt with the real topic and the CLI backend's `--resume` would keep
+    // the pre-lock one, so reset (maybe_compact precedent).
+    let opening = match &intro_turns {
+        Some(turns) => {
+            crate::tui::intro::stitch(turns, &mut session, &recorder);
             backend.reset_session();
-            crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
+            None // already flowing — the opening turn is not injected
         }
-        Err(e) => crate::tui::page::page_error(&mut tui, &format!("opening turn skipped: {e}"))?,
+        None => Some(crate::tui::entry::opening_turn(
+            &mut tui,
+            global,
+            project_root,
+            &topic,
+            today,
+            has_progress,
+            intro.as_deref(),
+        )?),
+    };
+    if let Some(opening) = opening {
+        session.push_user(&opening);
+        recorder.user(&opening);
+        match crate::tui::ask::ask_live(
+            &mut tui,
+            &mut editor,
+            &mut events,
+            backend,
+            &session.system,
+            session.history(),
+            last_tokens,
+        )
+        .await
+        {
+            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
+                last_tokens = reply.context_tokens;
+                let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
+                let w = crate::tui::page::current_width(&tui);
+                crate::tui::page::page_reply(&mut tui, &clean, w)?;
+                recorder.assistant(&clean);
+                session.push_assistant(clean);
+                crate::tui::entry::trigger_auto_visual(
+                    &mut tui,
+                    &mut editor,
+                    &mut events,
+                    backend,
+                    &session,
+                    project_root,
+                    &topic,
+                    show_topic,
+                    last_tokens,
+                )
+                .await?;
+            }
+            Ok(crate::tui::ask::AskOutcome::Cancelled) => {
+                backend.reset_session();
+                crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
+            }
+            Err(e) => {
+                crate::tui::page::page_error(&mut tui, &format!("opening turn skipped: {e}"))?
+            }
+        }
     }
 
     let mut watching = true;

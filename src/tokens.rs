@@ -54,6 +54,5 @@ pub const HISTORY_HEADER: &str = "# Session History\n\n";
 pub const PROGRESS_HEADING_SUFFIX: &str = "— Progress";
 /// Pre-lock conversation topic lock: the model's FINAL reply line
 /// `TOPIC: <slug>` locks the topic (SPEC §4.22).
-#[allow(dead_code)]
 pub const TOPIC_MARKER: &str = "TOPIC:";
 pub const DEFAULT_TOPIC: &str = "general";

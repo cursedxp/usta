@@ -39,51 +39,12 @@ pub(crate) fn finalize_slug(raw: &str, model_reply: &str) -> String {
     }
 }
 
-/// System prompt for the one-shot start suggestion (spec: project-aware start).
-/// Mirrors the slug mini-session: single call, session reset afterwards.
-pub(crate) fn start_suggest_system() -> String {
-    "You are Usta, a Socratic engineering mentor. The user has a project \
-     definition (given in the user message) but does NOT know where to start \
-     learning. Propose the single best starting topic. Reply in English — \
-     the user hasn't written anything yet, and the default language is \
-     English until they do (the project file's language is NOT the user's). \
-     FIRST line must be exactly `KONU: <topic-slug>` \
-     (lowercase, hyphenated, 1-3 words). Then 2-4 sentences: why this topic \
-     first, and ONE concrete first step small enough to start today. No \
-     greeting, no markdown headings, nothing after the suggestion."
-        .to_string()
-}
-
-/// Parse the suggestion reply: first `KONU:` line → slug (normalized through
-/// slugify_topic), remaining lines → suggestion text shown to the user.
-/// No `KONU:` marker or empty slug → None (caller falls back to manual entry).
-pub(crate) fn parse_start_suggestion(reply: &str) -> Option<(String, String)> {
-    let mut lines = reply.trim().lines();
-    let first = lines.next()?.trim();
-    let rest_raw = first.strip_prefix("KONU:")?;
-    // `slugify_topic` never returns an empty string — it falls back to
-    // tokens::DEFAULT_TOPIC for empty/whitespace input. So the emptiness check MUST
-    // happen here, before slugify_topic runs, or a blank `KONU:` line would wrongly
-    // parse to Some((tokens::DEFAULT_TOPIC, ...)) instead of None.
-    if rest_raw.trim().is_empty() {
-        return None;
-    }
-    // `slugify_topic` splits on whitespace only, so a hyphen already inside
-    // the KONU value (e.g. "rust-temelleri") would otherwise be stripped and
-    // the words glued together ("rusttemelleri"). Turn hyphens/underscores
-    // into spaces first, same trick `finalize_slug` uses for model replies.
-    let slug = slugify_topic(&rest_raw.replace(['-', '_'], " "));
-    let text = lines.collect::<Vec<_>>().join("\n").trim().to_string();
-    Some((slug, text))
-}
-
 /// Parse the pre-lock conversation's topic lock (SPEC §4.22): if the reply's
 /// FINAL non-empty line is `TOPIC: <slug>`, return (slug, display text without
 /// that line). Mid-reply markers do NOT lock — only the final line counts, so
 /// prose that merely mentions the token can't hijack the flow. Blank slug →
 /// None (checked BEFORE slugify_topic, which would otherwise fall back to
-/// tokens::DEFAULT_TOPIC — same guard parse_start_suggestion used).
-#[allow(dead_code)]
+/// tokens::DEFAULT_TOPIC).
 pub(crate) fn parse_topic_marker(reply: &str) -> Option<(String, String)> {
     let trimmed = reply.trim_end();
     let (head, last) = match trimmed.rsplit_once('\n') {
@@ -307,40 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn start_suggest_system_defines_konu_contract() {
-        let s = start_suggest_system();
-        assert!(s.contains("KONU:"));
-        assert!(s.contains("first step"));
-        // v0.24.7: the suggestion runs before the user has typed a word — it
-        // must not inherit the project file's language.
-        assert!(s.contains("Reply in English"));
-    }
-
-    #[test]
-    fn parse_start_suggestion_splits_slug_and_text() {
-        let reply = "KONU: rust-temelleri\nStart with Rust because the backend is Rust.\nFirst step: cargo new.";
-        let (slug, text) = parse_start_suggestion(reply).unwrap();
-        assert_eq!(slug, "rust-temelleri");
-        assert!(text.contains("First step"));
-        assert!(!text.contains("KONU:"));
-    }
-
-    #[test]
-    fn parse_start_suggestion_normalizes_messy_slug_line() {
-        let (slug, _) = parse_start_suggestion("KONU: Rust Temelleri!\ngerekçe").unwrap();
-        assert_eq!(slug, "rust-temelleri");
-    }
-
-    #[test]
-    fn parse_start_suggestion_tolerates_missing_text_rejects_missing_konu() {
-        let (slug, text) = parse_start_suggestion("KONU: rust").unwrap();
-        assert_eq!(slug, "rust");
-        assert_eq!(text, "");
-        assert!(parse_start_suggestion("just prose, no marker").is_none());
-        assert!(parse_start_suggestion("KONU:   \ntext").is_none());
-    }
-
-    #[test]
     fn interpret_empty_resumes_latest_or_swallows() {
         let local = vec!["son-konu".to_string(), "eski".to_string()];
         assert!(
@@ -464,8 +391,7 @@ mod tests {
     #[test]
     fn parse_topic_marker_rejects_blank_or_missing() {
         assert!(parse_topic_marker("no marker here").is_none());
-        // Blank slug must be None BEFORE slugify_topic's "general" fallback kicks in
-        // (same guard parse_start_suggestion documents today).
+        // Blank slug must be None BEFORE slugify_topic's "general" fallback kicks in.
         assert!(parse_topic_marker("text\nTOPIC:   ").is_none());
     }
 

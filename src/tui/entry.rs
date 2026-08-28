@@ -134,6 +134,104 @@ pub(crate) async fn trigger_auto_visual(
     Ok(())
 }
 
+/// The session's opening turn (the TUI counterpart of plain.rs's plain path):
+/// the resume drill when the topic already has progress, otherwise the
+/// new-topic onboarding turn — which also converts any new PDFs (notices go to
+/// the screen) and anchors the turn to the materials digest. If the profile is
+/// still the embedded generic template (or doesn't exist at all), Usta doesn't
+/// know the user yet, so a short introduction instruction is added (spec Ç3a).
+/// Moved out of `run.rs` in 13a to keep that file inside its line budget.
+pub(crate) fn opening_turn(
+    tui: &mut Tui,
+    global: &Path,
+    project_root: &Path,
+    topic: &str,
+    today: &str,
+    has_progress: bool,
+    intro: Option<&str>,
+) -> Result<String> {
+    let profile_generic = std::fs::read_to_string(global.join("USER.md"))
+        .ok()
+        .as_deref()
+        .map(crate::setup::profile_is_generic)
+        .unwrap_or(true);
+    let project_known = crate::progress::project_md_path(project_root).exists();
+    if has_progress {
+        let gs = crate::slash::game_streak_line(global, today);
+        let progress_content =
+            std::fs::read_to_string(crate::progress::progress_path(project_root, topic))
+                .unwrap_or_default();
+        let due = welcome_data::due_questions(&progress_content, today);
+        let has_questions = welcome_data::drill_count(&progress_content) > 0;
+        return Ok(crate::progress::opening_prompt(
+            topic,
+            profile_generic,
+            project_known,
+            gs.as_deref(),
+            &due,
+            has_questions,
+        ));
+    }
+    for note in crate::materials::convert_pdfs(project_root) {
+        crate::tui::page::page_notice(tui, &note)?;
+    }
+    let mats = crate::materials::scan(project_root);
+    let material_digest = crate::materials::combined_digests(&mats);
+    Ok(crate::progress::onboarding_prompt(
+        topic,
+        intro,
+        profile_generic,
+        project_known,
+        material_digest.as_deref(),
+    ))
+}
+
+/// Print the identity welcome (logo box + entry hint). Shared by `ask_topic`
+/// (with the prompt line) and the first-run introduction path in `tui::intro`
+/// (without it — the model opens the conversation instead of a prompt).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn print_identity_welcome(
+    tui: &mut Tui,
+    profile: Option<&str>,
+    model: &str,
+    dir: &str,
+    local: &[String],
+    other: &[String],
+    project_known: bool,
+    week_sessions: u32,
+    streak: u32,
+    show_prompt: bool,
+) -> Result<()> {
+    let name = profile.and_then(welcome_data::extract_name);
+    let width = crate::tui::page::current_width(tui);
+    crate::tui::page::page(
+        tui,
+        welcome::render_welcome_identity(
+            name.as_deref(),
+            model,
+            dir,
+            local,
+            other,
+            project_known,
+            width,
+            week_sessions,
+            streak,
+        ),
+    )?;
+    if show_prompt {
+        // The "Enter = suggests" hint is only truthful on a first session with no
+        // resumable topics — when `local` is non-empty, empty Enter resumes
+        // instead (see welcome box above), so the suggest wording must not show.
+        let prompt_line = if project_known && local.is_empty() {
+            "What do you want to learn? (Enter = Usta suggests from PROJECT.md; or type a topic)"
+        } else {
+            "What do you want to learn? (a word, or describe it in a sentence)"
+        };
+        crate::tui::page::page_notice(tui, prompt_line)?;
+    }
+    Ok(())
+}
+
 /// Prints the identity welcome and reads the topic from the input box. `None` =
 /// the user quit without giving a topic (Ctrl-C/D). Slug resolution is left to
 /// the caller. Watcher events are NOT consumed here during topic entry — only
@@ -160,31 +258,18 @@ pub(crate) async fn ask_topic(
     // go back to the entry question, the identity welcome + initial notice are
     // NOT printed again.
     if show_welcome {
-        let name = profile.and_then(welcome_data::extract_name);
-        let width = crate::tui::page::current_width(tui);
-        crate::tui::page::page(
+        print_identity_welcome(
             tui,
-            welcome::render_welcome_identity(
-                name.as_deref(),
-                model,
-                dir,
-                local,
-                other,
-                project_known,
-                width,
-                week_sessions,
-                streak,
-            ),
+            profile,
+            model,
+            dir,
+            local,
+            other,
+            project_known,
+            week_sessions,
+            streak,
+            true,
         )?;
-        // The "Enter = suggests" hint is only truthful on a first session with no
-        // resumable topics — when `local` is non-empty, empty Enter resumes
-        // instead (see welcome box above), so the suggest wording must not show.
-        let prompt_line = if project_known && local.is_empty() {
-            "What do you want to learn? (Enter = Usta suggests from PROJECT.md; or type a topic)"
-        } else {
-            "What do you want to learn? (a word, or describe it in a sentence)"
-        };
-        crate::tui::page::page_notice(tui, prompt_line)?;
     }
 
     loop {

@@ -329,7 +329,6 @@ pub(crate) fn profile_is_generic(disk: &str) -> bool {
 /// `profile_is_generic` can't carry first-run detection — one hand edit to
 /// USER.md would skip the introduction forever, and a profile reset would
 /// re-trigger it for a veteran (SPEC §4.22, blocker H3).
-#[allow(dead_code)]
 pub(crate) fn intro_marker_path(global: &Path) -> PathBuf {
     global.join("learner/.introduced")
 }
@@ -337,7 +336,6 @@ pub(crate) fn intro_marker_path(global: &Path) -> PathBuf {
 /// Write the first-run marker (best-effort — a marker write failure must never
 /// block the session; worst case the introduction re-runs next launch).
 /// `how`: "completed" (introduction finished) or "seeded" (grandfathered).
-#[allow(dead_code)]
 pub(crate) fn mark_intro_done(global: &Path, how: &str) {
     let path = intro_marker_path(global);
     if let Some(parent) = path.parent() {
@@ -352,7 +350,6 @@ pub(crate) fn mark_intro_done(global: &Path, how: &str) {
 /// is skipped — existing users are grandfathered on their first post-upgrade
 /// launch. An empty/missing USER.md is NOT evidence (profile_is_generic("")
 /// returns false because it matches nothing — guard it explicitly).
-#[allow(dead_code)]
 pub(crate) fn intro_needed(global: &Path, index_content: &str) -> bool {
     if intro_marker_path(global).exists() {
         return false;

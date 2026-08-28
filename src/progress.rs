@@ -326,7 +326,6 @@ fn topic_marker_rule() -> String {
 /// Deliberately has NO question cap: three conversation rules govern length
 /// instead (rule iii keeps it short when the user wants it short). MEET_BLOCK
 /// stays as-is for the post-lock surfaces (plain path, `usta start`).
-#[allow(dead_code)]
 pub fn introduction_prompt(project_known: bool, materials: Option<&str>) -> String {
     let project_block = if project_known {
         "\nThe project files mentor/PROJECT.md and mentor/PROGRESS.md are in your \
@@ -381,14 +380,13 @@ pub fn introduction_prompt(project_known: bool, materials: Option<&str>) -> Stri
 
 /// Conversational start suggestion for a RETURNING user (empty Enter with a
 /// filled mentor/PROJECT.md and no local topics) — replaces the one-shot
-/// `start_suggest_system` + its yes/no confirm gate (SPEC §4.22). Runs on the
+/// `KONU:` suggestion + its yes/no confirm gate (SPEC §4.22). Runs on the
 /// full brain system prompt, so the profile and SOUL language lock ride along
 /// for free (the old bare one-shot needed a hand-written English note).
 ///
 /// `materials`: same shape as `introduction_prompt` — deviation from the SDD
 /// brief (controller pre-flight review), added so this path keeps the
 /// existing materials-scan anchoring instead of silently dropping it.
-#[allow(dead_code)]
 pub fn start_here_prompt(materials: Option<&str>) -> String {
     format!(
         "[START SUGGESTION]\n\
