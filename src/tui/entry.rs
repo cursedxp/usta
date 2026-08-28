@@ -189,6 +189,11 @@ pub(crate) fn opening_turn(
 /// Print the identity welcome (logo box + entry hint). Shared by `ask_topic`
 /// (with the prompt line) and the first-run introduction path in `tui::intro`
 /// (without it — the model opens the conversation instead of a prompt).
+///
+/// `introduction`: forwarded to `welcome::render_welcome_identity` — `true`
+/// for the pre-lock introduction (no topic prompt, no Enter shortcut in the
+/// box's right column), `false` for the normal topic-entry path (`ask_topic`,
+/// unchanged).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn print_identity_welcome(
     tui: &mut Tui,
@@ -201,6 +206,7 @@ pub(crate) fn print_identity_welcome(
     week_sessions: u32,
     streak: u32,
     show_prompt: bool,
+    introduction: bool,
 ) -> Result<()> {
     let name = profile.and_then(welcome_data::extract_name);
     let width = crate::tui::page::current_width(tui);
@@ -216,6 +222,7 @@ pub(crate) fn print_identity_welcome(
             width,
             week_sessions,
             streak,
+            introduction,
         ),
     )?;
     if show_prompt {
@@ -269,6 +276,7 @@ pub(crate) async fn ask_topic(
             week_sessions,
             streak,
             true,
+            false,
         )?;
     }
 

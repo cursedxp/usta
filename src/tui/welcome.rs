@@ -192,6 +192,15 @@ pub fn render_welcome(d: &WelcomeData, width: u16) -> Text<'static> {
 /// `Enter → resume <first>` line and a numbered list (≤6). `other`: topics
 /// recorded in other projects — informational only, not selectable, summarized
 /// in a dim line.
+///
+/// `introduction`: `true` when this box is printed ahead of the pre-lock
+/// introduction conversation (feature 13a) rather than the topic-entry prompt
+/// (`ask_topic`). No topic is being asked for in that flow — the model opens
+/// the conversation instead — so the right column must not offer topic
+/// selection or an Enter shortcut; it gets the same "First session — let's
+/// start with an introduction." wording `render_welcome`'s `first_session`
+/// branch uses, and `local`/`other`/`project_known` are ignored. `false` keeps
+/// today's topic-selection column exactly as it was.
 #[allow(clippy::too_many_arguments)]
 pub fn render_welcome_identity(
     name: Option<&str>,
@@ -203,6 +212,7 @@ pub fn render_welcome_identity(
     width: u16,
     week_sessions: u32,
     streak: u32,
+    introduction: bool,
 ) -> Text<'static> {
     let total = (width as usize).clamp(60, 100);
     let inner = total - 2;
@@ -224,48 +234,63 @@ pub fn render_welcome_identity(
 
     // Topics in other projects are informational only — shown dim (DIM).
     let dim = Style::default().add_modifier(Modifier::DIM);
-    let mut right: Vec<(String, Style)> = vec![
-        ("What do you want to learn?".to_string(), Style::default()),
-        (String::new(), Style::default()),
-    ];
-    if let Some(first) = local.first() {
-        for l in wrap(&format!("Enter → resume {first}"), right_w) {
-            right.push((l, Style::default()));
+    let mut right: Vec<(String, Style)> = if introduction {
+        // Pre-lock introduction (13a): no topic prompt, no Enter shortcut —
+        // the one-shot suggestion machinery those hints describe was deleted.
+        // Same wording/style as render_welcome's first_session branch.
+        let mut r = vec![
+            ("Learning Status".to_string(), Style::default()),
+            (String::new(), Style::default()),
+        ];
+        for l in wrap("First session — let's start with an introduction.", right_w) {
+            r.push((l, Style::default()));
         }
-        // List items stay on `fit`, not `wrap` — wrapping a topic name would
-        // continue onto an unnumbered line, breaking the numbered list's
-        // visual alignment (see render_box's per-row rendering).
-        for (i, t) in local.iter().take(6).enumerate() {
-            right.push((fit(&format!("{}) {t}", i + 1), right_w), Style::default()));
-        }
-        right.push((String::new(), Style::default()));
-        for l in wrap("Type to start a new topic.", right_w) {
-            right.push((l, Style::default()));
-        }
-        if !other.is_empty() {
-            for l in wrap(&format!("In other projects: {}", other.join(", ")), right_w) {
-                right.push((l, dim));
-            }
-        }
+        r
     } else {
-        // Spec §3: the first-session message is kept EXACTLY as-is when there are no local topics,
-        // UNLESS a project is known — then the empty-Enter sentinel can trigger a suggestion.
-        let first_line = if project_known {
-            "PROJECT.md found — press Enter, Usta suggests where to start."
+        let mut r: Vec<(String, Style)> = vec![
+            ("What do you want to learn?".to_string(), Style::default()),
+            (String::new(), Style::default()),
+        ];
+        if let Some(first) = local.first() {
+            for l in wrap(&format!("Enter → resume {first}"), right_w) {
+                r.push((l, Style::default()));
+            }
+            // List items stay on `fit`, not `wrap` — wrapping a topic name would
+            // continue onto an unnumbered line, breaking the numbered list's
+            // visual alignment (see render_box's per-row rendering).
+            for (i, t) in local.iter().take(6).enumerate() {
+                r.push((fit(&format!("{}) {t}", i + 1), right_w), Style::default()));
+            }
+            r.push((String::new(), Style::default()));
+            for l in wrap("Type to start a new topic.", right_w) {
+                r.push((l, Style::default()));
+            }
+            if !other.is_empty() {
+                for l in wrap(&format!("In other projects: {}", other.join(", ")), right_w) {
+                    r.push((l, dim));
+                }
+            }
         } else {
-            "First session — type a topic."
-        };
-        for l in wrap(first_line, right_w) {
-            right.push((l, Style::default()));
-        }
-        // the previous "Registered:" line is REMOVED — replaced by the other-projects info line (if any).
-        if !other.is_empty() {
-            right.push((String::new(), Style::default()));
-            for l in wrap(&format!("In other projects: {}", other.join(", ")), right_w) {
-                right.push((l, dim));
+            // Spec §3: the first-session message is kept EXACTLY as-is when there are no local topics,
+            // UNLESS a project is known — then the empty-Enter sentinel can trigger a suggestion.
+            let first_line = if project_known {
+                "PROJECT.md found — press Enter, Usta suggests where to start."
+            } else {
+                "First session — type a topic."
+            };
+            for l in wrap(first_line, right_w) {
+                r.push((l, Style::default()));
+            }
+            // the previous "Registered:" line is REMOVED — replaced by the other-projects info line (if any).
+            if !other.is_empty() {
+                r.push((String::new(), Style::default()));
+                for l in wrap(&format!("In other projects: {}", other.join(", ")), right_w) {
+                    r.push((l, dim));
+                }
             }
         }
-    }
+        r
+    };
     if let Some(line) = week_line(week_sessions, streak) {
         for l in wrap(&line, right_w) {
             right.push((l, Style::default()));

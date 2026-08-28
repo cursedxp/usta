@@ -211,6 +211,7 @@ fn render_identity_with_topics_lists_them_and_equal_width() {
         80,
         0,
         0,
+        false,
     );
     let lines = plain_lines(&t);
     // Last line is the appended help hint — NOT part of the bordered box.
@@ -230,7 +231,7 @@ fn render_identity_with_topics_lists_them_and_equal_width() {
 
 #[test]
 fn render_identity_no_topics_shows_first_session_and_no_name() {
-    let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80, 0, 0);
+    let t = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80, 0, 0, false);
     let joined = plain_lines(&t).join("\n");
     assert!(joined.contains("What do you want to learn?"));
     assert!(joined.contains("Hello!")); // no name → generic
@@ -255,6 +256,7 @@ fn identity_welcome_lists_local_topics_with_enter_hint() {
         80,
         0,
         0,
+        false,
     );
     let joined = plain_lines(&t).join("\n");
     assert!(joined.contains("Enter"));
@@ -276,7 +278,46 @@ fn identity_welcome_lists_local_topics_with_enter_hint() {
 
 #[test]
 fn identity_welcome_without_local_topics_keeps_first_run_look() {
-    let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], false, 80, 0, 0);
+    let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], false, 80, 0, 0, false);
+    let joined = plain_lines(&t).join("\n");
+    assert!(joined.contains("What do you want to learn"));
+    assert!(joined.contains("First session"));
+    assert!(!joined.contains("Enter →"));
+}
+
+#[test]
+fn identity_welcome_introduction_variant_has_no_topic_selection() {
+    // Feature 13a: the pre-lock introduction prints the identity welcome
+    // before any topic exists — the right column must not offer topic
+    // selection or Enter shortcuts (those describe machinery 13a removed).
+    let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], false, 80, 0, 0, true);
+    let joined = plain_lines(&t).join("\n");
+    assert!(!joined.contains("What do you want to learn?"));
+    assert!(!joined.contains("Enter →"));
+    assert!(!joined.contains("PROJECT.md found"));
+    // The sentence wraps across rows at this width, so check the fragments
+    // that survive wrapping rather than the whole string as one substring
+    // (same approach as render_welcome_first_session_shows_intro_message).
+    assert!(joined.contains("First session"));
+    assert!(joined.contains("introduction"));
+}
+
+#[test]
+fn identity_welcome_introduction_variant_hides_project_known_hint_too() {
+    // Same check with project_known = true — the most direct reproduction of
+    // the reported bug (the "PROJECT.md found — press Enter..." wording
+    // leaking into the pre-lock introduction).
+    let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], true, 80, 0, 0, true);
+    let joined = plain_lines(&t).join("\n");
+    assert!(!joined.contains("PROJECT.md found"));
+    assert!(!joined.contains("What do you want to learn?"));
+}
+
+#[test]
+fn identity_welcome_topic_entry_variant_unaffected_by_introduction_flag() {
+    // The topic-entry path (introduction = false) keeps today's behavior
+    // byte-for-byte — this pins that the new parameter didn't change it.
+    let t = render_welcome_identity(None, "opus · cli", "~/x", &[], &[], false, 80, 0, 0, false);
     let joined = plain_lines(&t).join("\n");
     assert!(joined.contains("What do you want to learn"));
     assert!(joined.contains("First session"));
@@ -287,8 +328,9 @@ fn identity_welcome_without_local_topics_keeps_first_run_look() {
 fn first_session_hint_becomes_suggest_hint_when_project_known() {
     // Call render_welcome_identity twice with empty `local`, flipping only
     // project_known.
-    let not_known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80, 0, 0);
-    let known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], true, 80, 0, 0);
+    let not_known =
+        render_welcome_identity(None, "opus · cli", "~/p", &[], &[], false, 80, 0, 0, false);
+    let known = render_welcome_identity(None, "opus · cli", "~/p", &[], &[], true, 80, 0, 0, false);
     let joined_not_known = plain_lines(&not_known).join("\n");
     let joined_known = plain_lines(&known).join("\n");
     assert!(joined_not_known.contains("First session — type a topic."));
@@ -310,6 +352,7 @@ fn identity_welcome_other_projects_line_is_dim() {
         80,
         0,
         0,
+        false,
     );
     let span = t
         .lines
@@ -359,6 +402,7 @@ fn welcome_orange_discipline() {
         80,
         0,
         0,
+        false,
     );
     assert!(
         orange_element_count(&ident) <= 2,
@@ -441,11 +485,33 @@ fn welcome_shows_week_line() {
 
 #[test]
 fn identity_welcome_shows_week_line_when_sessions_present() {
-    let t = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &[], &[], false, 80, 3, 1);
+    let t = render_welcome_identity(
+        Some("Ada"),
+        "opus · cli",
+        "~/p",
+        &[],
+        &[],
+        false,
+        80,
+        3,
+        1,
+        false,
+    );
     let joined = plain_lines(&t).join("\n");
     assert!(joined.contains("This week: 3 session(s) · streak 1 day(s)"));
 
-    let t0 = render_welcome_identity(Some("Ada"), "opus · cli", "~/p", &[], &[], false, 80, 0, 0);
+    let t0 = render_welcome_identity(
+        Some("Ada"),
+        "opus · cli",
+        "~/p",
+        &[],
+        &[],
+        false,
+        80,
+        0,
+        0,
+        false,
+    );
     let joined0 = plain_lines(&t0).join("\n");
     assert!(!joined0.contains("This week"));
 }
@@ -808,6 +874,7 @@ fn all_three_renderers_agree_on_line_width_for_same_input_width() {
             width,
             0,
             0,
+            false,
         );
         let identity_lines = plain_lines(&identity_t);
         let identity_box = &identity_lines[..identity_lines.len() - 1];

@@ -291,6 +291,7 @@ pub(crate) async fn run_first_run(
         week_sessions,
         streak,
         false,
+        true,
     )?;
     let digest = materials_digest(tui, project_root)?;
     let system = intro_system(global, project_root, today);
