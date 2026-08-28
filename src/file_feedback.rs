@@ -139,11 +139,11 @@ pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
     let mut frame = format!(
         "[Files changed]\n{files_payload}\n\n\
 This change is part of the ongoing lesson — respond as the mentor guiding it, not as a reviewer opening a fresh audit. Apply these rules:\n\
-1. If your last message asked the user to WRITE or CHANGE something and this change is their delivery: audit the delivered change against the assignment, and shape your reply in three parts — what they did (named concretely, with evidence from the change), what is missing or wrong (said plainly), and the single next step. Answering their words alone is not enough — hold the change against the assignment. Name the gaps; never write the fix yourself (Hard Rule 2 — the hint ladder still applies).\n\
+1. If your last message asked the user to WRITE or CHANGE something and this change is their delivery: audit the delivered change against the assignment, and shape your reply in three parts — what they did (named concretely, with evidence from the change), what is missing or wrong (said plainly), and the single next step. Answering their words alone is not enough — hold the change against the assignment. Name the gaps; never write the fix yourself (Hard Rule 1 — the hint ladder still applies).\n\
 2. If there's an unanswered question from you still pending: nudge it in ONE short sentence — never repeat the full question text.\n\
 3. First-sight full-content files may be tool-generated scaffold (e.g. a `cargo new` template) — acknowledge scaffold in one sentence, don't review it line by line; focus on the user's hand-written change.\n\
 4. If the user asks a question in the middle of this, answer it, then recall the task.\n\
-5. The artifact's PURPOSE decides what you may say about it. Asked to READ, RUN, or DESCRIBE it: it is OFF-LIMITS until the user reports — do not quote, summarize, or explain it; only acknowledge that the step happened and say nothing about the artifact's content; when their report arrives, verify it against what you saw. Asked to WRITE or CHANGE it: the opposite — seeing and judging it is the point; audit it under rule 1. Never read this rule as a reason to stay silent about work you assigned them to produce."
+5. The artifact's PURPOSE decides what you may say about it. Asked to READ, RUN, or DESCRIBE it: it is OFF-LIMITS until the user reports — do not quote, summarize, or explain it; only acknowledge that the step happened and say nothing about the artifact's content; when their report arrives, verify it against what you saw. Asked to WRITE or CHANGE it: the opposite — seeing and judging it is the point; audit it under rule 1. When an assignment pairs READ with WRITE, the READ obligation survives — do not reveal or explain the parts they were asked to report on — while the audit under rule 1 is scoped to what they changed (their diff), not the whole file. Never read this rule as a reason to stay silent about work you assigned them to produce."
     );
     if any_exercise {
         frame.push_str(&format!(
@@ -568,7 +568,8 @@ mod tests {
         // the words), (2) one-sentence nudge — never a full repeat,
         // (3) scaffold in one sentence, (4) answer then recall the task,
         // (5) the artifact's PURPOSE decides: READ → off-limits until the
-        // report; WRITE → auditing it is the point.
+        // report; WRITE → auditing it is the point; compound assignments
+        // (READ+WRITE) scope the audit to what changed, not the whole file.
         assert!(s.contains("part of the ongoing lesson"));
         assert!(s.contains("audit the delivered change against the assignment"));
         assert!(s.contains("three parts"));
@@ -587,6 +588,12 @@ mod tests {
         assert!(s.contains("say nothing about the artifact's content"));
         assert!(s.contains("verify it against"));
         assert!(s.contains("WRITE or CHANGE"));
+        // Compound assignment coverage: when READ and WRITE pair, READ
+        // obligation survives (don't reveal parts they reported on) but audit
+        // is scoped to their diff, not the whole file.
+        assert!(s.contains("pairs READ with WRITE"));
+        assert!(s.contains("READ obligation survives"));
+        assert!(s.contains("what they changed (their diff)"));
         // The over-correction risk finding E named: rule 5 must never read
         // as a licence to stay silent about assigned WRITE work.
         assert!(s.contains("stay silent about work you assigned"));
