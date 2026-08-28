@@ -99,13 +99,13 @@ Every project gets a visible `mentor/` folder next to `.usta/`:
 
 Both are plain markdown, meant to be read and hand-edited — Usta never overwrites your edits, and `reset` never touches them.
 
-**Proactive start:** in a project with a filled `PROJECT.md` and no topics yet, press **Enter on the empty topic prompt** — Usta reads the plan and proposes where to start (topic + rationale + a first step small enough to start today). Confirm and go. Typing a topic still works, of course — the suggestion is for the "I don't know how to begin" moment, and it derives from your plan rather than being biased by whatever you'd have typed.
+**Proactive start:** on a true first run, Usta opens a short introduction conversation before any topic is chosen (say "let's start" any time to skip forward). In a project with a filled `PROJECT.md` and no topics yet, pressing Enter on the empty topic prompt starts a conversational suggestion that already knows your profile and plan — steer it in conversation instead of a yes/no confirm. Typing a topic still works, of course — the suggestion is for the "I don't know how to begin" moment, and it derives from your plan rather than being biased by whatever you'd have typed.
 
 ## Interface
 
 In an interactive terminal Usta opens a **ratatui inline-viewport TUI**: a live input box + status line at the bottom, while the permanent flow (Usta's replies, file feedback) is printed to normal **scrollback** — scroll up to read or copy history. No alternate screen; your terminal history is preserved.
 
-A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (logo + your saved topics), and the input box below asks for the topic — type a word, or describe it in a sentence (the model reduces sentences to a short slug). With a filled `PROJECT.md` you can also just press Enter and let Usta suggest the start. `usta start <topic>` shows the **full-mode welcome** (learning status: level, map %, what's next) and starts directly.
+A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (logo + your saved topics), and the input box below asks for the topic — type a word, or describe it in a sentence (the model reduces sentences to a short slug). With a filled `PROJECT.md` you can also just press Enter and Usta will start a conversational suggestion. `usta start <topic>` shows the **full-mode welcome** (learning status: level, map %, what's next) and starts directly.
 
 No TTY or `NO_COLOR=1` → the TUI never opens — it falls back to the plain line mode (pipe/CI/script safe).
 

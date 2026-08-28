@@ -277,6 +277,31 @@ Because there is no queue left to deliver, `/watch polite off` no longer has a "
 
 Design detail: `docs/superpowers/specs/2026-08-27-flow-companion-design.md`.
 
+## 4.22 Entry Flow — Introduction Before Topic Lock (v0.27)
+
+- Bare `usta` on a true first run (no `<global>/learner/.introduced` marker, no
+  evidence of prior use) opens a pre-lock introduction conversation instead of
+  the topic prompt: no question cap — three rules govern it (every question must
+  change what Usta does next; Usta reflects back what it understood as it goes;
+  the exit is announced once and honored without argument). The model locks the
+  topic with a final-line `TOPIC: <slug>` marker; the conversation is stitched
+  into the real session (history + transcript) and no opening/onboarding turn is
+  injected. Quit before lock writes nothing.
+- The marker file is self-seeding: a filled profile or any catalog record
+  grandfathers existing users (`seeded`); completion writes `completed`. Profile
+  reset keeps the marker; factory reset removes it (introduction runs again).
+- Empty Enter with a filled `mentor/PROJECT.md` and no local topics is now a
+  conversational suggestion on the full brain (profile + project ride along),
+  replacing the one-shot `start_suggest_system` and its yes/no confirm gate —
+  agreement happens in conversation.
+- The inferred mentoring role is recorded by the closing flush as the approach
+  file's first line: `role: guided|project|observation` (tokens single-sourced;
+  the shell does not parse it in 13a). With `role: observation` the first-close
+  curriculum lists only session-evidenced items — no speculative full map.
+- The plain/pipe path, `usta start <topic>`, resume, lock/catalog/transcript and
+  the six-file closing flush are unchanged. Design:
+  `docs/superpowers/specs/2026-08-28-entry-flow-rewrite-design.md`.
+
 ## 5. Flow (one learning session)
 
 ```
@@ -379,6 +404,18 @@ usta/
 - **Module size budget (v0.22.0):** a module whose production code (test module excluded) exceeds 600 lines needs a documented reason to stay unsplit. A test module that bloats a file moves to its own file instead (`#[cfg(test)] #[path = "..."] mod tests;`), it doesn't count against the budget. A file carrying that pattern must not become a directory module (`foo.rs` → `foo/mod.rs`) without moving its test file alongside — dropping the `mod tests;` line leaves the test file uncompiled and its tests silently gone, and nothing in CI pins the test count to catch it. Grew out of `main.rs` reaching 3045 lines with no rubric anywhere ever asking "has this file grown too large" — see `docs/superpowers/specs/2026-08-16-module-split-design.md`. Version: `0.22.0`.
 - **Module size budget, status (v0.23.0):** the two modules over budget when the rule shipped — `tui/run.rs` (1185) and `tui/welcome.rs` (797) — were split (cleanup round); no module in the crate exceeds the budget now. `run()` itself stays 562 lines inside the 591-line `tui/run.rs` by documented exception (zero test coverage on the function, five mutable values live across `.await` in its `select!`) — see `docs/superpowers/specs/2026-08-17-cleanup-round-design.md`. Version: `0.23.0`.
 - **Polite watcher (v0.24.0):** the `?` heuristic is enough to track an open question — deliberately no LLM protocol flag for "awaiting answer" (prompt diet, §4.20 principle applied here too). The session's `/watch polite` override is not persisted to the approach file — it's a per-session choice, `watch: live` in the approach file remains the only durable opt-out. Version: `0.24.0`.
+- **Entry flow 13a (v0.27.0):** the introduction moved BEFORE topic lock as a
+  re-ordering of the existing MEET_BLOCK conversation, not a new gated phase —
+  its 1-2 question cap was deliberately dropped for the pre-lock conversation
+  (three conversation rules replace the number; a cap may return later from real
+  transcripts). Role is inferred, never asked as a menu, and lives in the topic's
+  approach file (the `## Goal` precedent — not user-scoped, no role logic in the
+  shell for 13a). First-run detection is a persisted marker
+  (`learner/.introduced`) with evidence seeding — `profile_is_generic` cannot
+  carry it. Blocker H2 closed structurally: the introduction is the head of the
+  real session, so by any flush the topic exists and the ordinary closing
+  contract owns the output; quitting before lock writes nothing (YAGNI: no
+  profile-only flush).
 
 ## 12. Open Decision Points (clarified in the implementation plan)
 
