@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use notify::event::ModifyKind;
 use notify::{EventKind, RecursiveMode, Watcher};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tokio::time::Instant;
@@ -91,18 +92,28 @@ pub fn is_ignored(path: &Path) -> bool {
 }
 
 /// Decide whether a changed path is worth forwarding. Ignored paths never
-/// are. A LIVE directory only matters when it appears or disappears — a
-/// structure signal (spec D1) — so it forwards only on Create/Remove;
-/// Modify on a directory is contents noise (the file inside gets its own
-/// event). Files, and paths that no longer exist (deletions, rename
-/// sources), forward on every kind: classification happens at flush time
-/// (polite::classify_flush), where existence is probed exactly once.
+/// are. A LIVE directory only matters when it appears, disappears, or is
+/// renamed — a structure signal (spec D1) — so it forwards on
+/// Create/Remove and on a rename (`Modify(Name(_))`, the destination side
+/// of a directory rename lands here: the path exists as a directory with a
+/// `Name` modify kind, e.g. `notify`'s FSEvents backend on rename produces
+/// `Modify(Name(Any))` for the new path). Ordinary Modify on a directory
+/// (`Data`, `Metadata`, `Any`, `Other`) is contents noise — a directory's
+/// mtime changes whenever a child changes, and the file inside gets its own
+/// event — so it is NOT forwarded, or every save would flood the channel
+/// with the parent directory. Files, and paths that no longer exist
+/// (deletions, rename sources), forward on every kind: classification
+/// happens at flush time (polite::classify_flush), where existence is
+/// probed exactly once.
 pub fn should_forward(path: &Path, kind: &EventKind) -> bool {
     if is_ignored(path) {
         return false;
     }
     if path.is_dir() {
-        return matches!(kind, EventKind::Create(_) | EventKind::Remove(_));
+        return matches!(
+            kind,
+            EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+        );
     }
     true
 }
@@ -197,7 +208,7 @@ impl Debouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{CreateKind, ModifyKind, RemoveKind};
+    use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
     use std::time::Duration;
     use tokio::time::Instant;
 
@@ -320,10 +331,10 @@ mod tests {
 
     #[test]
     fn should_forward_live_directory_only_on_structure_kinds() {
-        // A directory APPEARING is a structure signal (spec D1: "boş dizin
-        // dosya olayı üretmiyor" was the invisible half of the
-        // brands/marka-a assignment); a Modify on a live directory is
-        // contents noise — the file inside gets its own event. The
+        // A directory APPEARING is a structure signal (spec D1: "an empty
+        // directory produces no file event" was the invisible half of the
+        // brands/marka-a assignment); a generic Modify on a live directory
+        // is contents noise — the file inside gets its own event. The
         // Remove case is NOT exercised here: by the time a real Remove
         // event fires, the directory is gone from disk, so `is_dir()` is
         // false — see `should_forward_vanished_directory_on_remove`.
@@ -352,6 +363,39 @@ mod tests {
     }
 
     #[test]
+    fn should_forward_directory_rename_destination() {
+        // A directory rename's destination side: the new path exists as a
+        // directory and the observed kind is `Modify(Name(_))` (confirmed
+        // empirically against `recommended_watcher` — see task report). Must
+        // pass, or the mentor never learns a directory reappeared under a
+        // new name (only that the old one vanished).
+        let dir = std::env::temp_dir().join(format!(
+            "usta_watcher_forward_rename_dest_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(should_forward(
+            &dir,
+            &EventKind::Modify(ModifyKind::Name(RenameMode::Any))
+        ));
+        assert!(should_forward(
+            &dir,
+            &EventKind::Modify(ModifyKind::Name(RenameMode::To))
+        ));
+        // Ordinary directory Modify kinds must still be filtered — a
+        // directory's mtime/metadata changes whenever a child changes.
+        assert!(!should_forward(
+            &dir,
+            &EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any))
+        ));
+        assert!(!should_forward(
+            &dir,
+            &EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any))
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn should_forward_files_and_vanished_paths_on_every_kind() {
         let file = std::env::temp_dir().join(format!(
             "usta_watcher_forward_file_{}.rs",
@@ -374,6 +418,28 @@ mod tests {
             Path::new(".git/HEAD"),
             &EventKind::Remove(RemoveKind::File)
         ));
+    }
+
+    #[test]
+    fn should_forward_pins_ignore_check_before_directory_gate() {
+        // Precedence pin: `is_ignored` must run BEFORE the directory gate.
+        // A real, existing ignored directory (e.g. under `target/`) hitting
+        // a structure-kind event (Create) must still be filtered. If the
+        // directory gate were checked first, an ignored directory would
+        // pass it (Create matches) and never reach the ignore filter —
+        // verified locally by swapping the order in `should_forward` and
+        // confirming this test fails (see task report for the transcript).
+        let base = std::env::temp_dir().join(format!(
+            "usta_watcher_ignore_precedence_{}",
+            std::process::id()
+        ));
+        let ignored_dir = base.join("target").join("debug_stuff");
+        std::fs::create_dir_all(&ignored_dir).unwrap();
+        assert!(!should_forward(
+            &ignored_dir,
+            &EventKind::Create(CreateKind::Folder)
+        ));
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
