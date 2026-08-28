@@ -429,15 +429,34 @@ fn ride_along_turn(
 /// (spec §4.6) would never fire in the default companion mode, since delivery
 /// is the only path a companion-mode save takes. Running it at DELIVERY rather
 /// than at every flush also keeps the silent accumulation phase free of
-/// compiles.
+/// compiles. `any_non_exercise` is derived from CONTENT alone, so a
+/// structure-only delivery (spec D2) never trips the check — the gate is
+/// correct by construction, no extra condition needed.
+///
+/// `notes` are structure lines (spec D2: new directories, deleted known
+/// files, removed known directories) — paths only, never contents. They lead
+/// the payload, ahead of any file blocks, so the model sees what changed in
+/// the tree before what changed inside files.
 pub(crate) async fn deliver_pending(
     files: &mut feedback::FileMemory,
     project_root: &Path,
     paths: &[PathBuf],
+    notes: &[String],
     user_text: String,
 ) -> (Vec<String>, String) {
-    let (payload, meta) = build_batch_payload(files, project_root, paths);
-    if meta.total_included == 0 {
+    let (mut payload, meta) = build_batch_payload(files, project_root, paths);
+    if !notes.is_empty() {
+        // Structure lines lead the payload (spec D2): paths only, never
+        // contents — the directory-contents decision stands; what was wrong
+        // was dropping the EVENT entirely.
+        let block = format!("STRUCTURE: project tree changes\n{}", notes.join("\n"));
+        payload = if payload.is_empty() {
+            block
+        } else {
+            format!("{block}\n\n{payload}")
+        };
+    }
+    if meta.total_included == 0 && notes.is_empty() {
         return (meta.notices, user_text);
     }
     let check = if meta.any_non_exercise {
@@ -831,8 +850,14 @@ mod tests {
         let file = dir.join("main.rs");
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let mut files = feedback::FileMemory::new();
-        let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], "done, take a look".to_string()).await;
+        let (notices, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[file],
+            &[],
+            "done, take a look".to_string(),
+        )
+        .await;
         assert!(notices.is_empty());
         assert!(outgoing.starts_with(PENDING_PREAMBLE));
         let pos_payload = outgoing.find("FILE:").unwrap();
@@ -852,8 +877,14 @@ mod tests {
         let dir = scratch_dir("deliver-pending-empty");
         let gone = dir.join("gone.rs");
         let mut files = feedback::FileMemory::new();
-        let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[gone], "just a question".to_string()).await;
+        let (notices, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[gone],
+            &[],
+            "just a question".to_string(),
+        )
+        .await;
         assert!(notices.is_empty());
         assert_eq!(outgoing, "just a question");
         std::fs::remove_dir_all(&dir).ok();
@@ -871,7 +902,7 @@ mod tests {
         std::fs::write(&big, "x".repeat(feedback::MAX_FILE_BYTES + 1)).unwrap();
         let mut files = feedback::FileMemory::new();
         let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[ex, big], "done".to_string()).await;
+            deliver_pending(&mut files, &dir, &[ex, big], &[], "done".to_string()).await;
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains("large file"));
         assert!(outgoing.contains("AS AN EXERCISE"));
@@ -903,8 +934,14 @@ mod tests {
         std::fs::write(&file, final_state).unwrap();
 
         // Deliver pending; payload is built at delivery time from the final state
-        let (notices, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], "ready for review".to_string()).await;
+        let (notices, outgoing) = deliver_pending(
+            &mut files,
+            &dir,
+            &[file],
+            &[],
+            "ready for review".to_string(),
+        )
+        .await;
 
         // Sanity checks
         assert!(notices.is_empty());
@@ -952,7 +989,7 @@ mod tests {
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let mut files = feedback::FileMemory::new();
         let (_, outgoing) =
-            deliver_pending(&mut files, &dir, &[file], "have a look".to_string()).await;
+            deliver_pending(&mut files, &dir, &[file], &[], "have a look".to_string()).await;
         assert!(
             outgoing.contains("[cargo check result — FOR YOUR EYES ONLY"),
             "a non-exercise delivery must carry the eyes-only check block"
@@ -978,12 +1015,49 @@ mod tests {
         std::fs::create_dir_all(ex.parent().unwrap()).unwrap();
         std::fs::write(&ex, "my answer\n").unwrap();
         let mut files = feedback::FileMemory::new();
-        let (_, outgoing) = deliver_pending(&mut files, &dir, &[ex], "done".to_string()).await;
+        let (_, outgoing) = deliver_pending(&mut files, &dir, &[ex], &[], "done".to_string()).await;
         assert!(outgoing.contains("AS AN EXERCISE"));
         assert!(
             !outgoing.contains("cargo check result"),
             "an exercise-only delivery must not run the check"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_ships_structure_only_batches_in_the_lesson_frame() {
+        // "Did you create those folders?" must never be asked again
+        // (finding D): a structure-only delivery is a real delivery — the
+        // note line IS the evidence the audit rule (flow_frame rule 1)
+        // verifies. Content is never sent for directories; only the line.
+        let dir = scratch_dir("deliver-structure-only");
+        let notes = vec!["+ brands/marka-a/ (new directory)".to_string()];
+        let mut files = feedback::FileMemory::new();
+        let (notices, outgoing) =
+            deliver_pending(&mut files, &dir, &[], &notes, "done".to_string()).await;
+        assert!(notices.is_empty());
+        assert!(outgoing.starts_with(PENDING_PREAMBLE));
+        assert!(outgoing.contains("STRUCTURE: project tree changes"));
+        assert!(outgoing.contains("+ brands/marka-a/ (new directory)"));
+        assert!(outgoing.contains("part of the ongoing lesson"));
+        assert!(outgoing.trim_end().ends_with("done"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_structure_block_precedes_file_blocks() {
+        let dir = scratch_dir("deliver-structure-order");
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let notes = vec!["- src/old.rs (deleted)".to_string()];
+        let mut files = feedback::FileMemory::new();
+        let (_, outgoing) =
+            deliver_pending(&mut files, &dir, &[file], &notes, "take a look".to_string()).await;
+        let pos_structure = outgoing.find("STRUCTURE: project tree changes").unwrap();
+        let pos_file = outgoing.find("FILE:").unwrap();
+        let pos_user = outgoing.rfind("take a look").unwrap();
+        assert!(pos_structure < pos_file, "structure line leads the payload");
+        assert!(pos_file < pos_user, "the user's words stay last (spec K2)");
         std::fs::remove_dir_all(&dir).ok();
     }
 

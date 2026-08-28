@@ -50,7 +50,6 @@ impl FileMemory {
     /// structure classification uses it to tell "a known file was deleted"
     /// (worth a structure note, spec D1) from "a transient temp path
     /// vanished" (silence, as today).
-    #[allow(dead_code)] // staged: consumed by the structure ride-along task
     pub fn knows(&self, path: &Path) -> bool {
         self.seen.contains_key(path)
     }

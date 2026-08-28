@@ -317,6 +317,7 @@ pub async fn run(
     // Mentor docs are already in the system prompt — baseline them so an
     // unchanged re-save is a Skip, not a redundant full re-send (FIX: first-sight seed).
     crate::file_feedback::seed_mentor_baseline(&mut files, project_root);
+    let mut tracker = watcher::StructureTracker::seed(project_root);
     let mut last_tokens: Option<u64> = None;
     let window = backend.context_window();
 
@@ -584,7 +585,7 @@ pub async fn run(
             }
             _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
                 // Watcher flush: routing + action live in polite::dispatch_flush (spec K1/K2) — run.rs keeps the call site only.
-                crate::tui::polite::dispatch_flush(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, debouncer.flush(), max_feedback_batch, watching, live, &mut pending).await?;
+                crate::tui::polite::dispatch_flush(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, debouncer.flush(), max_feedback_batch, watching, live, &mut pending, &mut tracker).await?;
             }
         }
     }

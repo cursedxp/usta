@@ -54,15 +54,61 @@ pub(crate) fn route(batch_len: usize, max_batch: usize, watching: bool, live: bo
     }
 }
 
-/// Accumulated-but-undelivered watcher batches (spec K2): only PATHS are
-/// held — the payload is built at delivery time via
-/// `file_feedback::deliver_pending`, so intermediate saves collapse into one
-/// diff. Order preserved, repeats collapsed. `len` feeds the status line's
-/// deterministic counter (spec K3); `take` drains, which is also the counter
-/// reset.
+/// Flush-time split of a debounced batch into CONTENT paths (existing
+/// files — the payload pipeline as before) and STRUCTURE notes (spec D1):
+/// new directories, deleted known files, removed known directories. Paths
+/// that vanished without ever being known stay silent — the transient-temp
+/// class is_silent_skip swallows today. Deterministic; existence is probed
+/// HERE, once, so classification can't rot between event and delivery. The
+/// tracker updates even while watching is off, so re-enabling never
+/// misreports old directories as new.
+pub(crate) fn classify_flush(
+    batch: Vec<PathBuf>,
+    tracker: &mut crate::watcher::StructureTracker,
+    files: &FileMemory,
+    project_root: &Path,
+) -> (Vec<PathBuf>, Vec<String>) {
+    let mut content = Vec::new();
+    let mut notes = Vec::new();
+    for path in batch {
+        let rel = path
+            .strip_prefix(project_root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        if path.is_dir() {
+            if tracker.note_new_dir(&path) {
+                notes.push(format!("+ {rel}/ (new directory)"));
+            }
+        } else if path.is_file() {
+            content.push(path);
+        } else if tracker.note_removed(&path) {
+            notes.push(format!("- {rel}/ (directory removed)"));
+        } else if files.knows(&path) {
+            notes.push(format!("- {rel} (deleted)"));
+        }
+        // else: a vanished path nobody ever knew — transient noise, silent.
+    }
+    (content, notes)
+}
+
+/// Cap on held structure notes — a branch switch can delete hundreds of
+/// files; past this the rest collapses into one overflow line at take().
+pub(crate) const MAX_STRUCTURE_NOTES: usize = 20;
+
+/// Accumulated-but-undelivered watcher batches (spec K2) plus structure
+/// notes (spec D2): only PATHS and one-line notes are held — file payloads
+/// are built at delivery time via `file_feedback::deliver_pending`, so
+/// intermediate saves collapse into one diff, and directory CONTENTS are
+/// never sent at all. Order preserved, repeats collapsed. `len` feeds the
+/// status line's deterministic counter (spec K3) and counts paths, notes
+/// and suppressed-overflow alike; `take` drains everything, which is also
+/// the counter reset.
 #[derive(Default)]
 pub(crate) struct PendingChanges {
     paths: Vec<PathBuf>,
+    notes: Vec<String>,
+    suppressed: usize,
 }
 
 impl PendingChanges {
@@ -79,17 +125,38 @@ impl PendingChanges {
         }
     }
 
+    /// Accumulate structure notes — exact repeats collapse; overflow past
+    /// the cap is counted and rendered as one honest line at take().
+    pub(crate) fn hold_notes(&mut self, notes: Vec<String>) {
+        for n in notes {
+            if self.notes.contains(&n) {
+                continue;
+            }
+            if self.notes.len() >= MAX_STRUCTURE_NOTES {
+                self.suppressed += 1;
+            } else {
+                self.notes.push(n);
+            }
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
-        self.paths.len()
+        self.paths.len() + self.notes.len() + self.suppressed
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.paths.is_empty()
+        self.paths.is_empty() && self.notes.is_empty() && self.suppressed == 0
     }
 
-    /// Drain for delivery — resets the counter (spec K3).
-    pub(crate) fn take(&mut self) -> Vec<PathBuf> {
-        std::mem::take(&mut self.paths)
+    /// Drain for delivery — resets the counter (spec K3). The overflow
+    /// count collapses into its one line here.
+    pub(crate) fn take(&mut self) -> (Vec<PathBuf>, Vec<String>) {
+        let mut notes = std::mem::take(&mut self.notes);
+        if self.suppressed > 0 {
+            notes.push(format!("… and {} more structural changes", self.suppressed));
+            self.suppressed = 0;
+        }
+        (std::mem::take(&mut self.paths), notes)
     }
 }
 
@@ -137,8 +204,8 @@ pub(crate) async fn drain_and_deliver(
     if !watching || pending.is_empty() {
         return (Vec::new(), user_text);
     }
-    let paths = pending.take();
-    crate::file_feedback::deliver_pending(files, project_root, &paths, user_text).await
+    let (paths, notes) = pending.take();
+    crate::file_feedback::deliver_pending(files, project_root, &paths, &notes, user_text).await
 }
 
 /// Turning watching OFF discards whatever the watcher already queued. Without
@@ -155,7 +222,8 @@ pub(crate) fn drop_pending_on_watch_off(
     if watching || pending.is_empty() {
         return None;
     }
-    let dropped = pending.take().len();
+    let dropped = pending.len();
+    let _ = pending.take();
     Some(format!(
         "{dropped} noted change(s) dropped — they will not be sent"
     ))
@@ -305,10 +373,20 @@ pub(crate) async fn dispatch_flush(
     watching: bool,
     live: bool,
     pending: &mut PendingChanges,
+    tracker: &mut crate::watcher::StructureTracker,
 ) -> Result<()> {
-    match route(batch.len(), max_batch, watching, live) {
-        Route::Bulk => bulk_skip(tui, files, batch)?,
-        Route::ObserveOnly => sync_baseline(files, batch),
+    // Flush-time classification (spec D1): existence is probed NOW; the
+    // tracker updates even with watching off, so re-enabling stays honest.
+    let (content, notes) = classify_flush(batch, tracker, files, project_root);
+    if watching && !notes.is_empty() {
+        // Structure notes never open a turn in ANY mode — they ride the
+        // user's next submit (spec D2), so K1 holds for mkdir too.
+        pending.hold_notes(notes);
+    }
+    let picked = route(content.len(), max_batch, watching, live);
+    match picked {
+        Route::Bulk => bulk_skip(tui, files, content)?,
+        Route::ObserveOnly => sync_baseline(files, content),
         // Live mode — the user's explicit timing choice: immediate turn.
         Route::Feedback => {
             process_batch(
@@ -322,12 +400,12 @@ pub(crate) async fn dispatch_flush(
                 project_root,
                 topic,
                 last_tokens,
-                &batch,
+                &content,
             )
             .await?
         }
         // Companion default: accumulate; delivery rides the next submit (K2).
-        Route::Hold => pending.hold(batch),
+        Route::Hold => pending.hold(content),
     }
     Ok(())
 }
@@ -426,7 +504,7 @@ mod tests {
         assert_eq!(p.len(), 3);
         // Order preserved, repeats collapsed (spec: Davranış/Akış step 1).
         assert_eq!(
-            p.take(),
+            p.take().0,
             vec![
                 PathBuf::from("a.rs"),
                 PathBuf::from("b.rs"),
@@ -435,7 +513,92 @@ mod tests {
         );
         // take() drains — the status counter resets with it (spec K3).
         assert!(p.is_empty());
-        assert!(p.take().is_empty());
+        assert!(p.take().0.is_empty());
+    }
+
+    #[test]
+    fn pending_notes_dedup_cap_and_overflow_line() {
+        let mut p = PendingChanges::new();
+        p.hold_notes(vec![
+            "+ a/ (new directory)".to_string(),
+            "+ a/ (new directory)".to_string(),
+        ]);
+        assert_eq!(p.len(), 1, "exact repeats collapse");
+        // A branch switch can delete hundreds of files — past the cap the
+        // rest is counted and collapses into ONE overflow line at take().
+        let many: Vec<String> = (0..30).map(|i| format!("- f{i}.rs (deleted)")).collect();
+        p.hold_notes(many);
+        assert_eq!(
+            p.len(),
+            31,
+            "the counter stays honest about suppressed notes"
+        );
+        let (paths, notes) = p.take();
+        assert!(paths.is_empty());
+        assert_eq!(notes.len(), MAX_STRUCTURE_NOTES + 1);
+        assert!(notes.last().unwrap().contains("11 more structural changes"));
+        assert!(
+            p.is_empty(),
+            "take() drains notes and the overflow count too"
+        );
+    }
+
+    #[test]
+    fn classify_flush_five_way_table() {
+        let base = scratch("classify");
+        std::fs::create_dir_all(base.join("known")).unwrap();
+        let file = base.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let mut tracker = crate::watcher::StructureTracker::seed(&base);
+        let mut files = FileMemory::new();
+        let deleted_known = base.join("old.rs");
+        files.seed(&deleted_known, "gone\n".to_string());
+
+        let new_dir = base.join("brands");
+        std::fs::create_dir_all(&new_dir).unwrap();
+        let vanished_unknown = base.join("_transient_tmp.rs");
+
+        let (content, notes) = classify_flush(
+            vec![
+                file.clone(),
+                new_dir.clone(),
+                base.join("known"),
+                deleted_known.clone(),
+                vanished_unknown,
+            ],
+            &mut tracker,
+            &files,
+            &base,
+        );
+        // Existing file → content path (unchanged pipeline).
+        assert_eq!(content, vec![file]);
+        // New dir noted, pre-existing dir silent, deleted KNOWN file noted,
+        // vanished unknown path silent (transient noise, as today).
+        assert_eq!(
+            notes,
+            vec![
+                "+ brands/ (new directory)".to_string(),
+                "- old.rs (deleted)".to_string()
+            ]
+        );
+        // Second sighting of the same dir is silent — the tracker learned it.
+        let (_, notes2) = classify_flush(vec![new_dir], &mut tracker, &files, &base);
+        assert!(notes2.is_empty());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn classify_flush_reports_removed_known_directory() {
+        let base = scratch("classify-rmdir");
+        let dir = base.join("assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut tracker = crate::watcher::StructureTracker::seed(&base);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let files = FileMemory::new();
+        let (content, notes) = classify_flush(vec![dir], &mut tracker, &files, &base);
+        assert!(content.is_empty());
+        assert_eq!(notes, vec!["- assets/ (directory removed)".to_string()]);
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
@@ -483,12 +646,15 @@ mod tests {
         // text can't match itself. Deleting an arm's body would otherwise
         // leave the suite green while a whole route silently died — the
         // exact failure class these pins exist for.
+        // v0.29.0: the batch is classified first — the route sees CONTENT
+        // only, structure notes are held before routing.
         let production_src = include_str!("polite.rs")
             .split("#[cfg(test)]")
             .next()
             .unwrap();
         for needle in [
-            "match route(batch.len()",
+            "let picked = route(content.len()",
+            "pending.hold_notes(notes)",
             "Route::Bulk => bulk_skip(",
             "Route::ObserveOnly => sync_baseline(",
             "Route::Hold => pending.hold(",
@@ -640,9 +806,10 @@ mod tests {
         // the status counter disappears the moment watching goes off.
         let mut pending = PendingChanges::new();
         pending.hold(vec![PathBuf::from("/tmp/a.rs"), PathBuf::from("/tmp/b.rs")]);
+        pending.hold_notes(vec!["+ x/ (new directory)".into()]);
         let notice = drop_pending_on_watch_off(false, &mut pending).expect("a notice is due");
         assert!(
-            notice.contains('2'),
+            notice.contains('3'),
             "the notice names how many were dropped: {notice}"
         );
         assert!(pending.is_empty(), "the queue must be dropped");

@@ -124,12 +124,10 @@ pub fn should_forward(path: &Path, kind: &EventKind) -> bool {
 /// two questions and never reads contents (directory contents are never
 /// sent — the v0.24-era decision stands, only the EVENT is no longer
 /// dropped).
-#[allow(dead_code)] // staged: consumed by the structure ride-along task
 pub struct StructureTracker {
     dirs: std::collections::BTreeSet<PathBuf>,
 }
 
-#[allow(dead_code)] // staged: consumed by the structure ride-along task
 impl StructureTracker {
     /// Walk `root` and record every non-ignored directory that exists now.
     pub fn seed(root: &Path) -> Self {
