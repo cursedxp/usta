@@ -37,9 +37,12 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
         let _watcher = watcher;
         for res in ev_rx {
             let Ok(event) = res else { continue };
-            if matches!(event.kind, EventKind::Modify(_)) {
+            if matches!(
+                event.kind,
+                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+            ) {
                 for path in event.paths {
-                    if !should_forward(&path) {
+                    if !should_forward(&path, &event.kind) {
                         continue;
                     }
                     // End the thread if the REPL receiver has closed.
@@ -87,12 +90,69 @@ pub fn is_ignored(path: &Path) -> bool {
     })
 }
 
-/// Decide whether a changed path is feedback-worthy: not ignored, and not a
-/// directory. Directories (e.g. `cargo new` creating `src/`) never carry
-/// feedback-worthy content — drop them at the source rather than letting
-/// them reach the read path.
-pub fn should_forward(path: &Path) -> bool {
-    !is_ignored(path) && !path.is_dir()
+/// Decide whether a changed path is worth forwarding. Ignored paths never
+/// are. A LIVE directory only matters when it appears or disappears — a
+/// structure signal (spec D1) — so it forwards only on Create/Remove;
+/// Modify on a directory is contents noise (the file inside gets its own
+/// event). Files, and paths that no longer exist (deletions, rename
+/// sources), forward on every kind: classification happens at flush time
+/// (polite::classify_flush), where existence is probed exactly once.
+pub fn should_forward(path: &Path, kind: &EventKind) -> bool {
+    if is_ignored(path) {
+        return false;
+    }
+    if path.is_dir() {
+        return matches!(kind, EventKind::Create(_) | EventKind::Remove(_));
+    }
+    true
+}
+
+/// Session-scoped directory inventory (spec D1): seeded from the project
+/// tree at session start so an event on a PRE-EXISTING directory is never
+/// misreported as "new". Deterministic shell state; classification asks it
+/// two questions and never reads contents (directory contents are never
+/// sent — the v0.24-era decision stands, only the EVENT is no longer
+/// dropped).
+#[allow(dead_code)] // staged: consumed by the structure ride-along task
+pub struct StructureTracker {
+    dirs: std::collections::BTreeSet<PathBuf>,
+}
+
+#[allow(dead_code)] // staged: consumed by the structure ride-along task
+impl StructureTracker {
+    /// Walk `root` and record every non-ignored directory that exists now.
+    pub fn seed(root: &Path) -> Self {
+        let mut tracker = StructureTracker {
+            dirs: std::collections::BTreeSet::new(),
+        };
+        tracker.walk(root);
+        tracker
+    }
+
+    fn walk(&mut self, dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && !is_ignored(&path) {
+                self.dirs.insert(path.clone());
+                self.walk(&path);
+            }
+        }
+    }
+
+    /// Record a directory sighting; true when it was previously unknown —
+    /// the "new directory" signal.
+    pub fn note_new_dir(&mut self, path: &Path) -> bool {
+        self.dirs.insert(path.to_path_buf())
+    }
+
+    /// Record a disappearance; true when the path was a known directory —
+    /// the "directory removed" signal.
+    pub fn note_removed(&mut self, path: &Path) -> bool {
+        self.dirs.remove(path)
+    }
 }
 
 /// Pure debounce state that smooths out a save storm. Editors produce
@@ -137,6 +197,7 @@ impl Debouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind};
     use std::time::Duration;
     use tokio::time::Instant;
 
@@ -258,24 +319,80 @@ mod tests {
     }
 
     #[test]
-    fn should_forward_filters_out_real_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "usta_watcher_test_should_forward_dir_{}",
-            std::process::id()
-        ));
+    fn should_forward_live_directory_only_on_structure_kinds() {
+        // A directory APPEARING is a structure signal (spec D1: "boş dizin
+        // dosya olayı üretmiyor" was the invisible half of the
+        // brands/marka-a assignment); a Modify on a live directory is
+        // contents noise — the file inside gets its own event. The
+        // Remove case is NOT exercised here: by the time a real Remove
+        // event fires, the directory is gone from disk, so `is_dir()` is
+        // false — see `should_forward_vanished_directory_on_remove`.
+        let dir =
+            std::env::temp_dir().join(format!("usta_watcher_forward_kinds_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(!should_forward(&dir));
+        assert!(should_forward(&dir, &EventKind::Create(CreateKind::Folder)));
+        assert!(!should_forward(&dir, &EventKind::Modify(ModifyKind::Any)));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn should_forward_allows_real_file() {
-        let path = std::env::temp_dir().join(format!(
-            "usta_watcher_test_should_forward_file_{}.rs",
+    fn should_forward_vanished_directory_on_remove() {
+        // In real life a directory-removal event fires AFTER the directory
+        // is gone: `path.is_dir()` is false at classification time, so this
+        // takes the "vanished path" branch, not the "live directory"
+        // branch. The two happen to agree here, but only this test proves
+        // it — asserting on a still-existing directory would not.
+        let dir = std::env::temp_dir().join(format!(
+            "usta_watcher_forward_removed_dir_{}",
             std::process::id()
         ));
-        std::fs::write(&path, b"fn main() {}").unwrap();
-        assert!(should_forward(&path));
-        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(should_forward(&dir, &EventKind::Remove(RemoveKind::Folder)));
+    }
+
+    #[test]
+    fn should_forward_files_and_vanished_paths_on_every_kind() {
+        let file = std::env::temp_dir().join(format!(
+            "usta_watcher_forward_file_{}.rs",
+            std::process::id()
+        ));
+        std::fs::write(&file, b"fn main() {}").unwrap();
+        assert!(should_forward(&file, &EventKind::Modify(ModifyKind::Any)));
+        assert!(should_forward(&file, &EventKind::Create(CreateKind::File)));
+        std::fs::remove_file(&file).unwrap();
+        // A vanished path (deletion / rename source): is_dir() is false —
+        // forward; flush-time classification decides what it means.
+        assert!(should_forward(&file, &EventKind::Remove(RemoveKind::File)));
+        assert!(should_forward(&file, &EventKind::Modify(ModifyKind::Any)));
+        // Ignored stays ignored on every kind.
+        assert!(!should_forward(
+            Path::new("target/debug/x.rs"),
+            &EventKind::Modify(ModifyKind::Any)
+        ));
+        assert!(!should_forward(
+            Path::new(".git/HEAD"),
+            &EventKind::Remove(RemoveKind::File)
+        ));
+    }
+
+    #[test]
+    fn structure_tracker_seeds_existing_dirs_and_flags_changes() {
+        let base =
+            std::env::temp_dir().join(format!("usta_watcher_tracker_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        let mut t = StructureTracker::seed(&base);
+        // Pre-existing dir was seeded: sighting it is NOT "new".
+        assert!(!t.note_new_dir(&base.join("src")));
+        // A brand-new dir: first sighting is new, second is not.
+        let fresh = base.join("brands");
+        assert!(t.note_new_dir(&fresh));
+        assert!(!t.note_new_dir(&fresh));
+        // Removal: known dir → true exactly once; unknown → false.
+        assert!(t.note_removed(&fresh));
+        assert!(!t.note_removed(&fresh));
+        assert!(!t.note_removed(&base.join("never-seen")));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

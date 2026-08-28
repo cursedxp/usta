@@ -46,6 +46,15 @@ impl FileMemory {
         self.seen.insert(path.to_path_buf(), content);
     }
 
+    /// Whether this path has ever been seeded or observed. The flush-time
+    /// structure classification uses it to tell "a known file was deleted"
+    /// (worth a structure note, spec D1) from "a transient temp path
+    /// vanished" (silence, as today).
+    #[allow(dead_code)] // staged: consumed by the structure ride-along task
+    pub fn knows(&self, path: &Path) -> bool {
+        self.seen.contains_key(path)
+    }
+
     /// Observe newly saved content, produce the LLM payload, update memory.
     pub fn observe(&mut self, path: &Path, current: String) -> ChangePayload {
         if current.len() > MAX_FILE_BYTES {
@@ -130,6 +139,20 @@ mod tests {
             m.observe(Path::new("mentor/PROJECT.md"), "spec govdesi\n".into()),
             ChangePayload::Skip
         ));
+    }
+
+    #[test]
+    fn knows_reports_seeded_and_observed_paths() {
+        // The flush-time structure classification (spec D1) asks this to
+        // tell "a file the mentor knew was deleted" (structure note) from
+        // "a transient temp path vanished" (silence, as today).
+        let mut m = FileMemory::new();
+        assert!(!m.knows(Path::new("a.rs")));
+        m.seed(Path::new("a.rs"), "x".into());
+        assert!(m.knows(Path::new("a.rs")));
+        let _ = m.observe(Path::new("b.rs"), "y".into());
+        assert!(m.knows(Path::new("b.rs")));
+        assert!(!m.knows(Path::new("c.rs")));
     }
 
     #[test]
