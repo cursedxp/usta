@@ -44,6 +44,72 @@ pub(crate) fn route(batch_len: usize, max_batch: usize, watching: bool) -> Route
     }
 }
 
+/// Accumulated-but-undelivered watcher batches (spec K2): only PATHS are
+/// held — the payload is built at delivery time via
+/// `file_feedback::deliver_pending`, so intermediate saves collapse into one
+/// diff. Order preserved, repeats collapsed. `len` feeds the status line's
+/// deterministic counter (spec K3); `take` drains, which is also the counter
+/// reset.
+#[derive(Default)]
+pub(crate) struct PendingChanges {
+    paths: Vec<PathBuf>,
+}
+
+#[allow(dead_code)] // staged: consumed by the timing-flip task
+impl PendingChanges {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Accumulate a flushed batch — order preserved, duplicates collapsed.
+    pub(crate) fn hold(&mut self, batch: Vec<PathBuf>) {
+        for p in batch {
+            if !self.paths.contains(&p) {
+                self.paths.push(p);
+            }
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Drain for delivery — resets the counter (spec K3).
+    pub(crate) fn take(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.paths)
+    }
+}
+
+/// Ride-along delivery at the user's submit (spec K2): with nothing pending
+/// the user's text passes through untouched; otherwise the pending paths are
+/// drained (counter reset, spec K3), the payload is built at THIS moment, its
+/// notices are printed, and the combined turn — file block first, the user's
+/// words last — is returned for the normal ask path. Deterministic shell
+/// work; no LLM call here.
+#[allow(dead_code)] // staged: consumed by the timing-flip task
+pub(crate) fn attach_pending(
+    tui: &mut Tui,
+    pending: &mut PendingChanges,
+    files: &mut FileMemory,
+    project_root: &Path,
+    user_text: String,
+) -> Result<String> {
+    if pending.is_empty() {
+        return Ok(user_text);
+    }
+    let paths = pending.take();
+    let (notices, outgoing) =
+        crate::file_feedback::deliver_pending(files, project_root, &paths, user_text);
+    for notice in &notices {
+        crate::tui::page::page_notice(tui, notice)?;
+    }
+    Ok(outgoing)
+}
+
 /// Whether any line in `text`, trimmed and lowercased, is `watch: live`.
 /// Selects the timing axis (spec K4): live = immediate feedback.
 pub(crate) fn live_from_approach(text: &str) -> bool {
@@ -245,6 +311,28 @@ mod tests {
         assert_eq!(route(5, 10, true), Feedback);
         // boundary: exactly max is NOT bulk (existing `>` comparison)
         assert_eq!(route(10, 10, true), Feedback);
+    }
+
+    #[test]
+    fn pending_changes_dedup_preserve_order_and_reset_on_take() {
+        let mut p = PendingChanges::new();
+        assert!(p.is_empty());
+        assert_eq!(p.len(), 0);
+        p.hold(vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
+        p.hold(vec![PathBuf::from("a.rs"), PathBuf::from("c.rs")]);
+        assert_eq!(p.len(), 3);
+        // Order preserved, repeats collapsed (spec: Davranış/Akış step 1).
+        assert_eq!(
+            p.take(),
+            vec![
+                PathBuf::from("a.rs"),
+                PathBuf::from("b.rs"),
+                PathBuf::from("c.rs")
+            ]
+        );
+        // take() drains — the status counter resets with it (spec K3).
+        assert!(p.is_empty());
+        assert!(p.take().is_empty());
     }
 
     #[test]

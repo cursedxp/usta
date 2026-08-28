@@ -378,6 +378,45 @@ pub(crate) async fn handle_batch_change(
     ))
 }
 
+/// One-line frame at the head of a ride-along delivery (spec name:
+/// `pending_preamble`). Purely descriptive — the behavioral rules live in
+/// `flow_frame`, which follows it.
+const PENDING_PREAMBLE: &str = "[The user changed the files below while working; they are delivered together with the user's message, which follows after the file block — the user's own words are the message to answer.]";
+
+/// Compose the combined outgoing turn for a ride-along delivery (spec K2):
+/// the one-line pending preamble, the lesson-flow-framed file block
+/// (companion frame axis, spec K4), then the user's own words LAST — their
+/// message is the one to answer (spec: Sıralama ve içerik).
+fn ride_along_turn(files_payload: &str, any_exercise: bool, user_text: &str) -> String {
+    format!(
+        "{PENDING_PREAMBLE}\n{}\n\n{user_text}",
+        flow_frame(files_payload, any_exercise)
+    )
+}
+
+/// Deterministic ride-along delivery (spec K2): build the payload NOW — at
+/// delivery time, not at flush time — so intermediate saves collapse into one
+/// diff and meanwhile-deleted files drop out as silent skips. `.0` is the
+/// notice channel (large/binary files), printed by the caller at delivery;
+/// `.1` is the combined outgoing turn, or `user_text` UNCHANGED when nothing
+/// made it into the payload. No LLM call happens here — the caller sends the
+/// returned string through the normal ask path (prompt diet: only payload and
+/// frame ever reach the model).
+#[allow(dead_code)] // staged: consumed by the timing-flip task
+pub(crate) fn deliver_pending(
+    files: &mut feedback::FileMemory,
+    project_root: &Path,
+    paths: &[PathBuf],
+    user_text: String,
+) -> (Vec<String>, String) {
+    let (payload, meta) = build_batch_payload(files, project_root, paths);
+    if meta.total_included == 0 {
+        return (meta.notices, user_text);
+    }
+    let turn = ride_along_turn(&payload, meta.any_exercise, &user_text);
+    (meta.notices, turn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +729,76 @@ mod tests {
         assert!(payload.is_empty());
         assert!(meta.notices.is_empty());
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ride_along_turn_selects_flow_frame_and_keeps_user_words_last() {
+        // Companion frame axis (spec K4): ride-along wraps the payload in
+        // flow_frame — the plain-review wording must NOT appear. This is the
+        // direct-test replacement for the old polite_branch source pin (the
+        // frame choice is now pure and testable, so no crude pin is needed).
+        let t = ride_along_turn(
+            "FILE: src/main.rs (full contents)\nfn main() {}",
+            false,
+            "here is my report",
+        );
+        assert!(t.starts_with(PENDING_PREAMBLE));
+        assert!(t.contains("part of the ongoing lesson"));
+        assert!(!t.contains("Give project-grounded"));
+        // The user's words are the LAST word (spec: Sıralama ve içerik).
+        assert!(t.trim_end().ends_with("here is my report"));
+    }
+
+    #[test]
+    fn deliver_pending_rides_payload_before_user_text() {
+        let dir = scratch_dir("deliver-pending");
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let mut files = feedback::FileMemory::new();
+        let (notices, outgoing) =
+            deliver_pending(&mut files, &dir, &[file], "done, take a look".to_string());
+        assert!(notices.is_empty());
+        assert!(outgoing.starts_with(PENDING_PREAMBLE));
+        let pos_payload = outgoing.find("FILE:").unwrap();
+        let pos_user = outgoing.rfind("done, take a look").unwrap();
+        assert!(
+            pos_payload < pos_user,
+            "payload must precede the user's text"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deliver_pending_everything_dropped_returns_user_text_unchanged() {
+        // A vanished file (deleted between hold and delivery) is a silent
+        // skip; with nothing left, NO payload is attached (spec:
+        // total_included == 0 → payload eklenmez).
+        let dir = scratch_dir("deliver-pending-empty");
+        let gone = dir.join("gone.rs");
+        let mut files = feedback::FileMemory::new();
+        let (notices, outgoing) =
+            deliver_pending(&mut files, &dir, &[gone], "just a question".to_string());
+        assert!(notices.is_empty());
+        assert_eq!(outgoing, "just a question");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deliver_pending_flags_exercise_batches_and_keeps_notices() {
+        let dir = scratch_dir("deliver-pending-exercise");
+        let ex = dir.join("exercises").join("rust").join("notes.md");
+        std::fs::create_dir_all(ex.parent().unwrap()).unwrap();
+        std::fs::write(&ex, "my answer\n").unwrap();
+        // An oversized companion file exercises the notice channel at delivery
+        // (spec: build_batch_payload'ın mevcut notis kanalı korunur).
+        let big = dir.join("big.rs");
+        std::fs::write(&big, "x".repeat(feedback::MAX_FILE_BYTES + 1)).unwrap();
+        let mut files = feedback::FileMemory::new();
+        let (notices, outgoing) = deliver_pending(&mut files, &dir, &[ex, big], "done".to_string());
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("large file"));
+        assert!(outgoing.contains("AS AN EXERCISE"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
