@@ -15,9 +15,9 @@ pub(crate) enum WatchCmd {
     On,
     Off,
     Toggle,
-    PoliteOn,
-    PoliteOff,
-    PoliteToggle,
+    LiveOn,
+    LiveOff,
+    LiveToggle,
 }
 
 pub(crate) fn parse_watch_command(line: &str) -> Option<WatchCmd> {
@@ -26,9 +26,9 @@ pub(crate) fn parse_watch_command(line: &str) -> Option<WatchCmd> {
         "/watch" => Some(WatchCmd::Toggle),
         "/watch on" => Some(WatchCmd::On),
         "/watch off" => Some(WatchCmd::Off),
-        "/watch polite" => Some(WatchCmd::PoliteToggle),
-        "/watch polite on" => Some(WatchCmd::PoliteOn),
-        "/watch polite off" => Some(WatchCmd::PoliteOff),
+        "/watch live" => Some(WatchCmd::LiveToggle),
+        "/watch live on" => Some(WatchCmd::LiveOn),
+        "/watch live off" => Some(WatchCmd::LiveOff),
         _ => None,
     }
 }
@@ -38,8 +38,8 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
         WatchCmd::On => true,
         WatchCmd::Off => false,
         WatchCmd::Toggle => !cur,
-        // Polite variants never reach this function; defensive, not unreachable!.
-        WatchCmd::PoliteOn | WatchCmd::PoliteOff | WatchCmd::PoliteToggle => cur,
+        // Live variants never reach this function; defensive, not unreachable!.
+        WatchCmd::LiveOn | WatchCmd::LiveOff | WatchCmd::LiveToggle => cur,
     };
     let msg = if next {
         "companion on — watching your files"
@@ -49,21 +49,23 @@ pub(crate) fn apply_watch(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
     (next, msg)
 }
 
-/// Frame toggle for `/watch polite`: on, file feedback is framed as part of
-/// the ongoing lesson; off, it's a plain code review. Timing is unaffected —
-/// feedback is immediate either way. Only ever called with the `Polite*`
-/// variants; other variants return `cur` unchanged (defensive, not `unreachable!`).
-pub(crate) fn apply_polite(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
+/// Timing toggle for `/watch live` (spec K4): on, every debounce flush opens
+/// an immediate plain-review turn; off (the default), changes accumulate and
+/// ride along with the user's next message. Session-only, never persisted —
+/// the per-topic default is the approach file's `watch: live` line. Only ever
+/// called with the `Live*` variants; other variants return `cur` unchanged
+/// (defensive, not `unreachable!`).
+pub(crate) fn apply_live(cmd: WatchCmd, cur: bool) -> (bool, &'static str) {
     let next = match cmd {
-        WatchCmd::PoliteOn => true,
-        WatchCmd::PoliteOff => false,
-        WatchCmd::PoliteToggle => !cur,
+        WatchCmd::LiveOn => true,
+        WatchCmd::LiveOff => false,
+        WatchCmd::LiveToggle => !cur,
         WatchCmd::On | WatchCmd::Off | WatchCmd::Toggle => return (cur, ""),
     };
     let msg = if next {
-        "polite mode on — companion follows your lesson flow"
+        "live feedback on — every save gets an immediate review"
     } else {
-        "polite mode off — plain review feedback"
+        "live feedback off — changes ride along with your next message"
     };
     (next, msg)
 }
@@ -296,40 +298,45 @@ mod tests {
     }
 
     #[test]
-    fn parse_watch_polite_variants() {
+    fn parse_watch_live_variants() {
         assert_eq!(
-            parse_watch_command("/watch polite"),
-            Some(WatchCmd::PoliteToggle)
+            parse_watch_command("/watch live"),
+            Some(WatchCmd::LiveToggle)
         );
         assert_eq!(
-            parse_watch_command("/watch polite on"),
-            Some(WatchCmd::PoliteOn)
+            parse_watch_command("/watch live on"),
+            Some(WatchCmd::LiveOn)
         );
         assert_eq!(
-            parse_watch_command("/watch polite off"),
-            Some(WatchCmd::PoliteOff)
+            parse_watch_command("/watch live off"),
+            Some(WatchCmd::LiveOff)
         );
         assert_eq!(
-            parse_watch_command("/WATCH POLITE OFF"),
-            Some(WatchCmd::PoliteOff)
+            parse_watch_command("/WATCH LIVE OFF"),
+            Some(WatchCmd::LiveOff)
         );
-        assert_eq!(parse_watch_command("/watch politely"), None);
+        assert_eq!(parse_watch_command("/watch lively"), None);
+        // The old surface is gone — `polite` no longer parses (spec K4).
+        assert_eq!(parse_watch_command("/watch polite"), None);
+        assert_eq!(parse_watch_command("/watch polite on"), None);
     }
 
     #[test]
-    fn apply_polite_transitions() {
-        assert!(apply_polite(WatchCmd::PoliteOn, false).0);
-        assert!(!apply_polite(WatchCmd::PoliteOff, true).0);
-        assert!(apply_polite(WatchCmd::PoliteToggle, false).0);
-        assert!(!apply_polite(WatchCmd::PoliteToggle, true).0);
+    fn apply_live_transitions() {
+        assert!(apply_live(WatchCmd::LiveOn, false).0);
+        assert!(!apply_live(WatchCmd::LiveOff, true).0);
+        assert!(apply_live(WatchCmd::LiveToggle, false).0);
+        assert!(!apply_live(WatchCmd::LiveToggle, true).0);
         assert_eq!(
-            apply_polite(WatchCmd::PoliteOn, false).1,
-            "polite mode on — companion follows your lesson flow"
+            apply_live(WatchCmd::LiveOn, false).1,
+            "live feedback on — every save gets an immediate review"
         );
         assert_eq!(
-            apply_polite(WatchCmd::PoliteOff, true).1,
-            "polite mode off — plain review feedback"
+            apply_live(WatchCmd::LiveOff, true).1,
+            "live feedback off — changes ride along with your next message"
         );
+        // Non-live variants pass through untouched (defensive arm).
+        assert_eq!(apply_live(WatchCmd::On, true), (true, ""));
     }
 
     #[test]

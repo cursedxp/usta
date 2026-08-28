@@ -419,13 +419,12 @@ pub async fn run(
     }
 
     let mut watching = true;
-    // Polite mode picks the FRAME of file feedback, never its timing: on, the
-    // change is framed as part of the ongoing lesson (step check, open question
-    // kept alive, scaffold waved off); off, it's a plain code review. Every
-    // batch is processed immediately either way. Default on; a `watch: live`
-    // line in the topic's approach file opts into the plain review frame.
+    // One honest axis (spec K4): `live` = immediate feedback at every flush,
+    // only by the user's explicit choice (`/watch live` or a `watch: live`
+    // approach line). Off (default) = companion: lesson-flow framing — and,
+    // once the timing flip lands, accumulate-and-ride-along delivery.
     let approach = crate::tui::polite::approach_text(project_root, global, &topic);
-    let mut polite = !crate::tui::polite::live_from_approach(&approach);
+    let mut live = crate::tui::polite::live_from_approach(&approach);
     loop {
         // Drain the buffer at the start of every iteration — notices that
         // accumulate outside maybe_compact, like a transcript write error,
@@ -437,7 +436,7 @@ pub async fn run(
             &Status::Idle,
             last_tokens,
             window,
-            Some((watching, polite)),
+            Some((watching, live, 0)),
         )?;
         tokio::select! {
             maybe_ev = events.next() => {
@@ -460,10 +459,10 @@ pub async fn run(
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
                             use crate::slash::WatchCmd::*;
                             let msg = match cmd {
-                                PoliteOn | PoliteOff | PoliteToggle => {
-                                    // Frame switch only — nothing is pending to deliver.
-                                    let (next, m) = crate::slash::apply_polite(cmd, polite);
-                                    polite = next;
+                                LiveOn | LiveOff | LiveToggle => {
+                                    // Session-only timing choice (spec K4).
+                                    let (next, m) = crate::slash::apply_live(cmd, live);
+                                    live = next;
                                     m
                                 }
                                 On | Off | Toggle => {
@@ -584,8 +583,8 @@ pub async fn run(
                     Route::Bulk => crate::tui::polite::bulk_skip(&mut tui, &mut files, batch)?,
                     Route::ObserveOnly => crate::tui::polite::sync_baseline(&mut files, batch),
                     // One combined LLM turn for the whole batch, right now;
-                    // `polite` only decides which frame it is wrapped in.
-                    Route::Feedback => crate::tui::polite::process_batch(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &batch, polite).await?,
+                    // `live` picks the plain-review frame (timing flips next).
+                    Route::Feedback => crate::tui::polite::process_batch(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, &batch, !live).await?,
                 }
             }
         }

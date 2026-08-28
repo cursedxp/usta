@@ -17,7 +17,7 @@ pub fn help_text() -> &'static str {
      \n\
      In-session commands\n\
      \x20\x20/watch on|off    file-feedback companion (on by default)\n\
-     \x20\x20/watch polite    lesson-flow feedback framing, not plain review (on|off, default: on)\n\
+     \x20\x20/watch live      immediate review on every save instead of ride-along (on|off, default: off)\n\
      \x20\x20/show [topic]    animated visual explainer (opens in browser)\n\
      \x20\x20/exam            goal mode: timed mock exam from your map\n\
      \x20\x20/game on|off     XP, levels, badges (ADHD-safe)\n\
@@ -64,8 +64,8 @@ mod tests {
             "Esc",
             "↑ / ↓",
             "/watch on|off",
-            "/watch polite",
-            "lesson-flow feedback framing",
+            "/watch live",
+            "immediate review on every save",
             "/show [topic]",
             "/exam",
             "/game on|off",
@@ -77,5 +77,9 @@ mod tests {
         ] {
             assert!(h.contains(needle), "help_text missing: {needle}");
         }
+        assert!(
+            !h.contains("/watch polite"),
+            "old polite surface must be gone"
+        );
     }
 }

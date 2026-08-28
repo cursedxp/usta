@@ -27,16 +27,21 @@ pub fn render_status(
     s: &Status,
     tokens: Option<u64>,
     window: u64,
-    watch: Option<(bool, bool)>,
+    watch: Option<(bool, bool, usize)>,
 ) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
-    if let Some((watching, polite)) = watch {
-        let txt = match (watching, polite) {
-            (false, _) => "watch off ",
-            (true, false) => "👁 watching ",
-            (true, true) => "👁 watching·polite ",
+    // (watching, live, pending): `pending` is the accumulated-but-undelivered
+    // change count — deterministic presence, zero tokens (spec K3). Live mode
+    // shows its marker and never a counter; companion shows the counter only
+    // when something is noted.
+    if let Some((watching, live, pending)) = watch {
+        let txt = match (watching, live) {
+            (false, _) => "watch off ".to_string(),
+            (true, true) => "👁 watching·live ".to_string(),
+            (true, false) if pending > 0 => format!("👁 watching · {pending} changes noted "),
+            (true, false) => "👁 watching ".to_string(),
         };
-        spans.push(Span::styled(txt.to_string(), theme::info()));
+        spans.push(Span::styled(txt, theme::info()));
     }
     if let Status::Thinking { frame, cancel_hint } = s {
         let hint = if *cancel_hint {
@@ -157,42 +162,54 @@ mod tests {
             &Status::Idle,
             None,
             1_000_000,
-            Some((true, false))
+            Some((true, false, 0))
         ))
         .contains("watching"));
         assert!(text(&render_status(
             &Status::Idle,
             None,
             1_000_000,
-            Some((false, false))
+            Some((false, false, 0))
         ))
         .contains("watch off"));
         assert!(!text(&render_status(&Status::Idle, None, 1_000_000, None)).contains("watch"));
     }
 
     #[test]
-    fn watch_indicator_shows_polite_state() {
-        assert!(text(&render_status(
-            &Status::Idle,
-            None,
-            1_000_000,
-            Some((true, true))
-        ))
-        .contains("watching·polite"));
+    fn watch_indicator_live_and_companion_states() {
+        // live: explicit marker, no counter even if a count is passed (spec K4/K3)
         let live = text(&render_status(
             &Status::Idle,
             None,
             1_000_000,
-            Some((true, false)),
+            Some((true, true, 3)),
         ));
-        assert!(live.contains("watching") && !live.contains("polite"));
-        assert!(text(&render_status(
+        assert!(live.contains("watching·live"));
+        assert!(!live.contains("changes noted"));
+        // companion with nothing pending: plain watching, no counter
+        let idle = text(&render_status(
             &Status::Idle,
             None,
             1_000_000,
-            Some((false, true))
-        ))
-        .contains("watch off"));
-        assert!(!text(&render_status(&Status::Idle, None, 1_000_000, None)).contains("watch"));
+            Some((true, false, 0)),
+        ));
+        assert!(idle.contains("👁 watching"));
+        assert!(!idle.contains("live") && !idle.contains("noted"));
+        // companion with pending: the deterministic counter (spec K3)
+        let noted = text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((true, false, 2)),
+        ));
+        assert!(noted.contains("👁 watching · 2 changes noted"));
+        // watch off wins regardless of the rest
+        let off = text(&render_status(
+            &Status::Idle,
+            None,
+            1_000_000,
+            Some((false, true, 5)),
+        ));
+        assert!(off.contains("watch off") && !off.contains("noted"));
     }
 }

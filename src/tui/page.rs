@@ -93,7 +93,7 @@ pub(crate) fn draw(
     status: &Status,
     tokens: Option<u64>,
     window: u64,
-    watch: Option<(bool, bool)>,
+    watch: Option<(bool, bool, usize)>,
 ) -> Result<()> {
     tui.terminal.draw(|f| {
         let [box_area, status_area] =

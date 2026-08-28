@@ -45,6 +45,7 @@ pub(crate) fn route(batch_len: usize, max_batch: usize, watching: bool) -> Route
 }
 
 /// Whether any line in `text`, trimmed and lowercased, is `watch: live`.
+/// Selects the timing axis (spec K4): live = immediate feedback.
 pub(crate) fn live_from_approach(text: &str) -> bool {
     text.lines()
         .any(|l| l.trim().eq_ignore_ascii_case("watch: live"))
@@ -52,7 +53,7 @@ pub(crate) fn live_from_approach(text: &str) -> bool {
 
 /// The topic's approach file, project override first — same priority as
 /// `slash::topic_has_goal` and brain.rs's GOAL probe. An unreadable or missing
-/// file is an empty string, which keeps polite mode on.
+/// file is an empty string, which keeps live off (companion default).
 pub(crate) fn approach_text(project_root: &Path, global: &Path, topic: &str) -> String {
     let override_path = crate::progress::approach_path(project_root, topic);
     let path = if override_path.exists() {
