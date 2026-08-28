@@ -442,6 +442,27 @@ fn introduction_prompt_embeds_material_digest() {
 }
 
 #[test]
+fn introduction_prompt_asks_who_the_learner_is() {
+    // Finding A (v0.28.0 live session): the introduction inferred role and
+    // level but never asked WHO the learner is, so USER.md's Who section
+    // stayed empty and every later session opened with a stranger — against
+    // 13a's own rationale that the introduction fills the profile. The old
+    // MEET_BLOCK asked these on the post-lock paths; the pre-lock intro must
+    // ask them too, woven in, never as a form.
+    let p = introduction_prompt(false, None);
+    assert!(p.contains("their name"));
+    assert!(p.contains("how they like to learn"));
+    assert!(p.contains("Who section"));
+    assert!(p.contains("never as a form"));
+    // The identity block must justify itself under rule 1, not suspend it.
+    assert!(p.contains("pass rule 1"));
+    // The three conversation rules and the role inference must survive intact.
+    assert!(p.contains("changes what you do next"));
+    assert!(p.contains("honor it without argument"));
+    assert!(p.contains("never ask as a menu"));
+}
+
+#[test]
 fn start_here_prompt_calibrates_and_uses_marker() {
     let s = start_here_prompt(None);
     assert!(s.contains("[START SUGGESTION]"));

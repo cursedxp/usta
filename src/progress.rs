@@ -370,6 +370,13 @@ pub fn introduction_prompt(project_known: bool, materials: Option<&str>) -> Stri
          say it, honor it without argument.\n\
          Never infer boredom or disinterest from short answers — a yes/no \
          question earns a yes/no; judge by what they say, not how much.\n\
+         Meet them as a person, too: early on — woven into the conversation, \
+         never as a form — learn their name, what they have done before that \
+         touches this area, and how they like to learn (reading first, \
+         building first, being quizzed). These questions pass rule 1: every \
+         answer changes how you calibrate. At session close they fill the \
+         profile's Who section — skip them and every later session starts \
+         with a stranger.\n\
          Also infer — never ask as a menu — what they want from you: guided \
          learning (you drive the route) / their own project (learn while \
          building it) / observation (they know their craft; mainly review and \
