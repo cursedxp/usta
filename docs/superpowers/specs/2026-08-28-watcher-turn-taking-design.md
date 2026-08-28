@@ -48,7 +48,9 @@ tamamı bu ayrımdır.
 - `PendingChanges` — biriken, henüz teslim edilmemiş dosya yolları
 - `Route::Hold` — biriktir, tur açma
 - `pending_preamble` — ride-along payload'ının başına konan tek satırlık çerçeve
-- Durum satırı metni: `changes noted` (sayı ile: `👁 watching · 2 changes noted`)
+- Durum satırı metni: `changes noted` (sayı ile: `👁 watching · 2 changes noted`);
+  live modda bugünkü `👁 watching·live ` biçimi korunur, sayaç gösterilmez
+- `WatchCmd::Live{Toggle,On,Off}` — `/watch polite` varyantlarının yerine
 
 Türkçe yalnız bu spec'in düzyazısında; kod, kullanıcıya dönük string'ler, yorumlar
 ve commit mesajları İngilizce.
@@ -83,15 +85,37 @@ teslimde sıfırlanır. Sıfır token, sıfır kesinti, mentörün gözü görü
 konuşma turudur — aynı maliyet, aynı hız hırsızlığı, üstelik göz ardı edilebilir
 olduğu için daha az değer.
 
-### K4 — Anlık mod tamamen kaldırılır
+### K4 — Anlık mod korunur ama kullanıcının açık kararına bağlanır
 
-`watch: live` / `/watch live` ve `polite` bayrağı ile birlikte anlık geri bildirim
-yolu silinir. Gerekçe: K1 istisnasız olduğunda ikinci bir canlı kod yolu taşımak
-bedelsiz değil; uzman rolünde de gerekçeler (token, insan hızı) geçerli — uzman
-daha hızlı kaydeder. Geri gelmesi gerekirse açık devir ritüeli olarak yeniden
-tasarlanır (13b'de `role_of` geldiğinde varsayılan üretmek de mümkün).
+(Anil kararı, 2026-08-28: *"bu anlık modu kullanıcı açıp kapatabilmeli, komple
+silmeye gerek yok"* — bu maddenin ilk hâli silmeyi öneriyordu, geçersiz.)
 
-Kalan tek davranış: biriktir → kullanıcı turunda teslim et.
+**Varsayılan biriktirmedir.** Anlık geri bildirim yalnız kullanıcı açıkça isterse
+çalışır — asla shell çıkarımıyla değil. Bu, pair programming'in tek devralınmaya
+değer parçasıdır: gerçek eşler rolü **söyleyerek** devreder, sezerek değil.
+
+**İki bayrak tek eksene iner.** Bugün `watching` (izliyor mu) ve `polite` (hangi
+prompt çerçevesi) ayrı; `polite` zamanlama değil yalnız çerçeve seçiyor. Yeni eksen:
+
+| Mod | Zamanlama | Çerçeve |
+|---|---|---|
+| **companion** (varsayılan) | biriktir, kullanıcı turunda teslim et | `flow_frame` (ders akışı) |
+| **live** (açık talep) | flush anında hemen tur | `feedback_frame` (düz inceleme) |
+
+`watching == false` her iki modda da bugünkü gibi: yalnız baseline sync, hiçbir şey
+birikmez.
+
+**Komut yüzeyi.** Bugün `/watch polite [on|off]` var (`slash.rs:29-31`). Yerine
+`/watch live [on|off]` gelir — aynı ayrıştırma deseni, ters kutup ve dürüst isim:
+`polite` bir çerçeve adıydı, kullanıcı ise zamanlama seçiyor. Oturum içi, kalıcı
+değil. Kalıcı seçim approach dosyasındaki `watch: live` satırıdır (`polite.rs:52`,
+`live_from_approach` — zaten var, artık çerçeveyi değil zamanlamayı seçiyor).
+`/watch on|off` değişmez. `help.rs:20` ve `:67` güncellenir.
+
+**Neden korunuyor:** K1 "gözcü kendiliğinden karar verip konuşmaz" der; kullanıcının
+açıkça istediği geri bildirim kendiliğinden değildir. Uzman rolü (13b'de `role_of`
+geldiğinde) `watch: live`'ı varsayılan olarak açabilir — kod yolu değil, varsayılan
+üretimi: tek satır, run loop'ta yeni dal yok.
 
 ### K5 — Prompt tarafı: üç değişiklik
 
@@ -166,9 +190,10 @@ aldı. Filtre satırı her tasarım altında doğrudur.
   olarak buydu ve haklı olarak silindi.
 - **VS Code sekme değişiminde viewport artığı.** Ayrı hata, ayrı iş: önce ölçüm
   (hangi olay dizisi geliyor), sonra düzeltme. Tahminle dokunulmayacak.
-- **Rol bazlı davranış farkı.** 13a `role:` satırını yazıyor ama shell parse etmiyor;
-  13b `role_of`'u ekleyecek. K4 anlık modu sildiği için şu an rol seçilecek bir
-  davranış yok.
+- **Rolün modu otomatik seçmesi.** 13a `role:` satırını yazıyor ama shell parse
+  etmiyor; 13b `role_of`'u ekleyecek. O gelene kadar `live` yalnız kullanıcının açık
+  kararıyla açılır (`/watch live` veya approach'ta `watch: live`). 13b'de rol yalnız
+  VARSAYILANI üretebilir — run loop'ta yeni dal değil.
 
 ## Kısıtlar
 
@@ -190,11 +215,13 @@ aldı. Filtre satırı her tasarım altında doğrudur.
 - `total_included == 0` → payload eklenmez, sayaç sıfırlanır.
 - `is_ignored("Cargo.lock")` true; `is_ignored("src/main.rs")` false.
 - Durum satırı: sayaç görünür ve teslimde sıfırlanır.
-- Silinen anlık mod: `watch: live`, `/watch live`, `polite` bayrağı ve `flow_frame`/
-  `feedback_frame` ikiliğinden geriye kalan ölü kod yok; wiring pin testleri
-  güncellenir (`run_rs_wiring_call_sites_are_pinned`, `polite_branch_selecting_flow_frame_is_pinned`
-  — bu testler watcher kablolamasının iki kez sessizce silinmesi yüzünden var, bu
-  değişiklikte dürüst tutulmalı).
+- Anlık mod: `live` açıkken flush anında tur açılır ve `feedback_frame` seçilir;
+  kapalıyken `Hold` + `flow_frame`. `/watch live [on|off]` ayrıştırması (`/watch polite`
+  varyantlarının yerine), `live_from_approach` artık zamanlama seçiyor. `/watch on|off`
+  davranışı değişmedi. Wiring pin testleri güncellenir (`run_rs_wiring_call_sites_are_pinned`,
+  `polite_branch_selecting_flow_frame_is_pinned` — bu testler watcher kablolamasının iki
+  kez sessizce silinmesi yüzünden var, bu değişiklikte dürüst tutulmalı).
+- `help.rs` çıktısı `/watch live` satırını içerir, `/watch polite` satırını içermez.
 - Prompt pin: eyes-only kuralı ve tekrar yasağı `flow_frame`/TEACHING.md'de mevcut.
 
 ## İlgili
