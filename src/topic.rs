@@ -77,6 +77,29 @@ pub(crate) fn parse_start_suggestion(reply: &str) -> Option<(String, String)> {
     Some((slug, text))
 }
 
+/// Parse the pre-lock conversation's topic lock (SPEC §4.22): if the reply's
+/// FINAL non-empty line is `TOPIC: <slug>`, return (slug, display text without
+/// that line). Mid-reply markers do NOT lock — only the final line counts, so
+/// prose that merely mentions the token can't hijack the flow. Blank slug →
+/// None (checked BEFORE slugify_topic, which would otherwise fall back to
+/// tokens::DEFAULT_TOPIC — same guard parse_start_suggestion used).
+#[allow(dead_code)]
+pub(crate) fn parse_topic_marker(reply: &str) -> Option<(String, String)> {
+    let trimmed = reply.trim_end();
+    let (head, last) = match trimmed.rsplit_once('\n') {
+        Some((h, l)) => (h, l.trim()),
+        None => ("", trimmed.trim()),
+    };
+    let rest = last.strip_prefix(tokens::TOPIC_MARKER)?;
+    if rest.trim().is_empty() {
+        return None;
+    }
+    // Hyphens already inside the value would be stripped by slugify_topic's
+    // whitespace split — turn them into spaces first (finalize_slug's trick).
+    let slug = slugify_topic(&rest.replace(['-', '_'], " "));
+    Some((slug, head.trim().to_string()))
+}
+
 /// New-topic confirmation text (for TUI tui_confirm). The plain path uses its own
 /// `[y/N]` rustyline format — the wording is deliberately different, the two surfaces are separate.
 /// The answer is typed + Enter (`parse_confirm_answer`): yes/no, Turkish variants accepted silently.
@@ -414,5 +437,42 @@ mod tests {
         assert!(m.contains("rust-cli"));
         assert!(m.contains("(yes/no)"));
         assert!(!m.contains("evet")); // Turkish variants silently accepted, never advertised
+    }
+
+    #[test]
+    fn parse_topic_marker_extracts_slug_and_display() {
+        let reply =
+            "Great — let's begin with ownership.\nFirst step: cargo new.\nTOPIC: rust-ownership";
+        let (slug, display) = parse_topic_marker(reply).unwrap();
+        assert_eq!(slug, "rust-ownership");
+        assert!(display.contains("First step"));
+        assert!(!display.contains("TOPIC:"));
+    }
+
+    #[test]
+    fn parse_topic_marker_normalizes_messy_slug() {
+        let (slug, _) = parse_topic_marker("ok\nTOPIC: Rust Temelleri!").unwrap();
+        assert_eq!(slug, "rust-temelleri");
+    }
+
+    #[test]
+    fn parse_topic_marker_only_matches_final_line() {
+        // Marker mid-reply is NOT a lock — only the final line counts.
+        assert!(parse_topic_marker("TOPIC: rust\nbut then more prose").is_none());
+    }
+
+    #[test]
+    fn parse_topic_marker_rejects_blank_or_missing() {
+        assert!(parse_topic_marker("no marker here").is_none());
+        // Blank slug must be None BEFORE slugify_topic's "general" fallback kicks in
+        // (same guard parse_start_suggestion documents today).
+        assert!(parse_topic_marker("text\nTOPIC:   ").is_none());
+    }
+
+    #[test]
+    fn parse_topic_marker_accepts_marker_only_reply() {
+        let (slug, display) = parse_topic_marker("TOPIC: golang-web").unwrap();
+        assert_eq!(slug, "golang-web");
+        assert_eq!(display, "");
     }
 }
