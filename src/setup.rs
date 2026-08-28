@@ -324,6 +324,46 @@ pub(crate) fn profile_is_generic(disk: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// First-run marker: `<global>/learner/.introduced`. Its EXISTENCE is the only
+/// thing the shell reads (deterministic); the content is diagnostics.
+/// `profile_is_generic` can't carry first-run detection — one hand edit to
+/// USER.md would skip the introduction forever, and a profile reset would
+/// re-trigger it for a veteran (SPEC §4.22, blocker H3).
+pub(crate) fn intro_marker_path(global: &Path) -> PathBuf {
+    global.join("learner/.introduced")
+}
+
+/// Write the first-run marker (best-effort — a marker write failure must never
+/// block the session; worst case the introduction re-runs next launch).
+/// `how`: "completed" (introduction finished) or "seeded" (grandfathered).
+pub(crate) fn mark_intro_done(global: &Path, how: &str) {
+    let path = intro_marker_path(global);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, format!("{} | {how}\n", crate::lifecycle::today()));
+}
+
+/// Does the first-run introduction still need to run? Self-seeding: when the
+/// marker is absent but there is evidence of prior use (a filled profile, or
+/// any catalog record), the marker is written as "seeded" and the introduction
+/// is skipped — existing users are grandfathered on their first post-upgrade
+/// launch. An empty/missing USER.md is NOT evidence (profile_is_generic("")
+/// returns false because it matches nothing — guard it explicitly).
+pub(crate) fn intro_needed(global: &Path, index_content: &str) -> bool {
+    if intro_marker_path(global).exists() {
+        return false;
+    }
+    let profile = std::fs::read_to_string(global.join("USER.md")).unwrap_or_default();
+    let filled_profile = !profile.trim().is_empty() && !profile_is_generic(&profile);
+    let has_records = !crate::index::entries(index_content).is_empty();
+    if filled_profile || has_records {
+        mark_intro_done(global, "seeded");
+        return false;
+    }
+    true
+}
+
 /// Profile reset core — PURE (no confirmation, no global_root): backs up the
 /// current profile to `.bak`, writes the embedded generic template. Does NOT
 /// touch topic progress (spec Ç2).

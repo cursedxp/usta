@@ -527,3 +527,82 @@ fn factory_reset_prompt_advertises_only_english_word() {
     assert!(FACTORY_RESET_PROMPT.contains("yes"));
     assert!(!FACTORY_RESET_PROMPT.contains("evet"));
 }
+
+// Test helper: creates a temp directory for intro marker tests.
+fn temp_global(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("usta_intro_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn intro_needed_true_on_fresh_global_and_does_not_self_seed() {
+    let g = temp_global("fresh");
+    assert!(intro_needed(&g, ""));
+    // No evidence → no marker written; asking again still says true.
+    assert!(!intro_marker_path(&g).exists());
+    assert!(intro_needed(&g, ""));
+    let _ = std::fs::remove_dir_all(&g);
+}
+
+#[test]
+fn intro_needed_false_after_mark_done() {
+    let g = temp_global("done");
+    mark_intro_done(&g, "completed");
+    assert!(!intro_needed(&g, ""));
+    let content = std::fs::read_to_string(intro_marker_path(&g)).unwrap();
+    assert!(content.contains("completed"));
+    let _ = std::fs::remove_dir_all(&g);
+}
+
+#[test]
+fn intro_needed_seeds_from_filled_profile() {
+    let g = temp_global("profile");
+    std::fs::write(
+        g.join("USER.md"),
+        "# Learner Profile — Ada\npersonal content",
+    )
+    .unwrap();
+    assert!(!intro_needed(&g, ""));
+    // Evidence found → the marker is written as "seeded" (grandfathering).
+    let content = std::fs::read_to_string(intro_marker_path(&g)).unwrap();
+    assert!(content.contains("seeded"));
+    let _ = std::fs::remove_dir_all(&g);
+}
+
+#[test]
+fn intro_needed_seeds_from_catalog_records() {
+    let g = temp_global("catalog");
+    let index = "## Records\n- rust | /tmp/proj | 2026-08-01\n";
+    assert!(!intro_needed(&g, index));
+    assert!(intro_marker_path(&g).exists());
+    let _ = std::fs::remove_dir_all(&g);
+}
+
+#[test]
+fn intro_needed_treats_empty_or_generic_profile_as_unknown_user() {
+    let g = temp_global("generic");
+    // Empty file: profile_is_generic("") is false (no template match) — the
+    // helper must NOT read that as "filled profile" (spec H3 empty-string trap).
+    std::fs::write(g.join("USER.md"), "").unwrap();
+    assert!(intro_needed(&g, ""));
+    // The embedded template itself is generic → still needed.
+    let template = crate::defaults::global_defaults()
+        .into_iter()
+        .find(|(rel, _, _)| *rel == "USER.md")
+        .map(|(_, c, _)| c)
+        .unwrap();
+    std::fs::write(g.join("USER.md"), template).unwrap();
+    assert!(intro_needed(&g, ""));
+    let _ = std::fs::remove_dir_all(&g);
+}
+
+#[test]
+fn profile_reset_keeps_intro_marker() {
+    let g = temp_global("resetprofile");
+    mark_intro_done(&g, "completed");
+    reset_profile_files(&g).unwrap();
+    assert!(intro_marker_path(&g).exists());
+    let _ = std::fs::remove_dir_all(&g);
+}
