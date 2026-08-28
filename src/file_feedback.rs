@@ -449,7 +449,21 @@ pub(crate) async fn deliver_pending(
         // Structure lines lead the payload (spec D2): paths only, never
         // contents — the directory-contents decision stands; what was wrong
         // was dropping the EVENT entirely.
-        let block = format!("STRUCTURE: project tree changes\n{}", notes.join("\n"));
+        let mut notes_to_render = notes.to_vec();
+        // Detect mixed batches: if there are both disappearances and appearances,
+        // add a hint that they may be related (move/rename).
+        let has_disappearances = notes.iter().any(|n| n.starts_with('-'));
+        let has_appearances = notes.iter().any(|n| n.starts_with('+'));
+        if has_disappearances && has_appearances {
+            notes_to_render.push(
+                "(A disappearance and an appearance in this batch may be two halves of one move or rename.)"
+                    .to_string(),
+            );
+        }
+        let block = format!(
+            "STRUCTURE: project tree changes\n{}",
+            notes_to_render.join("\n")
+        );
         payload = if payload.is_empty() {
             block
         } else {
@@ -1049,7 +1063,7 @@ mod tests {
         let dir = scratch_dir("deliver-structure-order");
         let file = dir.join("main.rs");
         std::fs::write(&file, "fn main() {}\n").unwrap();
-        let notes = vec!["- src/old.rs (deleted)".to_string()];
+        let notes = vec!["- src/old.rs (no longer present)".to_string()];
         let mut files = feedback::FileMemory::new();
         let (_, outgoing) =
             deliver_pending(&mut files, &dir, &[file], &notes, "take a look".to_string()).await;
@@ -1058,6 +1072,70 @@ mod tests {
         let pos_user = outgoing.rfind("take a look").unwrap();
         assert!(pos_structure < pos_file, "structure line leads the payload");
         assert!(pos_file < pos_user, "the user's words stay last (spec K2)");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_adds_hint_when_batch_has_disappearances_and_appearances() {
+        // When a batch contains both disappearances (- lines) and appearances (+ lines),
+        // a hint line is added to suggest they may be two halves of one move or rename.
+        let dir = scratch_dir("deliver-mixed-batch");
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let notes = vec![
+            "+ brands/marka-b/ (new directory)".to_string(),
+            "- brands/marka-a/ (no longer present)".to_string(),
+        ];
+        let mut files = feedback::FileMemory::new();
+        let (_, outgoing) =
+            deliver_pending(&mut files, &dir, &[file], &notes, "done".to_string()).await;
+        assert!(outgoing.contains("STRUCTURE: project tree changes"));
+        assert!(outgoing.contains("+ brands/marka-b/ (new directory)"));
+        assert!(outgoing.contains("- brands/marka-a/ (no longer present)"));
+        // The hint line must appear exactly once.
+        assert!(outgoing.contains(
+            "(A disappearance and an appearance in this batch may be two halves of one move or rename.)"
+        ));
+        // Verify it's a possibility, not a claim: "may be", not "is".
+        assert!(outgoing.contains(" may be "));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_no_hint_when_only_disappearances() {
+        // Hint is only added when BOTH disappearances and appearances exist.
+        // Pure deletions get no hint.
+        let dir = scratch_dir("deliver-only-disappear");
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let notes = vec![
+            "- old1.rs (no longer present)".to_string(),
+            "- old2.rs (no longer present)".to_string(),
+        ];
+        let mut files = feedback::FileMemory::new();
+        let (_, outgoing) =
+            deliver_pending(&mut files, &dir, &[file], &notes, "done".to_string()).await;
+        assert!(outgoing.contains("STRUCTURE: project tree changes"));
+        assert!(!outgoing.contains("may be two halves"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deliver_pending_no_hint_when_only_appearances() {
+        // Hint is only added when BOTH disappearances and appearances exist.
+        // Pure additions get no hint.
+        let dir = scratch_dir("deliver-only-appear");
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let notes = vec![
+            "+ new1/ (new directory)".to_string(),
+            "+ new2/ (new directory)".to_string(),
+        ];
+        let mut files = feedback::FileMemory::new();
+        let (_, outgoing) =
+            deliver_pending(&mut files, &dir, &[file], &notes, "done".to_string()).await;
+        assert!(outgoing.contains("STRUCTURE: project tree changes"));
+        assert!(!outgoing.contains("may be two halves"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

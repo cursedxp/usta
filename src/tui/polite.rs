@@ -83,9 +83,9 @@ pub(crate) fn classify_flush(
         } else if path.is_file() {
             content.push(path);
         } else if tracker.note_removed(&path) {
-            notes.push(format!("- {rel}/ (directory removed)"));
+            notes.push(format!("- {rel}/ (no longer present)"));
         } else if files.knows(&path) {
-            notes.push(format!("- {rel} (deleted)"));
+            notes.push(format!("- {rel} (no longer present)"));
         }
         // else: a vanished path nobody ever knew — transient noise, silent.
     }
@@ -526,7 +526,9 @@ mod tests {
         assert_eq!(p.len(), 1, "exact repeats collapse");
         // A branch switch can delete hundreds of files — past the cap the
         // rest is counted and collapses into ONE overflow line at take().
-        let many: Vec<String> = (0..30).map(|i| format!("- f{i}.rs (deleted)")).collect();
+        let many: Vec<String> = (0..30)
+            .map(|i| format!("- f{i}.rs (no longer present)"))
+            .collect();
         p.hold_notes(many);
         assert_eq!(
             p.len(),
@@ -578,7 +580,7 @@ mod tests {
             notes,
             vec![
                 "+ brands/ (new directory)".to_string(),
-                "- old.rs (deleted)".to_string()
+                "- old.rs (no longer present)".to_string()
             ]
         );
         // Second sighting of the same dir is silent — the tracker learned it.
@@ -597,7 +599,7 @@ mod tests {
         let files = FileMemory::new();
         let (content, notes) = classify_flush(vec![dir], &mut tracker, &files, &base);
         assert!(content.is_empty());
-        assert_eq!(notes, vec!["- assets/ (directory removed)".to_string()]);
+        assert_eq!(notes, vec!["- assets/ (no longer present)".to_string()]);
         std::fs::remove_dir_all(&base).ok();
     }
 
