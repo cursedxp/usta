@@ -113,14 +113,16 @@ pub(crate) fn feedback_frame(
 /// `feedback_frame`'s plain review wording, this frame casts the model as the
 /// mentor mid-lesson, not a fresh reviewer — the five rules from the design
 /// spec (`docs/superpowers/specs/2026-08-27-flow-companion-design.md`,
-/// "Behavior" section, companion default): (1) check a requested
-/// step and advance on success, (2) nudge any unanswered question of yours
-/// in one short sentence, never a full repeat, (3) wave off tool-generated
-/// scaffold in one sentence and focus on the user's hand-written change,
-/// (4) answer an interruption then recall the task, (5) treat an assigned
-/// artifact's content as eyes-only until the user reports on it. `files_payload`
-/// is Task 2's pre-merged multi-file block (one or more `FILE: <path>`
-/// sections); this function does not build it.
+/// "Behavior" section, companion default): (1) audit a WRITE-assignment
+/// delivery in three parts — what was done, what is missing or wrong, the
+/// single next step — against the assignment, never handing over the fix,
+/// (2) nudge any unanswered question of yours in one short sentence, never a
+/// full repeat, (3) wave off tool-generated scaffold in one sentence and
+/// focus on the user's hand-written change, (4) answer an interruption then
+/// recall the task, (5) READ-artifacts are eyes-only until the report,
+/// WRITE-artifacts are audited. `files_payload` is Task 2's pre-merged
+/// multi-file block (one or more `FILE: <path>` sections); this function does
+/// not build it.
 ///
 /// `any_exercise` appends the shared exercise-review rule (see
 /// `EXERCISE_REVIEW_RULE`) when at least one file in the batch is an exercise
@@ -137,11 +139,11 @@ pub(crate) fn flow_frame(files_payload: &str, any_exercise: bool) -> String {
     let mut frame = format!(
         "[Files changed]\n{files_payload}\n\n\
 This change is part of the ongoing lesson — respond as the mentor guiding it, not as a reviewer opening a fresh audit. Apply these rules:\n\
-1. If your last message asked for a step and this change satisfies it: confirm briefly, flag any errors, move to the next step — unless rule 5 restricts it, in which case only acknowledge that the step happened and say nothing about the artifact's content.\n\
+1. If your last message asked the user to WRITE or CHANGE something and this change is their delivery: audit the delivered change against the assignment, and shape your reply in three parts — what they did (named concretely, with evidence from the change), what is missing or wrong (said plainly), and the single next step. Answering their words alone is not enough — hold the change against the assignment. Name the gaps; never write the fix yourself (Hard Rule 2 — the hint ladder still applies).\n\
 2. If there's an unanswered question from you still pending: nudge it in ONE short sentence — never repeat the full question text.\n\
 3. First-sight full-content files may be tool-generated scaffold (e.g. a `cargo new` template) — acknowledge scaffold in one sentence, don't review it line by line; focus on the user's hand-written change.\n\
 4. If the user asks a question in the middle of this, answer it, then recall the task.\n\
-5. If your assignment asked the user to read, run, or describe an artifact, that artifact is OFF-LIMITS to discuss until the user reports on it: do not quote, summarize, or explain it. When their report arrives, verify it against what you saw."
+5. The artifact's PURPOSE decides what you may say about it. Asked to READ, RUN, or DESCRIBE it: it is OFF-LIMITS until the user reports — do not quote, summarize, or explain it; only acknowledge that the step happened and say nothing about the artifact's content; when their report arrives, verify it against what you saw. Asked to WRITE or CHANGE it: the opposite — seeing and judging it is the point; audit it under rule 1. Never read this rule as a reason to stay silent about work you assigned them to produce."
     );
     if any_exercise {
         frame.push_str(&format!(
@@ -558,26 +560,36 @@ mod tests {
     }
 
     #[test]
-    fn flow_frame_pins_the_five_lesson_rules() {
+    fn flow_frame_pins_the_audit_and_asymmetry_rules() {
         let s = flow_frame("FILE: src/main.rs\n...", false);
-        // (1) step check + advance, (2) one-sentence nudge — never a full
-        // repeat (spec K5.2), (3) scaffold in one sentence, (4) answer then
-        // recall the task, (5) eyes-only until the user reports (spec K5.1)
+        // (1) WRITE-assignments are audited in three parts against the
+        // assignment (finding E: the user's answering is already proof they
+        // made the change; the reply must account for the change, not just
+        // the words), (2) one-sentence nudge — never a full repeat,
+        // (3) scaffold in one sentence, (4) answer then recall the task,
+        // (5) the artifact's PURPOSE decides: READ → off-limits until the
+        // report; WRITE → auditing it is the point.
         assert!(s.contains("part of the ongoing lesson"));
-        assert!(s.contains("next step"));
+        assert!(s.contains("audit the delivered change against the assignment"));
+        assert!(s.contains("three parts"));
+        assert!(s.contains("what is missing or wrong"));
+        assert!(s.contains("single next step"));
+        assert!(s.contains("never write the fix"));
         assert!(s.contains("unanswered question"));
         assert!(s.contains("ONE short sentence"));
         assert!(s.contains("never repeat the full question"));
         assert!(s.contains("scaffold"));
         assert!(s.contains("hand-written"));
+        assert!(s.contains("PURPOSE"));
+        assert!(s.contains("READ, RUN, or DESCRIBE"));
         assert!(s.contains("OFF-LIMITS"));
-        assert!(s.contains("verify it against"));
-        // Rule 1's rule-5 escape hatch must license ACKNOWLEDGEMENT ONLY.
-        // The old wording ("describe only the change") licensed exactly the
-        // leak rule 5 forbids: for a first-sight file the change IS the whole
-        // content, so a restricted artifact could be reproduced verbatim.
         assert!(s.contains("only acknowledge that the step happened"));
         assert!(s.contains("say nothing about the artifact's content"));
+        assert!(s.contains("verify it against"));
+        assert!(s.contains("WRITE or CHANGE"));
+        // The over-correction risk finding E named: rule 5 must never read
+        // as a licence to stay silent about assigned WRITE work.
+        assert!(s.contains("stay silent about work you assigned"));
         assert!(!s.contains("describe only the change"));
         assert!(!s.to_lowercase().contains("standalone code review"));
     }
