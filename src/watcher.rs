@@ -67,6 +67,9 @@ pub fn is_ignored(path: &Path) -> bool {
             let s = s.to_string_lossy().to_ascii_lowercase();
             s == "target"
                 || s == "node_modules"
+                // Machine-written lockfile (`cargo run` side effect) — never
+                // the user's work, never worth a turn (spec K6).
+                || s == "cargo.lock"
                 || s.starts_with('.')
                 // Secret files never go to the LLM.
                 || s.ends_with(".pem")
@@ -241,6 +244,17 @@ mod tests {
     #[test]
     fn is_ignored_flags_emacs_autosave_file() {
         assert!(is_ignored(Path::new("#main.rs#")));
+    }
+
+    #[test]
+    fn is_ignored_flags_cargo_lock() {
+        // Machine-written lockfile — a `cargo run` side effect, never the
+        // user's own work; it bought an LLM turn in the 2026-08-28 live
+        // session (spec K6).
+        assert!(is_ignored(Path::new("Cargo.lock")));
+        assert!(is_ignored(Path::new("sub/crate/Cargo.lock")));
+        // The source file next to it must stay watchable.
+        assert!(!is_ignored(Path::new("src/main.rs")));
     }
 
     #[test]
