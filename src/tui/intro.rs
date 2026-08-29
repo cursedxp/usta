@@ -218,6 +218,7 @@ pub(crate) async fn run_intro(
             }
             if crate::visual::parse_show_command(&raw).is_some()
                 || crate::slash::parse_watch_command(&raw).is_some()
+                || crate::slash::is_context_command(&raw)
             {
                 crate::tui::page::page_notice(
                     tui,

@@ -7,6 +7,7 @@ mod brain;
 mod check;
 mod cli;
 mod config;
+mod context_report;
 mod defaults;
 mod feedback;
 mod file_feedback;

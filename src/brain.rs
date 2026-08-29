@@ -189,7 +189,6 @@ pub fn load_system_prompt(
 /// bytes count each line plus one newline; header lines and the blank join
 /// lines (the separator `parts.join("\n\n")` inserts between sections) are
 /// not attributed to any section.
-#[allow(dead_code)] // consumed by the /context command surface, not yet wired
 pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
     let mut out: Vec<(String, usize)> = Vec::new();
     let mut current: Option<String> = None;
@@ -223,7 +222,6 @@ pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
 }
 
 /// `===== X =====` → `Some("X")`.
-#[allow(dead_code)] // consumed by the /context command surface, not yet wired
 fn section_label(line: &str) -> Option<&str> {
     line.strip_prefix("===== ")?.strip_suffix(" =====")
 }

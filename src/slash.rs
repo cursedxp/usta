@@ -216,7 +216,6 @@ pub(crate) fn is_exam_command(line: &str) -> bool {
 /// True when the line is exactly `/context` (trimmed, case-insensitive) —
 /// the deterministic context-window breakdown (spec F1). TUI-only surface;
 /// the plain path never parses it (plain.rs is frozen).
-#[allow(dead_code)] // consumed by the /context command surface, not yet wired
 pub(crate) fn is_context_command(line: &str) -> bool {
     line.trim().eq_ignore_ascii_case("/context")
 }
@@ -254,6 +253,22 @@ mod tests {
         assert!(is_context_command("  /CONTEXT  "));
         assert!(!is_context_command("/context now"));
         assert!(!is_context_command("context"));
+    }
+
+    #[test]
+    fn context_command_is_gated_before_a_session_exists() {
+        // At topic entry and during the introduction /context can't run (no
+        // session yet) — both gates must point the user onward instead of
+        // slugging "/context" into a topic name or sending it to the model.
+        // Crude source pin, same class as run_rs_wiring_call_sites_are_pinned:
+        // removing a gate arm produces no warning and no test failure
+        // anywhere else.
+        for src in [include_str!("tui/run.rs"), include_str!("tui/intro.rs")] {
+            assert!(
+                src.contains("crate::slash::is_context_command(&raw)"),
+                "a pre-session gate lost its /context arm"
+            );
+        }
     }
 
     #[test]

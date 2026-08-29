@@ -395,7 +395,6 @@ const PENDING_PREAMBLE: &str = "[The user changed the files below while working;
 /// A history turn that is a shell-injected file delivery (single save,
 /// live batch, or ride-along) — the /context report's classification hook,
 /// single-sourced next to the frames it matches.
-#[allow(dead_code)] // consumed by the /context command surface, not yet wired
 pub(crate) fn is_delivery_turn(text: &str) -> bool {
     text.starts_with(PENDING_PREAMBLE)
         || text.starts_with("[Files changed]")

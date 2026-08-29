@@ -178,6 +178,7 @@ pub async fn run(
                 }
                 if crate::visual::parse_show_command(&raw).is_some()
                     || crate::slash::parse_watch_command(&raw).is_some()
+                    || crate::slash::is_context_command(&raw)
                 {
                     crate::tui::page::page_notice(
                         &mut tui,
@@ -468,6 +469,12 @@ pub async fn run(
                         if crate::help::is_help_command(&line) {
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
                             crate::tui::page::page_notice(&mut tui, crate::help::help_text())?;
+                            continue;
+                        }
+                        if crate::slash::is_context_command(&line) {
+                            crate::tui::page::page_user_echo(&mut tui, &line)?;
+                            // Deterministic breakdown — shell-only, no LLM call (spec F1).
+                            crate::tui::page::page_notice(&mut tui, &crate::context_report::build(&session.system, session.history(), last_tokens, window))?;
                             continue;
                         }
                         if let Some(arg) = crate::visual::parse_show_command(&line) {
