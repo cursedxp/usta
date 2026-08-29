@@ -14,6 +14,13 @@ fn est_tokens(bytes: usize) -> usize {
     bytes / 4
 }
 
+/// `brain::section_sizes` deliberately excludes divider header lines and the
+/// blank `join("\n\n")` separators from every section (see its doc comment)
+/// — so the per-section rows never sum to the system prompt's total on
+/// their own. Reported here as its own row instead of leaving that gap
+/// unexplained, the way the history breakdown below already reconciles.
+const SYSTEM_PROMPT_OVERHEAD_LABEL: &str = "(framing: dividers + blank-line separators)";
+
 fn message_text(m: &Message) -> String {
     match &m.content {
         serde_json::Value::String(s) => s.clone(),
@@ -36,9 +43,15 @@ pub(crate) fn build(
         system.len(),
         est_tokens(system.len())
     ));
-    for (label, bytes) in crate::brain::section_sizes(system) {
+    let sizes = crate::brain::section_sizes(system);
+    let attributed: usize = sizes.iter().map(|(_, bytes)| bytes).sum();
+    for (label, bytes) in &sizes {
         out.push_str(&format!("  {label:<34} {bytes} bytes\n"));
     }
+    let overhead = system.len().saturating_sub(attributed);
+    out.push_str(&format!(
+        "  {SYSTEM_PROMPT_OVERHEAD_LABEL:<34} {overhead} bytes\n"
+    ));
     // History buckets: the user's own words, the mentor's replies, injected
     // file deliveries, and other shell-injected directives.
     let mut buckets: [(&str, usize, usize); 4] = [
@@ -130,5 +143,59 @@ mod tests {
         // report must say "nothing yet" instead of inventing a number.
         let r = build(&sys(), &[], None, 200_000);
         assert!(r.contains("nothing yet"));
+    }
+
+    /// Extracts the byte count printed for `label`'s row (the token right
+    /// before the trailing "bytes" word), so tests can check reconciliation
+    /// against the report's own printed numbers rather than recomputing.
+    fn row_bytes(report: &str, label: &str) -> usize {
+        let line = report
+            .lines()
+            .find(|l| l.contains(label))
+            .unwrap_or_else(|| panic!("no row for label {label:?} in report:\n{report}"));
+        line.split_whitespace()
+            .rev()
+            .nth(1)
+            .and_then(|tok| tok.parse().ok())
+            .unwrap_or_else(|| panic!("could not parse byte count from row: {line:?}"))
+    }
+
+    #[test]
+    fn system_prompt_rows_plus_overhead_row_equal_the_total() {
+        // Three real sections (spec: "fixture with at least three sections").
+        let sys = "===== TODAY =====\n2026-08-29\n\n===== SOUL.md =====\nCORE\n\n===== USER.md =====\nPROFILE-BODY".to_string();
+        let sizes = crate::brain::section_sizes(&sys);
+        assert_eq!(sizes.len(), 3, "fixture must have exactly three sections");
+
+        let r = build(&sys, &[], None, 200_000);
+        let rows_sum: usize = sizes.iter().map(|(_, bytes)| bytes).sum::<usize>()
+            + row_bytes(&r, SYSTEM_PROMPT_OVERHEAD_LABEL);
+        assert_eq!(
+            rows_sum,
+            sys.len(),
+            "per-section rows plus the overhead row must reconcile with the stated system prompt total"
+        );
+    }
+
+    #[test]
+    fn divider_shaped_line_inside_a_section_body_is_flagged_and_still_reconciles() {
+        // GOAL.md-style hazard: a hand-edited file contains a bare line
+        // shaped exactly like a section divider, mid-body.
+        let sys = "===== TODAY =====\n2026-08-29\n\n===== GOAL.md =====\nbefore\n===== TODAY =====\nafter".to_string();
+
+        let r = build(&sys, &[], None, 200_000);
+        assert!(
+            r.contains("ANOMALY"),
+            "a divider-shaped line found inside a section body must be visibly flagged, not silently mislabeled:\n{r}"
+        );
+
+        let sizes = crate::brain::section_sizes(&sys);
+        let rows_sum: usize = sizes.iter().map(|(_, bytes)| bytes).sum::<usize>()
+            + row_bytes(&r, SYSTEM_PROMPT_OVERHEAD_LABEL);
+        assert_eq!(
+            rows_sum,
+            sys.len(),
+            "bytes from the colliding line must still be counted and still reconcile with the total"
+        );
     }
 }

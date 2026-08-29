@@ -189,8 +189,17 @@ pub fn load_system_prompt(
 /// bytes count each line plus one newline; header lines and the blank join
 /// lines (the separator `parts.join("\n\n")` inserts between sections) are
 /// not attributed to any section.
+///
+/// A hand-editable brain file (e.g. `mentor/PROJECT.md`, an approach file)
+/// can contain a bare line shaped like `===== X =====`. `load_system_prompt`
+/// never emits the same label twice, so a repeated label is proof that a
+/// header-shaped line was found inside a section's body rather than at
+/// assembly time — those bytes are still counted (nothing is dropped), but
+/// under a label that says so (see `anomalous_label`) instead of silently
+/// passing as a real section.
 pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
     let mut out: Vec<(String, usize)> = Vec::new();
+    let mut seen_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut current: Option<String> = None;
     let mut size = 0usize;
     let mut lines = system.lines().peekable();
@@ -199,7 +208,11 @@ pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
             if let Some(l) = current.take() {
                 out.push((l, size));
             }
-            current = Some(label.to_string());
+            current = Some(if seen_labels.insert(label.to_string()) {
+                label.to_string()
+            } else {
+                anomalous_label(label)
+            });
             size = 0;
         } else if line.is_empty()
             && lines
@@ -224,6 +237,15 @@ pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
 /// `===== X =====` → `Some("X")`.
 fn section_label(line: &str) -> Option<&str> {
     line.strip_prefix("===== ")?.strip_suffix(" =====")
+}
+
+/// Label a section reopened by a repeated header as what it actually is: a
+/// divider-shaped line found inside another section's body, not a genuine
+/// section boundary the assembly produced.
+fn anomalous_label(label: &str) -> String {
+    format!(
+        "{label} [ANOMALY: divider-shaped line found inside a section body — not a real header]"
+    )
 }
 
 const FALLBACK_SYSTEM: &str = "\
