@@ -213,6 +213,14 @@ pub(crate) fn is_exam_command(line: &str) -> bool {
     line.trim() == "/exam"
 }
 
+/// True when the line is exactly `/context` (trimmed, case-insensitive) —
+/// the deterministic context-window breakdown (spec F1). TUI-only surface;
+/// the plain path never parses it (plain.rs is frozen).
+#[allow(dead_code)] // consumed by the /context command surface, not yet wired
+pub(crate) fn is_context_command(line: &str) -> bool {
+    line.trim().eq_ignore_ascii_case("/context")
+}
+
 /// Does this topic have a goal (tokens::H_GOAL)? Same approach-file priority as
 /// brain.rs GOAL loading: project override wins over global — keep in sync.
 pub(crate) fn topic_has_goal(project_root: &Path, global: &Path, topic: &str) -> bool {
@@ -238,6 +246,14 @@ mod tests {
         assert!(!is_exam_command("/exam now"));
         assert!(!is_exam_command("exam"));
         assert!(!is_exam_command("/examx"));
+    }
+
+    #[test]
+    fn is_context_command_matches_only_bare_context() {
+        assert!(is_context_command("/context"));
+        assert!(is_context_command("  /CONTEXT  "));
+        assert!(!is_context_command("/context now"));
+        assert!(!is_context_command("context"));
     }
 
     #[test]

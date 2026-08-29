@@ -180,6 +180,54 @@ pub fn load_system_prompt(
     parts.join("\n\n")
 }
 
+/// Split an assembled system prompt back into (label, body-bytes) pairs —
+/// the exact inverse of the `===== label =====` sections joined above.
+/// Single-sourced from the same format on purpose: the /context report
+/// measures the REAL string the model receives (including any drift after
+/// mid-session file edits), never a recomputation. Text before the first
+/// divider — the embedded fallback prompt — is labeled "(fallback)". Body
+/// bytes count each line plus one newline; header lines and the blank join
+/// lines (the separator `parts.join("\n\n")` inserts between sections) are
+/// not attributed to any section.
+#[allow(dead_code)] // consumed by the /context command surface, not yet wired
+pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
+    let mut out: Vec<(String, usize)> = Vec::new();
+    let mut current: Option<String> = None;
+    let mut size = 0usize;
+    let mut lines = system.lines().peekable();
+    while let Some(line) = lines.next() {
+        if let Some(label) = section_label(line) {
+            if let Some(l) = current.take() {
+                out.push((l, size));
+            }
+            current = Some(label.to_string());
+            size = 0;
+        } else if line.is_empty()
+            && lines
+                .peek()
+                .is_some_and(|next| section_label(next).is_some())
+        {
+            // The blank line `join("\n\n")` inserts right before the next
+            // section's divider — a separator, not body content.
+        } else if current.is_some() {
+            size += line.len() + 1;
+        } else if !line.trim().is_empty() {
+            current = Some("(fallback)".to_string());
+            size = line.len() + 1;
+        }
+    }
+    if let Some(l) = current {
+        out.push((l, size));
+    }
+    out
+}
+
+/// `===== X =====` → `Some("X")`.
+#[allow(dead_code)] // consumed by the /context command surface, not yet wired
+fn section_label(line: &str) -> Option<&str> {
+    line.strip_prefix("===== ")?.strip_suffix(" =====")
+}
+
 const FALLBACK_SYSTEM: &str = "\
 Sen Usta'sın: yaparak-öğrenmeyi yürüten senior bir mühendislik mentorusun. \
 Asla kullanıcının yerine kod yazma veya düzeltme. Neyin hatalı olduğunu ve \
@@ -512,5 +560,31 @@ mod tests {
         let sys = load_system_prompt(&global, None, "rust", "2026-08-07");
         assert!(sys.starts_with("===== TODAY =====\n2026-08-07"));
         let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn section_sizes_roundtrips_the_assembled_prompt() {
+        // Single-sourcing lock (spec F1): the report parses the REAL string
+        // the model receives, using the assembly's own divider format — so
+        // the breakdown can never drift from load_system_prompt.
+        let (global, _project) = temp_pair("sizes");
+        fs::write(global.join("SOUL.md"), "CORE").unwrap();
+        fs::write(global.join("USER.md"), "PROFILE-BODY").unwrap();
+        let sys = load_system_prompt(&global, None, "rust", "2026-08-29");
+        let sizes = section_sizes(&sys);
+        let labels: Vec<&str> = sizes.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["TODAY", "SOUL.md", "USER.md"]);
+        // Body bytes: each line plus its newline ("CORE" → 5).
+        assert_eq!(sizes[1].1, "CORE".len() + 1);
+        assert_eq!(sizes[2].1, "PROFILE-BODY".len() + 1);
+        let _ = fs::remove_dir_all(global.parent().unwrap());
+    }
+
+    #[test]
+    fn section_sizes_labels_the_fallback_prompt() {
+        let sizes = section_sizes(FALLBACK_SYSTEM);
+        assert_eq!(sizes.len(), 1);
+        assert_eq!(sizes[0].0, "(fallback)");
+        assert!(sizes[0].1 > 0);
     }
 }

@@ -392,6 +392,18 @@ pub(crate) async fn handle_batch_change(
 /// `flow_frame`, which follows it.
 const PENDING_PREAMBLE: &str = "[The user changed the files below while working; they are delivered together with the user's message, which follows after the file block — the user's own words are the message to answer.]";
 
+/// A history turn that is a shell-injected file delivery (single save,
+/// live batch, or ride-along) — the /context report's classification hook,
+/// single-sourced next to the frames it matches.
+#[allow(dead_code)] // consumed by the /context command surface, not yet wired
+pub(crate) fn is_delivery_turn(text: &str) -> bool {
+    text.starts_with(PENDING_PREAMBLE)
+        || text.starts_with("[Files changed]")
+        || text.starts_with("[File saved")
+        || text.starts_with("[File changed")
+        || text.starts_with("[Exercise submission")
+}
+
 /// Compose the combined outgoing turn for a ride-along delivery (spec K2):
 /// the one-line pending preamble, the lesson-flow-framed file block
 /// (companion frame axis, spec K4), the optional eyes-only `cargo check`
@@ -512,6 +524,17 @@ pub(crate) async fn deliver_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_delivery_turn_matches_the_injected_file_frames() {
+        assert!(is_delivery_turn(PENDING_PREAMBLE));
+        assert!(is_delivery_turn("[Files changed]\nFILE: x"));
+        assert!(is_delivery_turn("[File saved: src/main.rs]\n..."));
+        assert!(is_delivery_turn("[File changed: src/main.rs]\n..."));
+        assert!(is_delivery_turn("[Exercise submission saved: e.md]\n..."));
+        assert!(!is_delivery_turn("[EXAM MODE — MOCK EXAM]\n..."));
+        assert!(!is_delivery_turn("just a user message"));
+    }
 
     #[test]
     fn is_exercise_path_detects_exercises_dir() {
