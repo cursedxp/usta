@@ -186,9 +186,16 @@ pub fn load_system_prompt(
 /// measures the REAL string the model receives (including any drift after
 /// mid-session file edits), never a recomputation. Text before the first
 /// divider — the embedded fallback prompt — is labeled "(fallback)". Body
-/// bytes count each line plus one newline; header lines and the blank join
-/// lines (the separator `parts.join("\n\n")` inserts between sections) are
-/// not attributed to any section.
+/// bytes count each line plus its real trailing newline — which the FINAL
+/// line of `system` doesn't have when the string itself doesn't end in
+/// `\n` (`str::lines()` doesn't report this, so it's tracked separately
+/// below; a body line always gets a real trailing newline in every other
+/// position, since a line boundary anywhere but at the very end always
+/// came from an actual `\n` in the source). Getting this wrong over-counts
+/// a divider-less prompt (a single "(fallback)" section, nothing to absorb
+/// the slack) by exactly one byte. Header lines and the blank join lines
+/// (the separator `parts.join("\n\n")` inserts between sections) are not
+/// attributed to any section.
 ///
 /// A hand-editable brain file (e.g. `mentor/PROJECT.md`, an approach file)
 /// can contain a bare line shaped like `===== X =====`. `load_system_prompt`
@@ -202,8 +209,18 @@ pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
     let mut seen_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut current: Option<String> = None;
     let mut size = 0usize;
+    let ends_with_newline = system.ends_with('\n');
     let mut lines = system.lines().peekable();
     while let Some(line) = lines.next() {
+        // Real byte count of this line INCLUDING its trailing newline, when
+        // it had one. Every line has one except possibly the very last —
+        // and only when `system` itself doesn't end in `\n`.
+        let is_last_line = lines.peek().is_none();
+        let line_bytes = if is_last_line && !ends_with_newline {
+            line.len()
+        } else {
+            line.len() + 1
+        };
         if let Some(label) = section_label(line) {
             if let Some(l) = current.take() {
                 out.push((l, size));
@@ -222,10 +239,10 @@ pub fn section_sizes(system: &str) -> Vec<(String, usize)> {
             // The blank line `join("\n\n")` inserts right before the next
             // section's divider — a separator, not body content.
         } else if current.is_some() {
-            size += line.len() + 1;
+            size += line_bytes;
         } else if !line.trim().is_empty() {
             current = Some("(fallback)".to_string());
-            size = line.len() + 1;
+            size = line_bytes;
         }
     }
     if let Some(l) = current {
@@ -594,9 +611,14 @@ mod tests {
         let sizes = section_sizes(&sys);
         let labels: Vec<&str> = sizes.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(labels, vec!["TODAY", "SOUL.md", "USER.md"]);
-        // Body bytes: each line plus its newline ("CORE" → 5).
+        // Body bytes: each line plus its REAL trailing newline. SOUL.md is
+        // followed by another section, so its body line really does end in
+        // "\n" (+1). USER.md is the assembled prompt's LAST section and
+        // `load_system_prompt` never appends a trailing newline, so its
+        // last line has no "\n" to count — asserting +1 here was finding 6's
+        // bug encoded straight into the test.
         assert_eq!(sizes[1].1, "CORE".len() + 1);
-        assert_eq!(sizes[2].1, "PROFILE-BODY".len() + 1);
+        assert_eq!(sizes[2].1, "PROFILE-BODY".len());
         let _ = fs::remove_dir_all(global.parent().unwrap());
     }
 

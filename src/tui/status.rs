@@ -46,9 +46,14 @@ pub fn render_status(
     }
     // Dim verification marker (spec C2): deterministic presence, zero
     // tokens, never a turn — only ever true for a project that HAS a
-    // verifier (spec C1 gates it at VerifyMonitor).
+    // verifier (spec C1 gates it at VerifyMonitor). Past tense on purpose:
+    // this reports the LAST check's verdict, which can go stale the moment
+    // the learner fixes the code — it is not a live "is failing now" claim.
     if verify_failing {
-        spans.push(Span::styled("✗ check failing ".to_string(), theme::info()));
+        spans.push(Span::styled(
+            "✗ last check failed ".to_string(),
+            theme::info(),
+        ));
     }
     if let Status::Thinking { frame, cancel_hint } = s {
         let hint = if *cancel_hint {
@@ -243,7 +248,7 @@ mod tests {
             Some((true, false, 0)),
             true,
         ));
-        assert!(on.contains("✗ check failing"));
+        assert!(on.contains("✗ last check failed"));
         let off = text(&render_status(
             &Status::Idle,
             None,
@@ -251,6 +256,6 @@ mod tests {
             Some((true, false, 0)),
             false,
         ));
-        assert!(!off.contains("check failing"));
+        assert!(!off.contains("last check failed"));
     }
 }

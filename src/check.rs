@@ -123,21 +123,32 @@ impl VerifyMonitor {
     }
 
     /// One-line state note while the last known verdict is red; None
-    /// otherwise. Carried on EVERY delivered turn until a later check comes
-    /// back clean. The instruction rides INSIDE the note, so flow_frame
-    /// needs no extra rule (prompt diet). Honest about staleness: "as of
-    /// the last delivered change".
+    /// otherwise. Carried on turns that ship no fresh check result of their
+    /// own — until a later check comes back clean. The instruction rides
+    /// INSIDE the note, so flow_frame needs no extra rule (prompt diet).
+    /// Honest about staleness: this note is emitted only when no check ran
+    /// THIS turn, so the turn's own delivered change is unverified — the
+    /// note attributes the failure to the last check that actually ran, not
+    /// to whatever was delivered since.
     pub fn note(&self) -> Option<String> {
         match &self.verdict {
             Some(Verdict::Fail { summary }) if self.enabled => Some(format!(
-                "[build state: the last cargo check was still failing — first error: {summary}. \
-The project did not compile as of the last delivered change; do not treat the \
-current step as complete until a later check comes back clean.]"
+                "{NOTE_PREFIX} the last cargo check that ran was failing — first error: {summary}. \
+Nothing has re-verified the project since; do not treat the current step as \
+complete until a later check comes back clean.]"
             )),
             _ => None,
         }
     }
 }
+
+/// Leading marker of the remembered-verdict note above — exposed so a
+/// caller outside this module (`context_report`'s history classifier) can
+/// recognize a bare turn that carries only this note, without re-deriving
+/// the exact wording. Such a turn is mostly the user's own words with a
+/// one-line status pixel prepended, unlike a genuine shell-injected
+/// directive (`[EXAM MODE]`, `[Files changed]`, …).
+pub(crate) const NOTE_PREFIX: &str = "[build state:";
 
 #[cfg(test)]
 mod tests {

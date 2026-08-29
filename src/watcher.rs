@@ -158,9 +158,16 @@ impl StructureTracker {
     }
 
     /// Record a disappearance; true when the path was a known directory —
-    /// the "directory removed" signal.
+    /// the "directory removed" signal. Also prunes every tracked descendant
+    /// of `path`: a directory removed in one shot (e.g. `rm -rf`, no
+    /// per-child event for each nested directory) must not leave stale
+    /// children behind in the tracker — a stale child left in `dirs` would
+    /// make a LATER re-creation of that same child report as "already
+    /// known" instead of "new" (finding 10).
     pub fn note_removed(&mut self, path: &Path) -> bool {
-        self.dirs.remove(path)
+        let was_known = self.dirs.remove(path);
+        self.dirs.retain(|d| !d.starts_with(path));
+        was_known
     }
 }
 
@@ -457,6 +464,42 @@ mod tests {
         assert!(t.note_removed(&fresh));
         assert!(!t.note_removed(&fresh));
         assert!(!t.note_removed(&base.join("never-seen")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn note_removed_prunes_tracked_descendants_so_recreation_is_reported_as_new() {
+        // Finding 10: a directory removed in one shot (e.g. `rm -rf`, no
+        // per-child Remove event for every nested directory) must not leave
+        // stale children behind — a later re-creation of such a child must
+        // still be reported as NEW, not silently swallowed as "already
+        // known".
+        let base = std::env::temp_dir().join(format!(
+            "usta_watcher_prune_descendants_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let mut t = StructureTracker::seed(&base);
+
+        let parent = base.join("brands");
+        let child = parent.join("marka-a");
+        // Both directories become known — as if the watcher had seen both
+        // Create events (the ordinary two-event case).
+        assert!(t.note_new_dir(&parent));
+        assert!(t.note_new_dir(&child));
+
+        // Only the PARENT's Remove event arrives — the single-shot `rm -rf`
+        // case where no per-child event fires for the nested directory.
+        assert!(t.note_removed(&parent));
+
+        // Without pruning, `child` would still be "known" here, so its
+        // re-creation would wrongly report as NOT new.
+        assert!(
+            t.note_new_dir(&child),
+            "a child of a removed directory must be forgotten too, so its recreation reports as new"
+        );
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -1043,18 +1043,25 @@ mod tests {
 
     /// A minimal, compiling cargo project in a scratch dir — so `run_check`
     /// actually runs instead of short-circuiting on `is_cargo_project`. The
-    /// package name is derived from `tag` (not a shared "scratch" literal):
+    /// package name is derived from `tag` AND this process's id (mirroring
+    /// `scratch_dir`'s own directory name, not a shared "scratch" literal):
     /// this repo's `~/.cargo/config.toml` points every project at one
     /// machine-wide `target-dir`, and two concurrently running `cargo check`
     /// invocations for identically-named packages can cross-contaminate each
     /// other's build fingerprint there — a passing scratch project's cached
     /// success leaking into a deliberately-broken one running in parallel.
+    /// `tag` alone is only unique WITHIN one `cargo test` process (each test
+    /// function uses a distinct tag); it does not guard against two
+    /// concurrent `cargo test` processes on the same machine both running
+    /// the SAME test function (same tag) against the same shared
+    /// `target-dir` at once — the process id closes that gap too.
     fn scratch_cargo_project(tag: &str) -> std::path::PathBuf {
         let dir = scratch_dir(tag);
         std::fs::write(
             dir.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"scratch-{tag}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n"
+                "[package]\nname = \"scratch-{tag}-{}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+                std::process::id()
             ),
         )
         .unwrap();
@@ -1352,7 +1359,7 @@ mod tests {
         )
         .await;
         assert!(!second.contains("FOR YOUR EYES ONLY"));
-        assert!(second.contains("[build state: the last cargo check was still failing"));
+        assert!(second.contains("[build state: the last cargo check that ran was failing"));
         assert!(second.trim_end().ends_with("done"));
         std::fs::remove_dir_all(&dir).ok();
     }

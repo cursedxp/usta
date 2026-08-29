@@ -62,16 +62,19 @@ modellemelidir.
 - `feedback::FileMemory::knows(path) -> bool` — yol daha önce görüldü mü
 - `polite::classify_flush(batch, tracker, files, project_root) -> (Vec<PathBuf>, Vec<String>)`
   — flush anında içerik/yapı ayrımı
-- Yapı notu biçimleri: `+ <rel>/ (new directory)` · `- <rel> (deleted)` ·
-  `- <rel>/ (directory removed)`; taşma satırı `… and N more structural changes`;
-  payload bloğu başlığı `STRUCTURE: project tree changes`
+- Yapı notu biçimleri: `+ <rel>/ (new directory)` · `- <rel> (no longer present)`
+  (dosya) · `- <rel>/ (no longer present)` (dizin) — iki silinme biçimi de
+  kasıtlı olarak AYNI kelimeyi taşır: bu katmanda bir yeniden adlandırma bir
+  silmeden ayırt edilemez, "deleted"/"removed" demek bilmediği bir kesinliği
+  iddia etmek olurdu; taşma satırı `… and N more structural changes`; payload
+  bloğu başlığı `STRUCTURE: project tree changes`
 - `polite::MAX_STRUCTURE_NOTES = 20`
 - `check::Verdict::{Pass, Fail}` · `check::verdict_of(raw)` · `check::error_summary(raw)`
 - `check::VerifyMonitor` — projenin doğrulama sinyalinin kabuk hafızası;
   `new(project_root)` (etkinlik = `is_cargo_project`) · `record(raw)` ·
   `is_failing()` · `note() -> Option<String>`
-- Durum satırı işareti: `✗ check failing ` (dim; yalnız watching açıkken)
-- Durum notu satırı: `[build state: the last cargo check was still failing — first error: …]`
+- Durum satırı işareti: `✗ last check failed ` (dim; yalnız watching açıkken)
+- Durum notu satırı: `[build state: the last cargo check that ran was failing — first error: …]`
 - `polite::handle_watch_command(cmd, watching, live, pending) -> Vec<String>` —
   run.rs'ten yerinden edilen /watch kolu
 - `/context` · `slash::is_context_command` · modül `src/context_report.rs` ·
@@ -128,16 +131,23 @@ teslim biter bitmez unutulması. Bu yüzden:
   `monitor.record(raw)` ile saklanır (`Verdict::Pass` / `Verdict::Fail{summary}` —
   özet ilk hata satırı, kırpılmış). Taze eyes-only blok bugünkü gibi o turla gider
   (`check_result_block` tek kaynak, tahmin protokolü aynen).
-- **Kırmızıyken her teslim edilen tur tek satır taşır:** `monitor.note()` —
-  `[build state: the last cargo check was still failing — first error: <özet>. The
-  project did not compile as of the last delivered change; do not treat the current
-  step as complete until a later check comes back clean.]` Not, payload'lı ama
-  check'siz turlara (exercise-only, yapı-only, `run_check` → None) VE payload'sız
-  turlara iliştirilir. Bu, tur 14-15 sınıfını kapatır: Usta kırmızı projede "bitti"
-  diyemez, çünkü kabuk ona her turda hatırlatır. Talimat notun İÇİNDE taşınır —
-  `flow_frame`'e yeni kural gerekmez (prompt diyeti).
-- **Durum satırı:** kırmızıyken dim `✗ check failing ` işareti (`theme::info()` dim
-  stili — "navigator's raised eyebrow", tur değil). Yalnız watching açıkken görünür.
+- **Kırmızıyken, o turda taze bir check koşmayan her tur tek satır taşır:**
+  `monitor.note()` — `[build state: the last cargo check that ran was failing —
+  first error: <özet>. Nothing has re-verified the project since; do not treat
+  the current step as complete until a later check comes back clean.]` Not,
+  yalnız TAZE bir check'in koşmadığı turlara gider — payload'lı ama check'siz
+  turlar (exercise-only, yapı-only, `run_check` → None) VE payload'sız turlar;
+  bir check GERÇEKTEN koşan teslim bu notu DEĞİL, taze eyes-only bloğu taşır —
+  ikisi karşılıklı dışlayıcıdır, "her teslim edilen tur" değil. Not kasıtlı
+  olarak son ÇALIŞAN check'e atıfta bulunur, o turda teslim edilen değişikliğe
+  değil — o değişiğin derleme durumu tanım gereği bilinmiyor (bu notun koştuğu
+  her durumda check bu turda koşmadı). Bu, tur 14-15 sınıfını kapatır: Usta
+  kırmızı projede "bitti" diyemez, çünkü kabuk ona hatırlatır. Talimat notun
+  İÇİNDE taşınır — `flow_frame`'e yeni kural gerekmez (prompt diyeti).
+- **Durum satırı:** kırmızıyken dim `✗ last check failed ` işareti (`theme::info()`
+  dim stili — "navigator's raised eyebrow", tur değil; geçmiş zaman kasıtlı —
+  bu son check'in kararnamesidir, "şu an derlenmiyor" iddiası değil). Yalnız
+  watching açıkken görünür.
 - **Kararname yalnız bir SONRAKİ gerçek check ile değişir** — yani non-exercise
   dosya içeren bir sonraki teslimle. **Dürüstçe kabul edilen bayatlık penceresi:**
   kullanıcı kodu düzeltip kaydettikten sonra, o kaydı taşıyan mesajına kadar önbellek
@@ -173,9 +183,9 @@ korelasyon YOK, kabul edilen şekil). Mekanik:
   yolundan gider (boş full-contents bloğu; dürüst).
 - Sınıflandırma **flush anında**, kabukta, deterministik (`classify_flush`): var +
   dizin → tracker bilmiyorsa `+ <rel>/ (new directory)`; var + dosya → içerik yolu
-  (mevcut davranış); yok + tracker'ın bildiği dizin → `- <rel>/ (directory removed)`;
-  yok + `FileMemory`'nin bildiği dosya → `- <rel> (deleted)`; yok + hiç bilinmeyen →
-  sessiz (transient temp — bugünkü davranış korunur).
+  (mevcut davranış); yok + tracker'ın bildiği dizin → `- <rel>/ (no longer present)`;
+  yok + `FileMemory`'nin bildiği dosya → `- <rel> (no longer present)`; yok + hiç
+  bilinmeyen → sessiz (transient temp — bugünkü davranış korunur).
 - `StructureTracker` oturum başında proje ağacından tohumlanır (yok sayılan dizinler
   atlanır) — var olan bir dizine gelen olay asla "yeni dizin" sayılmaz.
 - **İçerik gitmez:** dizin içeriklerini göndermeme kararı (v0.24 kökenli) AYNEN
@@ -193,6 +203,18 @@ korelasyon YOK, kabul edilen şekil). Mekanik:
   başlığı altında), `flow_frame` hepsini sarar. İçerik dosyası olmayan, yalnız-yapı
   teslimi de aynı çerçeveyle gider (E1'in denetim kuralı yapı satırını kanıt olarak
   kullanır: "klasörleri açtın mı?" sorusu ölür).
+- **Mixed-batch olasılık ipucu (bilinçli, sınırlı — bu turda eklendi):** aynı
+  teslimde en az bir kayboluş notu (`- ...`) VE en az bir belirişi notu (`+ ...`)
+  varsa, not listesinin sonuna tek satır eklenir: `"(A disappearance and an
+  appearance in this batch may be two halves of one move or rename.)"` Bu
+  KORELASYON DEĞİL — hangi kayboluşun hangi belirişle eşleştiği bilinmez,
+  söylenmez, hiçbir kod ikisini eşleştirmez; yalnız olasılığı adlandıran bir
+  ipucudur. Kapsamı görünenden dar: `+` notu yalnız `classify_flush`'ın YENİ
+  DİZİN sınıfından gelir — bir dosyanın belirişi İÇERİK yolundan gider (tam
+  içerik bloğu) ve `+` notu üretmez. Pratikte bu yüzden ipucu yalnızca DİZİN
+  yeniden adlandırmasında tetiklenir; dosya yeniden adlandırması (silme notu +
+  yeni dosyanın içerik bloğu) hiçbir zaman tetiklemez — kapsam dışı bölümündeki
+  "rename korelasyonu yok" kararıyla çelişmez (bkz. Kapsam dışı).
 - **Her iki modda da** (companion VE live) notlar bir sonraki kullanıcı turuna biner —
   live'ın anlık turu içerik içindir; `mkdir` live modda bile tur SATIN ALMAZ (K1
   ruhu, kabul edilen sadeleştirme).
@@ -288,17 +310,23 @@ mekaniği değişmez.
   içerikli teslimin check'inde görünür. Kabul edilen asgarilik.
 - **`total_included == 0` + not yok + kararname kırmızı:** not yine iliştirilir
   (payload'sız tur kuralı — hatırlamak düzeltmenin ta kendisi).
-- **Rename:** eski yol `- old (deleted)` notu + yeni yol içerik yolundan FirstSight.
+- **Rename:** eski yol `- old (no longer present)` notu + yeni yol içerik yolundan FirstSight.
   Korelasyon yok — kabul edilen şekil.
 - **Silinip geri gelen dosya:** baseline korunur → geri geliş diff olarak görünür.
 - **`/exam`/`/game` direktifleri:** hiçbir şey binmez (v0.28.0 pin'i aynen — notlar
   da dahil, `attach_pending` yalnız kullanıcının kendi satırını sarar).
 - **Plain yol:** watcher kanalı genişlediği için plain'e dizin/silinme yolları da
   düşer; `handle_file_change` bunları bugünkü silent-skip sınıflarıyla (NotFound /
-  IsADirectory) sessizce yutar — `src/plain.rs` kaynak olarak DEĞİŞMEZ, davranışı da
-  değişmez. Plain'de yapı takibi, monitör ve `/context` YOK (bilinçli; `/context`
-  plain'de normal metin olarak modele gider — kabul edilen boşluk, help satırı TUI
-  bağlamında yazılır).
+  IsADirectory) sessizce yutar — `src/plain.rs` **KAYNAK olarak** DEĞİŞMEZ (byte-
+  byte aynı dosya). Ama davranış aynı kalmaz: `should_forward` artık dosya
+  `Create` olaylarını da iletiyor (D1), ve bu olay plain'in paylaştığı watcher
+  kanalından geçiyor — önceden yalnız `Modify` iletiliyordu, boş bir dosyanın
+  tek başına `Create`'i hiç kanala düşmüyordu. Sonuç: plain yolda BOŞ bir dosya
+  oluşturmak artık `handle_file_change`'i FirstSight ile tetikler ve önceden
+  hiçbir şey üretmezken şimdi anında bir tur açar — kaynak değişmeden davranış
+  değişen somut bir örnek. Plain'de yapı takibi, monitör ve `/context` YOK
+  (bilinçli; `/context` plain'de normal metin olarak modele gider — kabul
+  edilen boşluk, help satırı TUI bağlamında yazılır).
 - **`/context` sırasında bölüm-ayırıcı taklidi:** bir brain dosyasının gövdesinde
   `===== x =====` biçiminde satır varsa döküm o noktada yanlış bölünür — kabul edilen
   teorik boşluk (ayırıcı bizim kendi biçimimiz, brain dosyaları bizim kontrolümüzde).
@@ -318,7 +346,12 @@ mekaniği değişmez.
 - **Flush anında arkaplan check** — C2'de gerekçeli reddedildi (görev/kanal/
   coalescing karmaşıklığı yalnız soğuk-başlangıç gecikmesini satın alır; v0.28.0'ın
   "sessiz birikimde derleme yok" kararı ayakta).
-- **Rename korelasyonu** — silme satırı + yeni içerik yeter.
+- **Rename korelasyonu** — silme satırı + yeni içerik (dosya) veya silme satırı
+  + yeni dizin notu (dizin) birbirinden bağımsız olgular olarak kalır, hiçbir
+  kod ikisini eşleştirmez. Tek istisna, D2'de belgelenen mixed-batch ipucudur:
+  aynı batch'te ikisi de varsa tek satırlık bir OLASILIK notu eklenir — bu
+  eşleştirme mantığı değil, salt bir hatırlatmadır; hangi ikisinin birbirine
+  karşılık geldiğini kod hâlâ bilmez.
 - **Oturum başı check** — soğuk 60 sn açılışa bindirilmez.
 - **Plain yolunda yapı/monitör//context** — plain dokunulmaz sözleşmesi.
 - **`next_unseen`/plan sahipliği vb. 13b işleri** — kendi döngülerinde.
@@ -376,8 +409,9 @@ mekaniği değişmez.
   `content.len()`'e güncellenmesi, `is_failing()` durum-satırı beslemesi — hepsi
   ısırma-doğrulamalı.
 - Elle duman testi: Cargo projesinde kasıtlı hata + kaydet + mesaj (check koşar,
-  eyes-only blok) + kaydetmeden konuşmaya devam → her turda `[build state:]` satırı
-  ve `✗ check failing` işareti; düzelt + kaydet + mesaj → işaret söner; `mkdir` →
+  eyes-only blok) + kaydetmeden konuşmaya devam → check koşmayan her turda
+  `[build state:]` satırı ve `✗ last check failed` işareti; düzelt + kaydet + mesaj →
+  işaret söner; `mkdir` →
   sayaç artar, sonraki mesajda STRUCTURE satırı; Cargo-dışı dizinde aynı akış →
   hiçbir işaret/not yok; `/context` → döküm.
 

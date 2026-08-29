@@ -14,6 +14,16 @@ fn est_tokens(bytes: usize) -> usize {
     bytes / 4
 }
 
+/// "1 turn" / "N turns" — singular grammar for the one-turn case instead of
+/// always pluralizing.
+fn pluralize_turns(n: usize) -> String {
+    if n == 1 {
+        "1 turn".to_string()
+    } else {
+        format!("{n} turns")
+    }
+}
+
 /// `brain::section_sizes` deliberately excludes divider header lines and the
 /// blank `join("\n\n")` separators from every section (see its doc comment)
 /// — so the per-section rows never sum to the system prompt's total on
@@ -68,6 +78,14 @@ pub(crate) fn build(
             1
         } else if crate::file_feedback::is_delivery_turn(&text) {
             2
+        } else if text.starts_with(crate::check::NOTE_PREFIX) {
+            // A bare turn carrying only the remembered-verdict note (see
+            // `check::VerifyMonitor::note`) is not a shell-injected
+            // directive like `[EXAM MODE]` or a file delivery — its bulk
+            // and its meaning are the learner's own words, with a one-line
+            // status pixel prepended. Filing it under "injected directives"
+            // would bury the learner's own message there instead.
+            0
         } else if text.starts_with('[') {
             3
         } else {
@@ -77,13 +95,16 @@ pub(crate) fn build(
         buckets[idx].2 += 1;
     }
     out.push_str(&format!(
-        "history: {} bytes (~{} tokens) across {} turns\n",
+        "history: {} bytes (~{} tokens) across {}\n",
         history_bytes,
         est_tokens(history_bytes),
-        history.len()
+        pluralize_turns(history.len())
     ));
     for (name, bytes, count) in &buckets {
-        out.push_str(&format!("  {name:<34} {bytes} bytes ({count} turns)\n"));
+        out.push_str(&format!(
+            "  {name:<34} {bytes} bytes ({})\n",
+            pluralize_turns(*count)
+        ));
     }
     let total = system.len() + history_bytes;
     out.push_str(&format!(
@@ -129,12 +150,45 @@ mod tests {
         assert!(r.contains("file deliveries"));
         assert!(r.contains("injected directives"));
         assert!(
-            r.contains("(1 turns)"),
-            "each bucket counted exactly one turn"
+            r.contains("(1 turn)"),
+            "each bucket counted exactly one turn, singular grammar"
         );
         assert!(r.contains("last call reported: 131072 tokens"));
         assert!(r.contains("across 4 turns"));
         assert!(r.contains("bytes"));
+    }
+
+    #[test]
+    fn bare_turn_with_build_state_note_classifies_as_the_learners_own_message() {
+        // A bare turn (no delivery riding with it) while the last verdict is
+        // red starts with `[build state:` — the same leading bracket as a
+        // genuine injected directive like `[EXAM MODE]`. Without the
+        // dedicated check the leading-bracket rule files the WHOLE turn,
+        // including the learner's own words, under "injected directives".
+        let text = format!(
+            "{} the last cargo check that ran was failing — first error: e. \
+Nothing has re-verified the project since; do not treat the current step as \
+complete until a later check comes back clean.]\n\nso is this part finished?",
+            crate::check::NOTE_PREFIX
+        );
+        let history = vec![Message::user(&text)];
+        let r = build(&sys(), &history, None, 200_000);
+        let messages_line = r
+            .lines()
+            .find(|l| l.contains("your messages"))
+            .expect("your messages row must exist");
+        assert!(
+            messages_line.contains("(1 turn)"),
+            "the bare turn belongs to the learner's own message bucket: {messages_line}"
+        );
+        let injected_line = r
+            .lines()
+            .find(|l| l.contains("injected directives"))
+            .expect("injected directives row must exist");
+        assert!(
+            injected_line.contains("(0 turns)"),
+            "a note-prefixed bare turn must NOT be filed as an injected directive: {injected_line}"
+        );
     }
 
     #[test]
@@ -174,6 +228,43 @@ mod tests {
             rows_sum,
             sys.len(),
             "per-section rows plus the overhead row must reconcile with the stated system prompt total"
+        );
+    }
+
+    #[test]
+    fn divider_less_prompt_rows_plus_overhead_row_equal_the_total() {
+        // Regression for the embedded-fallback shape (finding 6): a system
+        // prompt with NO divider at all — a single line, no trailing
+        // newline, exactly the shape of `brain::FALLBACK_SYSTEM`. Before
+        // the fix, the lone "(fallback)" section over-counted its own last
+        // line by one byte with no header bytes anywhere to absorb the
+        // slack, so the saturating overhead subtraction silently clamped to
+        // 0 and the rows summed to ONE MORE than the stated total.
+        let sys = "Sen Usta'sın: yaparak-öğrenmeyi yürüten senior bir mühendislik mentorusun."
+            .to_string();
+        assert!(
+            !sys.contains("====="),
+            "fixture must carry no divider at all"
+        );
+        assert!(
+            !sys.ends_with('\n'),
+            "fixture must have no trailing newline"
+        );
+
+        let sizes = crate::brain::section_sizes(&sys);
+        assert_eq!(
+            sizes.len(),
+            1,
+            "a divider-less prompt is exactly one (fallback) section"
+        );
+
+        let r = build(&sys, &[], None, 200_000);
+        let rows_sum: usize = sizes.iter().map(|(_, bytes)| bytes).sum::<usize>()
+            + row_bytes(&r, SYSTEM_PROMPT_OVERHEAD_LABEL);
+        assert_eq!(
+            rows_sum,
+            sys.len(),
+            "per-section rows plus the overhead row must reconcile exactly, even with zero header bytes to hide a miscount"
         );
     }
 
