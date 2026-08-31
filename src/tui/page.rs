@@ -123,7 +123,11 @@ pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
 ///
 /// `Terminal::resize` (and `autoresize`, which calls it) cannot be used here:
 /// it force-clears the whole screen on a horizontal shrink, which would take
-/// the user's transcript down with the ghost.
+/// the user's transcript down with the ghost. This is a rule about this
+/// function's own body, not a property of the draw path as a whole:
+/// `Terminal::draw` autoresizes internally before every frame, so the
+/// screen-clearing shrink path remains reachable from the draw that follows
+/// a resize.
 ///
 /// The erase sequence below writes through a private `std::io::stdout()`
 /// handle rather than through `tui.terminal`'s backend (spec-mandated, matching
@@ -213,8 +217,8 @@ mod tests {
         // The tracked cursor goes stale when the terminal reflows on resize, so
         // handle_resize stops asking where it is and puts it somewhere known.
         // Seeding at h - VIEWPORT_H makes compute_inline_size land the viewport on
-        // the last VIEWPORT_H rows without appending (and therefore scrolling) a
-        // single line.
+        // the last VIEWPORT_H rows so the lines it appends fit below the seed row
+        // without forcing the screen to scroll.
         assert_eq!(anchor_row(30), 30 - VIEWPORT_H);
         assert_eq!(anchor_row(VIEWPORT_H), 0);
         assert_eq!(anchor_row(4), 0, "a short screen must not underflow");
@@ -254,6 +258,7 @@ mod tests {
             ("run.rs", include_str!("run.rs")),
             ("ask.rs", include_str!("ask.rs")),
             ("entry.rs", include_str!("entry.rs")),
+            ("intro.rs", include_str!("intro.rs")),
         ] {
             assert!(
                 src.contains("Event::Resize"),
@@ -276,8 +281,9 @@ mod tests {
         // Ghost frames (v0.29.0): after a width change the terminal reflows, the
         // tracked cursor goes stale, and ratatui anchored the new viewport at a
         // wrong row — inline clear_viewport only erases DOWNWARD from that row, so
-        // the old frame's top rows survived. The fix walks UP by the (reflow-proof)
-        // cursor offset and erases exactly VIEWPORT_H lines.
+        // the old frame's top rows survived. The fix walks UP by the cursor offset,
+        // which survives the reflow of the scrollback above the frame, and erases
+        // exactly VIEWPORT_H lines.
         //
         // The negative needles are the point: clearing the whole screen or calling
         // Terminal::resize (which force-clears on a horizontal shrink) would take

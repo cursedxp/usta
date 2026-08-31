@@ -19,15 +19,15 @@ pub const VIEWPORT_H: u16 = 6;
 
 pub struct Tui {
     pub terminal: Terminal<TrackedBackend<Stdout>>,
-    /// Wired into resize handling in Task 3 — measured now so setup() and
-    /// resize share the same seeding logic from the start.
+    /// `last_size` is measured at setup so the resize handler can tell a real
+    /// size change from a repeat, sharing the same seeding logic from the start.
     pub last_size: Size,
 }
 
 /// Build a fresh inline-viewport terminal seeded at a known cursor position.
-/// No CPR here — the seed comes from the caller (either setup()'s one real
-/// query, or, from Task 3 onward, a position computed after erasing the old
-/// frame). Kept separate so callers never need to issue a second CPR.
+/// No CPR here — the seed is either the startup CPR position, or a position
+/// computed after erasing the old frame. Kept separate so callers never need
+/// to issue a second CPR.
 pub(crate) fn rebuild_inline(seed: Position) -> Result<Terminal<TrackedBackend<Stdout>>> {
     let terminal = Terminal::with_options(
         TrackedBackend::new(CrosstermBackend::new(std::io::stdout()), seed),
@@ -114,6 +114,7 @@ mod tests {
             ("run.rs", include_str!("run.rs")),
             ("ask.rs", include_str!("ask.rs")),
             ("entry.rs", include_str!("entry.rs")),
+            ("intro.rs", include_str!("intro.rs")),
         ] {
             let p = src.split("#[cfg(test)]").next().unwrap();
             assert!(
