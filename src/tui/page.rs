@@ -110,12 +110,16 @@ pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
 /// `clear_viewport` only erases DOWNWARD from there: whatever old paint sat
 /// ABOVE the new anchor survives as a ghost frame.
 ///
-/// The fix rests on one invariant: the cursor's offset *within* the frame is
-/// reflow-proof, because the terminal moves the cursor together with the
-/// content it sits in. So `off = tracked_cursor.y - viewport_area.y` is exact
-/// even though neither absolute row is. Walk up by `off`, erase exactly
-/// `VIEWPORT_H` lines, then plant the cursor at a KNOWN absolute row and
-/// rebuild the inline viewport from that seed — no CPR involved.
+/// The fix rests on an assumption, not a guarantee: `off = tracked_cursor.y -
+/// viewport_area.y`, both pre-resize tracked values, is reflow-proof for the
+/// scrollback ABOVE the frame — which is what the ghost comes from — and
+/// holds only as long as the frame's own rows are not rewrapped by the
+/// resize. Walk up by `off`, erase exactly `VIEWPORT_H` lines, then plant the
+/// cursor at a KNOWN absolute row and rebuild the inline viewport from that
+/// seed — no CPR involved. But `off` is applied as `MoveUp(off)` against the
+/// REAL, post-reflow cursor: if a width narrowing rewraps the frame's own
+/// lines, the real distance grows, the walk-up falls short of the true frame
+/// top, and some residue can survive.
 ///
 /// `Terminal::resize` (and `autoresize`, which calls it) cannot be used here:
 /// it force-clears the whole screen on a horizontal shrink, which would take
@@ -128,9 +132,12 @@ pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
 /// harmless only because the very next step replaces the terminal wholesale
 /// via `rebuild_inline`. The sequence is also not transactional: if a write
 /// fails partway through, the function returns `Err` with the old frame
-/// partially erased and `last_size` left stale, so the next `Resize` event
-/// retries (`last_size` is deliberately assigned last, after the fallible
-/// rebuild).
+/// partially erased and `last_size` left stale. `last_size` is deliberately
+/// assigned last, after the fallible rebuild, so a retry WOULD pick up from
+/// a correct state if one occurred — but in the current call graph every
+/// call site propagates the error with `?`, so an `Err` here unwinds out of
+/// the event loop and ends the session; there is no next `Resize` event to
+/// retry on.
 ///
 /// Limitation: `off` is exact for a WIDTH change, which is what produces the
 /// ghost frames this fixes. On a HEIGHT shrink, `get_cursor_position()` goes
@@ -138,11 +145,10 @@ pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
 /// row against a freshly measured, post-resize screen height
 /// (`clamp_to_screen`, added in v0.26.2 so a vertical shrink cannot anchor the
 /// viewport below the terminal) — while `get_frame().area().y` is still the
-/// pre-resize viewport anchor. The clamp can pull the cursor row below that
-/// stale frame row, `saturating_sub` yields `off == 0`, and the walk-up is
-/// skipped. That is no worse than the previous behavior (today's
-/// `autoresize()` erases nothing on that path either), but no better on that
-/// axis either.
+/// pre-resize viewport anchor. The clamp can pull the cursor row to a row
+/// numerically lower than (visually above) the stale frame row,
+/// `saturating_sub` yields `off == 0`, and the walk-up is skipped. That is no
+/// worse than the previous behavior, but no better on that axis either.
 pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
     let size = tui.terminal.size()?;
     if !size_changed(tui.last_size, size) {
