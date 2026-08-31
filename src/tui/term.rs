@@ -9,7 +9,7 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::Position;
+use ratatui::layout::{Position, Size};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use crate::tui::backend_wrap::{fallback_seed, TrackedBackend};
@@ -19,6 +19,24 @@ pub const VIEWPORT_H: u16 = 6;
 
 pub struct Tui {
     pub terminal: Terminal<TrackedBackend<Stdout>>,
+    /// Wired into resize handling in Task 3 — measured now so setup() and
+    /// resize share the same seeding logic from the start.
+    #[allow(dead_code)]
+    pub last_size: Size,
+}
+
+/// Build a fresh inline-viewport terminal seeded at a known cursor position.
+/// No CPR here — the seed comes from the caller (either setup()'s one real
+/// query, or, from Task 3 onward, a position computed after erasing the old
+/// frame). Kept separate so callers never need to issue a second CPR.
+pub(crate) fn rebuild_inline(seed: Position) -> Result<Terminal<TrackedBackend<Stdout>>> {
+    let terminal = Terminal::with_options(
+        TrackedBackend::new(CrosstermBackend::new(std::io::stdout()), seed),
+        TerminalOptions {
+            viewport: Viewport::Inline(VIEWPORT_H),
+        },
+    )?;
+    Ok(terminal)
 }
 
 /// Raw mode + inline viewport. Restore is chained onto the panic hook — the
@@ -54,13 +72,12 @@ pub fn setup() -> Result<Tui> {
     let seed = crossterm::cursor::position()
         .map(|(x, y)| Position { x, y })
         .unwrap_or_else(|_| fallback_seed(crossterm::terminal::size().map_or(0, |(_, h)| h)));
-    let terminal = Terminal::with_options(
-        TrackedBackend::new(CrosstermBackend::new(std::io::stdout()), seed),
-        TerminalOptions {
-            viewport: Viewport::Inline(VIEWPORT_H),
-        },
-    )?;
-    Ok(Tui { terminal })
+    let terminal = rebuild_inline(seed)?;
+    let last_size = terminal.size()?;
+    Ok(Tui {
+        terminal,
+        last_size,
+    })
 }
 
 /// Turn off raw mode — idempotent, swallows errors (no panics on the shutdown path).
@@ -107,6 +124,10 @@ mod tests {
         }
         // Named needle: the wiring call, not just the import at the top of the file.
         assert!(prod.contains("TrackedBackend::new("));
+        assert!(
+            prod.contains("fn rebuild_inline("),
+            "term.rs lost the seed-parameterised inline viewport builder"
+        );
         let run_src = include_str!("run.rs");
         let setup_at = run_src.find("term::setup(").expect("run.rs calls setup");
         let stream_at = run_src
