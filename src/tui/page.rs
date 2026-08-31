@@ -111,8 +111,8 @@ pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
 /// ABOVE the new anchor survives as a ghost frame.
 ///
 /// The fix rests on an assumption, not a guarantee: `off = tracked_cursor.y -
-/// viewport_area.y`, both pre-resize tracked values, is reflow-proof for the
-/// scrollback ABOVE the frame — which is what the ghost comes from — and
+/// viewport_area.y`, both pre-resize tracked values, survives the reflow of
+/// the scrollback ABOVE the frame — which is what the ghost comes from — and
 /// holds only as long as the frame's own rows are not rewrapped by the
 /// resize. Walk up by `off`, erase exactly `VIEWPORT_H` lines, then plant the
 /// cursor at a KNOWN absolute row and rebuild the inline viewport from that
@@ -139,9 +139,11 @@ pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
 /// the event loop and ends the session; there is no next `Resize` event to
 /// retry on.
 ///
-/// Limitation: `off` is exact for a WIDTH change, which is what produces the
-/// ghost frames this fixes. On a HEIGHT shrink, `get_cursor_position()` goes
-/// through `TrackedBackend::get_cursor_position`, which clamps the tracked
+/// Limitation: `off` is the useful measurement for a WIDTH change — the case
+/// that produces the ghost frames this fixes — subject to the rewrap caveat
+/// above; it is not exact whenever the frame's own rows get rewrapped. On a
+/// HEIGHT shrink, `get_cursor_position()` goes through
+/// `TrackedBackend::get_cursor_position`, which clamps the tracked
 /// row against a freshly measured, post-resize screen height
 /// (`clamp_to_screen`, added in v0.26.2 so a vertical shrink cannot anchor the
 /// viewport below the terminal) — while `get_frame().area().y` is still the
