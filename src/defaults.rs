@@ -119,4 +119,47 @@ mod tests {
         assert!(!teaching.contains("triggers your review automatically"));
         assert!(teaching.contains("saving alone does not start your review"));
     }
+
+    #[test]
+    fn soul_carries_the_terminology_lock() {
+        // Live sessions (2026-08-31): mirroring the user's language turned into
+        // translating the field's vocabulary — "arguments" became "kelimeler", the
+        // same word named index 0 and index 1 four sentences apart, and one
+        // simplification stated outright that cargo compiles the code (rustc does).
+        // The rule that stops this is prompt text, so the only thing that can guard
+        // it is a pin: nobody gets to quietly tidy it away while simplifying Voice.
+        // The block is inserted verbatim from the design spec and its bullets
+        // are hard-wrapped; needles must not span a line break, or `contains`
+        // fails on the embedded newline even though the text is correct.
+        let soul = include_str!("../SOUL.md");
+        for needle in [
+            "TERMINOLOGY LOCK",
+            "Simplify the explanation, never the name",
+            "practitioners of that field actually use",
+            "not protected by looking exotic",
+            "One concept, one word",
+            "Precision outranks simplicity",
+            "Write natively in the user's language",
+        ] {
+            assert!(
+                soul.contains(needle),
+                "SOUL.md lost the terminology rule: {needle}"
+            );
+        }
+    }
+
+    #[test]
+    fn terminology_lock_follows_the_language_lock() {
+        // Order carries meaning: which language to write in first, then how to write
+        // its vocabulary. Reversed, the terminology rule reads as free-standing
+        // style advice instead of the boundary on the language mirror.
+        let soul = include_str!("../SOUL.md");
+        let language = soul
+            .find("LANGUAGE LOCK")
+            .expect("SOUL.md lost the language lock");
+        let terminology = soul
+            .find("TERMINOLOGY LOCK")
+            .expect("SOUL.md lost the terminology lock");
+        assert!(language < terminology);
+    }
 }
