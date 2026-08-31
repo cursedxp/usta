@@ -21,7 +21,6 @@ pub struct Tui {
     pub terminal: Terminal<TrackedBackend<Stdout>>,
     /// Wired into resize handling in Task 3 — measured now so setup() and
     /// resize share the same seeding logic from the start.
-    #[allow(dead_code)]
     pub last_size: Size,
 }
 

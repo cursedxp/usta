@@ -3,7 +3,9 @@
 //! (cleanup round, Task 4).
 
 use anyhow::Result;
-use ratatui::layout::{Constraint, Layout, Size};
+use crossterm::cursor::{MoveDown, MoveTo, MoveToColumn, MoveUp};
+use crossterm::terminal::{Clear, ClearType};
+use ratatui::layout::{Constraint, Layout, Position, Size};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Widget};
 
@@ -73,21 +75,18 @@ pub(crate) fn current_width(tui: &Tui) -> u16 {
 /// Row (from the top of the terminal) where the inline viewport should be
 /// anchored after a resize: the last `VIEWPORT_H` rows of a screen `height`
 /// rows tall. Saturates so a screen shorter than the viewport doesn't underflow.
-#[allow(dead_code)]
 pub(crate) fn anchor_row(height: u16) -> u16 {
     height.saturating_sub(VIEWPORT_H)
 }
 
 /// How far to walk up from the cursor's position within the old frame, and
 /// how many rows to erase from there, to clear exactly the stale viewport.
-#[allow(dead_code)]
 pub(crate) struct ErasePlan {
     pub(crate) up: u16,
     pub(crate) rows: u16,
 }
 
 /// Build an [`ErasePlan`] from the cursor's offset within the old frame.
-#[allow(dead_code)]
 pub(crate) fn erase_plan(off: u16) -> ErasePlan {
     ErasePlan {
         up: off,
@@ -97,24 +96,57 @@ pub(crate) fn erase_plan(off: u16) -> ErasePlan {
 
 /// Whether the terminal size actually changed. A `Resize` event reporting an
 /// unchanged size — common during drag-resizing — should be a no-op.
-#[allow(dead_code)]
 pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
     prev != now
 }
 
-/// Refresh the inline viewport after a terminal resize. Without this the
-/// viewport keeps drawing at its stale pre-resize area and the bottom region
-/// garbles (duplicated/shifted lines); the caller's loop redraws on its next
-/// iteration. A `Resize` event reporting an unchanged size is now a no-op:
-/// `autoresize()` only calls `resize()` when the area differs from before.
+/// Refresh the inline viewport after a terminal resize.
+///
+/// `TrackedBackend` never issues a CPR query, so it only knows about cursor
+/// moves usta itself made. A width change makes the terminal reflow the
+/// scrollback above the viewport on its own — the real cursor travels with
+/// that content, but the tracked position does not, so it goes stale. Ratatui
+/// then anchors the new viewport off that stale row, and its inline
+/// `clear_viewport` only erases DOWNWARD from there: whatever old paint sat
+/// ABOVE the new anchor survives as a ghost frame.
+///
+/// The fix rests on one invariant: the cursor's offset *within* the frame is
+/// reflow-proof, because the terminal moves the cursor together with the
+/// content it sits in. So `off = tracked_cursor.y - viewport_area.y` is exact
+/// even though neither absolute row is. Walk up by `off`, erase exactly
+/// `VIEWPORT_H` lines, then plant the cursor at a KNOWN absolute row and
+/// rebuild the inline viewport from that seed — no CPR involved.
+///
+/// `Terminal::resize` (and `autoresize`, which calls it) cannot be used here:
+/// it force-clears the whole screen on a horizontal shrink, which would take
+/// the user's transcript down with the ghost.
 pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
-    // ratatui 0.30's `resize()` (invoked by `autoresize()` on every size change) already
-    // clears the viewport unconditionally and full-clears on horizontal shrink, so a
-    // manual `clear()` here is redundant. It is also an avoidable second cursor-position
-    // (CPR) query: 0.30's public `clear()` added its own CPR read that 0.29's `clear()`
-    // never made — CPR itself was never removed from the resize path, it has always been
-    // queried unconditionally by the inline-viewport resize computation.
-    tui.terminal.autoresize()?;
+    let size = tui.terminal.size()?;
+    if !size_changed(tui.last_size, size) {
+        return Ok(());
+    }
+
+    let cursor_y = tui.terminal.get_cursor_position()?.y;
+    let frame_y = tui.terminal.get_frame().area().y;
+    let off = cursor_y.saturating_sub(frame_y);
+
+    let plan = erase_plan(off);
+    let mut stdout = std::io::stdout();
+    if plan.up > 0 {
+        crossterm::execute!(stdout, MoveUp(plan.up))?;
+    }
+    crossterm::execute!(stdout, MoveToColumn(0))?;
+    for row in 0..plan.rows {
+        crossterm::execute!(stdout, Clear(ClearType::CurrentLine))?;
+        if row + 1 < plan.rows {
+            crossterm::execute!(stdout, MoveDown(1))?;
+        }
+    }
+
+    let anchor = anchor_row(size.height);
+    crossterm::execute!(stdout, MoveTo(0, anchor))?;
+    tui.terminal = crate::tui::term::rebuild_inline(Position { x: 0, y: anchor })?;
+    tui.last_size = size;
     Ok(())
 }
 
@@ -205,6 +237,42 @@ mod tests {
         assert!(
             own.contains("fn handle_resize"),
             "page.rs lost its handle_resize helper"
+        );
+    }
+
+    #[test]
+    fn handle_resize_erases_only_its_own_frame() {
+        // Ghost frames (v0.29.0): after a width change the terminal reflows, the
+        // tracked cursor goes stale, and ratatui anchored the new viewport at a
+        // wrong row — inline clear_viewport only erases DOWNWARD from that row, so
+        // the old frame's top rows survived. The fix walks UP by the (reflow-proof)
+        // cursor offset and erases exactly VIEWPORT_H lines.
+        //
+        // The negative needles are the point: clearing the whole screen or calling
+        // Terminal::resize (which force-clears on a horizontal shrink) would take
+        // the user's transcript down with the ghost. That is not a fix.
+        let prod = include_str!("page.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let body = prod
+            .split("fn handle_resize")
+            .nth(1)
+            .expect("page.rs lost its handle_resize helper");
+        assert!(body.contains("ClearType::CurrentLine"));
+        assert!(body.contains("MoveUp"));
+        assert!(body.contains("rebuild_inline"));
+        assert!(
+            !body.contains("ClearType::All"),
+            "handle_resize must never wipe the screen"
+        );
+        assert!(
+            !body.contains("autoresize"),
+            "autoresize routes into the screen-clearing resize path"
+        );
+        assert!(
+            !body.contains(".resize("),
+            "Terminal::resize force-clears on horizontal shrink"
         );
     }
 }
