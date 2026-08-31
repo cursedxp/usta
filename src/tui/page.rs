@@ -120,6 +120,29 @@ pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
 /// `Terminal::resize` (and `autoresize`, which calls it) cannot be used here:
 /// it force-clears the whole screen on a horizontal shrink, which would take
 /// the user's transcript down with the ghost.
+///
+/// The erase sequence below writes through a private `std::io::stdout()`
+/// handle rather than through `tui.terminal`'s backend (spec-mandated, matching
+/// `term.rs`'s existing raw-sequence pattern). That bypasses `TrackedBackend`,
+/// so its tracked cursor position is left desynchronised by these moves —
+/// harmless only because the very next step replaces the terminal wholesale
+/// via `rebuild_inline`. The sequence is also not transactional: if a write
+/// fails partway through, the function returns `Err` with the old frame
+/// partially erased and `last_size` left stale, so the next `Resize` event
+/// retries (`last_size` is deliberately assigned last, after the fallible
+/// rebuild).
+///
+/// Limitation: `off` is exact for a WIDTH change, which is what produces the
+/// ghost frames this fixes. On a HEIGHT shrink, `get_cursor_position()` goes
+/// through `TrackedBackend::get_cursor_position`, which clamps the tracked
+/// row against a freshly measured, post-resize screen height
+/// (`clamp_to_screen`, added in v0.26.2 so a vertical shrink cannot anchor the
+/// viewport below the terminal) — while `get_frame().area().y` is still the
+/// pre-resize viewport anchor. The clamp can pull the cursor row below that
+/// stale frame row, `saturating_sub` yields `off == 0`, and the walk-up is
+/// skipped. That is no worse than the previous behavior (today's
+/// `autoresize()` erases nothing on that path either), but no better on that
+/// axis either.
 pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
     let size = tui.terminal.size()?;
     if !size_changed(tui.last_size, size) {
@@ -255,10 +278,11 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .unwrap();
-        let body = prod
+        let after = prod
             .split("fn handle_resize")
             .nth(1)
             .expect("page.rs lost its handle_resize helper");
+        let body = after.split("\npub(crate) fn ").next().unwrap();
         assert!(body.contains("ClearType::CurrentLine"));
         assert!(body.contains("MoveUp"));
         assert!(body.contains("rebuild_inline"));
