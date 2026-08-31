@@ -3,7 +3,7 @@
 //! (cleanup round, Task 4).
 
 use anyhow::Result;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Size};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Widget};
 
@@ -70,6 +70,38 @@ pub(crate) fn current_width(tui: &Tui) -> u16 {
     tui.terminal.size().map(|s| s.width).unwrap_or(80)
 }
 
+/// Row (from the top of the terminal) where the inline viewport should be
+/// anchored after a resize: the last `VIEWPORT_H` rows of a screen `height`
+/// rows tall. Saturates so a screen shorter than the viewport doesn't underflow.
+#[allow(dead_code)]
+pub(crate) fn anchor_row(height: u16) -> u16 {
+    height.saturating_sub(VIEWPORT_H)
+}
+
+/// How far to walk up from the cursor's position within the old frame, and
+/// how many rows to erase from there, to clear exactly the stale viewport.
+#[allow(dead_code)]
+pub(crate) struct ErasePlan {
+    pub(crate) up: u16,
+    pub(crate) rows: u16,
+}
+
+/// Build an [`ErasePlan`] from the cursor's offset within the old frame.
+#[allow(dead_code)]
+pub(crate) fn erase_plan(off: u16) -> ErasePlan {
+    ErasePlan {
+        up: off,
+        rows: VIEWPORT_H,
+    }
+}
+
+/// Whether the terminal size actually changed. A `Resize` event reporting an
+/// unchanged size — common during drag-resizing — should be a no-op.
+#[allow(dead_code)]
+pub(crate) fn size_changed(prev: Size, now: Size) -> bool {
+    prev != now
+}
+
 /// Refresh the inline viewport after a terminal resize. Without this the
 /// viewport keeps drawing at its stale pre-resize area and the bottom region
 /// garbles (duplicated/shifted lines); the caller's loop redraws on its next
@@ -111,6 +143,44 @@ pub(crate) fn draw(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn anchor_row_puts_the_viewport_at_the_bottom_and_saturates() {
+        // The tracked cursor goes stale when the terminal reflows on resize, so
+        // handle_resize stops asking where it is and puts it somewhere known.
+        // Seeding at h - VIEWPORT_H makes compute_inline_size land the viewport on
+        // the last VIEWPORT_H rows without appending (and therefore scrolling) a
+        // single line.
+        assert_eq!(anchor_row(30), 30 - VIEWPORT_H);
+        assert_eq!(anchor_row(VIEWPORT_H), 0);
+        assert_eq!(anchor_row(4), 0, "a short screen must not underflow");
+    }
+
+    #[test]
+    fn erase_plan_walks_up_by_the_cursor_offset_and_erases_the_whole_frame() {
+        // The offset of the cursor WITHIN the frame survives a reflow: the terminal
+        // moves the cursor together with the content it sits in. That makes a
+        // relative walk exact where an absolute row is not.
+        let p = erase_plan(2);
+        assert_eq!(p.up, 2);
+        assert_eq!(p.rows, VIEWPORT_H);
+        assert_eq!(
+            erase_plan(0).up,
+            0,
+            "no MoveUp when the cursor is on the top row"
+        );
+    }
+
+    #[test]
+    fn size_changed_is_false_for_an_identical_size() {
+        // Drag-resizing emits a burst of Resize events; rebuilding on every one of
+        // them would strobe.
+        assert!(!size_changed(Size::new(80, 24), Size::new(80, 24)));
+        assert!(size_changed(Size::new(80, 24), Size::new(81, 24)));
+        assert!(size_changed(Size::new(80, 24), Size::new(80, 25)));
+    }
+
     #[test]
     fn resize_events_are_handled_in_every_event_loop() {
         // Source pin (same pattern as run_rs_wiring_call_sites_are_pinned):
