@@ -161,12 +161,14 @@ fn handle_resize_erases_only_its_own_frame() {
 
 **Files:**
 - Modify: `SPEC.md` (§4.19 bloku, v0.26.2 notunun ALTINA yeni paragraf)
+- Modify: `docs/ROADMAP.md` (`## Completed` listesinin BAŞINA tarihli kayıt)
 - Modify: `Cargo.toml` (`version = "0.29.1"`), `Cargo.lock` (`cargo check` ile tazelenir)
 - Modify: `README.md` — YALNIZ sürüm/changelog satırı varsa
 
 - [ ] **Step 1:** `SPEC.md`'e İngilizce paragraf: v0.29.1'in ne düzelttiği (hayalet çerçeveler) · kök nedenin üç katmanı (bayat izlenen imleç · `compute_inline_size`'ın onu okuması · `clear_viewport`'un yalnız aşağı silmesi) · kararın özü (imlecin çerçeve içindeki ofseti reflow-değişmezdir → göreli silme; imleç sorulmaz, mutlak `MoveTo` ile konur; viewport `with_options` ile yeniden kurulur) · **açık kısıt: `Terminal::resize`/`autoresize` bu yolda kullanılamaz, yatay daralmada tüm ekranı siler ve kullanıcının transcript'ini götürür** · kabul edilen kozmetik boşluk · tasarım dosyası yolu.
-- [ ] **Step 2:** `Cargo.toml` sürüm 0.29.1, `cargo check` ile lock tazele.
-- [ ] **Step 3:** `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check` (crate-geneli temiz). Commit: `docs: SPEC 4.19 — resize ghost-frame fix; bump to v0.29.1`
+- [ ] **Step 2:** `docs/ROADMAP.md` `## Completed` listesinin en başına tek paragraflık kayıt (mevcut biçim: `- 2026-08-31: <başlık> — <ne değişti, neden>. Design: <spec yolu>. v0.29.1.`). v0.24.6 ve v0.26.0 kayıtlarının bu semptomu kapatmadığını açıkça yaz — o iki kayıt bugün yanıltıcı duruyor.
+- [ ] **Step 3:** `Cargo.toml` sürüm 0.29.1, `cargo check` ile lock tazele.
+- [ ] **Step 4:** `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check` (crate-geneli temiz). Commit: `docs: SPEC 4.19 + ROADMAP — resize ghost-frame fix; bump to v0.29.1`
 
 ---
 
