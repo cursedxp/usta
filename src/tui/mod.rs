@@ -11,6 +11,7 @@ pub mod page;
 pub mod paint;
 pub mod polite;
 pub mod run;
+pub(crate) mod screen;
 pub mod status;
 pub mod term;
 pub mod theme;
