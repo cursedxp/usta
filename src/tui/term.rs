@@ -103,6 +103,10 @@ mod tests {
             !prod.contains("Viewport::Inline"),
             "term.rs must not build a ratatui inline viewport"
         );
+        assert!(
+            !prod.contains("insert_before"),
+            "term.rs must not push content through ratatui's inline viewport"
+        );
 
         let run = include_str!("run.rs");
         let setup_at = run

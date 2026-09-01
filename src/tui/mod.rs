@@ -1,8 +1,7 @@
-//! Claude Code-style TUI: inline viewport + insert_before flow.
+//! Claude Code-style TUI: a self-drawn relative-addressed bottom region.
 //! In plain mode (ui::is_plain) this module is never used.
 
 pub mod ask;
-pub(crate) mod backend_wrap;
 pub mod convert;
 pub mod editor;
 pub mod entry;

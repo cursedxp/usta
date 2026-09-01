@@ -187,7 +187,7 @@ mod tests {
     use super::*;
 
     /// A writer whose bytes stay inspectable after `Screen` has taken it by
-    /// value. Pattern copied from the (soon deleted) `backend_wrap.rs` tests;
+    /// value. Pattern inherited from the removed `backend_wrap.rs` tests;
     /// a flush counter is added because flushing is a requirement here.
     #[derive(Clone, Default)]
     struct SharedBuf {
@@ -331,7 +331,6 @@ mod tests {
         // they have no production half, so they are scanned whole.
         let modules = [
             ("ask.rs", include_str!("ask.rs")),
-            ("backend_wrap.rs", include_str!("backend_wrap.rs")),
             ("convert.rs", include_str!("convert.rs")),
             ("editor.rs", include_str!("editor.rs")),
             ("entry.rs", include_str!("entry.rs")),
@@ -381,12 +380,24 @@ mod tests {
         // Completeness: the enumeration above must name every `.rs` file that
         // actually lives in `src/tui/`. Without this, a new module escapes the
         // guard until a human remembers to add it. A directory that cannot be
-        // read is a FAILURE, never a silent pass.
+        // read is a FAILURE, never a silent pass. The walk is non-recursive, so
+        // a subdirectory (e.g. a future `src/tui/widgets/`) would be invisible
+        // to it — that's ruled out below by asserting none exists, rather than
+        // by claiming a completeness this walk does not actually perform.
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/tui");
         let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {dir}: {e}"));
         for entry in entries {
             let entry = entry.unwrap_or_else(|e| panic!("cannot read an entry of {dir}: {e}"));
+            let file_type = entry
+                .file_type()
+                .unwrap_or_else(|e| panic!("cannot stat an entry of {dir}: {e}"));
             let file = entry.file_name().to_string_lossy().into_owned();
+            assert!(
+                !file_type.is_dir(),
+                "{file} is a subdirectory of src/tui/ — the completeness walk \
+                 above is non-recursive and cannot see into it, so any .rs \
+                 files inside would silently escape the K1/K3 guard"
+            );
             if !file.ends_with(".rs") {
                 continue;
             }
