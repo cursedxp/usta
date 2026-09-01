@@ -89,7 +89,7 @@ fn terminology_lock_follows_the_language_lock() {
 
 ## Manuel Doğrulama (Anil ile, plan bittikten sonra)
 
-`cargo install --path .` sonrası (mevcut global kurulum `Ownership::Code` olduğu için `SOUL.md` üzerine yazılır — doğrula: `grep -c "TERMINOLOGY LOCK" ~/.usta/SOUL.md`):
+`cargo install --path .` sonrası (mevcut global kurulum `Ownership::Code` olduğu için `SOUL.md` üzerine yazılır — doğrula: `grep -c "TERMINOLOGY LOCK" ~/.config/usta/SOUL.md` — global kök `~/.config/usta`, `~/.usta` DEĞİL (`src/config.rs::global_root`); ayrıca `usta init` gerekmez, `ensure_scaffold` her açılışta code-owned dosyaları tazeler):
 
 1. Aynı `std::env::args()` sorusunu tekrar sor → **"argüman"** geçmeli, "kelime" GEÇMEMELİ; index 0 ve index 1 tek ve ayrı adlarla anılmalı.
 2. Aynı cargo/stagit sorusunu sor → derleyenin `rustc` olduğu, cargo'nun onu sürdüğü doğru kurulmalı; "dosya"/"binary" ve "çevirme"/"derleme" karışmamalı.
