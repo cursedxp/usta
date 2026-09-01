@@ -26,6 +26,8 @@ pub(crate) struct Screen<W: Write> {
     painted: u16,
     /// Rows from the visible cursor DOWN to the block's last line.
     cursor_up: u16,
+    /// Column the visible cursor sits at, as last given to `paint`.
+    cursor_col: u16,
     /// Display widths of the lines as last printed, for the resize recount.
     last_widths: Vec<u16>,
     size: Size,
@@ -37,6 +39,7 @@ impl<W: Write> Screen<W> {
             out,
             painted: 0,
             cursor_up: 0,
+            cursor_col: 0,
             last_widths: Vec::new(),
             size,
         }
@@ -69,6 +72,7 @@ impl<W: Write> Screen<W> {
     fn forget_block(&mut self) {
         self.painted = 0;
         self.cursor_up = 0;
+        self.cursor_col = 0;
         self.last_widths.clear();
     }
 
@@ -115,6 +119,7 @@ impl<W: Write> Screen<W> {
         queue!(self.out, MoveToColumn(cursor_col))?;
 
         self.cursor_up = up; // step 6
+        self.cursor_col = cursor_col;
         self.painted = painted;
         self.last_widths = widths;
         self.out.flush()
@@ -133,23 +138,32 @@ impl<W: Write> Screen<W> {
     }
 
     /// Adopt a new terminal size, erasing whatever the terminal made of the
-    /// old block. The cursor is first driven down by `painted * 2` rows to
-    /// reach the bottom-most screen row: terminals stop at the last row, so
-    /// the descent is self-clamping and needs no height. Landing on the
-    /// block's last line that way ASSUMES the block sits at the bottom of the
-    /// screen. That is a premise inherited from the caller and from the design
-    /// spec (persistent content is always printed above the block); nothing
-    /// here enforces it. While it does not hold — a freshly opened session
-    /// whose output has not yet pushed the block down, so blank rows remain
-    /// below it — the descent stops short of the block's last line, the erase
-    /// walks up over rows K4 already left blank, and the real block survives
-    /// above as a ghost until enough output has scrolled it to the bottom.
+    /// old block. The cursor is first driven down by [`descend_rows`]: the
+    /// number of rows from the visible cursor to the block's last line,
+    /// computed from our own recorded state (`last_widths`, `painted`,
+    /// `cursor_up`, `cursor_col`) rather than assumed from where the block
+    /// sits on screen.
+    ///
+    /// This computation assumes the terminal RE-WRAPS hard-terminated lines
+    /// when the width narrows — true of common terminals (iTerm2,
+    /// Terminal.app, Ghostty, kitty, WezTerm). On a terminal that does not
+    /// re-wrap, the descent falls short by however many rows the un-wrapped
+    /// lines below the cursor would otherwise have added, and a remnant can
+    /// survive the upward erase below. That risk is narrow and conditional —
+    /// unlike the unconditional bottom-of-screen premise this replaces — and
+    /// lives only here, a candidate for a future policy switch once measured.
     /// The caller then reprints with [`Screen::paint`], which clears below
     /// it (K4).
     pub(crate) fn resize(&mut self, size: Size) -> io::Result<()> {
-        let down = self.painted.saturating_mul(2);
-        if down != 0 {
-            queue!(self.out, MoveDown(down))?;
+        let descend = descend_rows(
+            &self.last_widths,
+            self.painted,
+            self.cursor_up,
+            self.cursor_col,
+            size.width,
+        );
+        if descend != 0 {
+            queue!(self.out, MoveDown(descend))?;
         }
         let rewrapped = rewrapped_rows(&self.last_widths, size.width, self.painted);
         queue!(self.out, MoveToColumn(0))?;
@@ -172,6 +186,43 @@ impl<W: Write> Screen<W> {
         self.forget_block();
         self.out.flush()
     }
+}
+
+/// Rows to descend from the visible cursor to reach the block's last line
+/// after the terminal rewraps to `new_width`: the rows still below the
+/// cursor within its own (possibly rewrapped) logical line, plus the
+/// rewrapped height of every logical line below that one. `painted == 0`
+/// returns `0`. `new_width == 0` cannot divide, so every logical line is
+/// floored to exactly 1 row and the cursor's own visual row is treated as
+/// 0 — the same no-panic fallback `rewrapped_rows` uses.
+pub(crate) fn descend_rows(
+    last_widths: &[u16],
+    painted: u16,
+    cursor_up: u16,
+    cursor_col: u16,
+    new_width: u16,
+) -> u16 {
+    if painted == 0 {
+        return 0;
+    }
+    let rows = |w: u16| -> u32 {
+        if new_width == 0 {
+            1
+        } else {
+            u32::from(w).div_ceil(u32::from(new_width)).max(1)
+        }
+    };
+    let cursor_line = usize::from(painted - 1 - cursor_up);
+    let rows_here = rows(last_widths.get(cursor_line).copied().unwrap_or(1));
+    let cursor_visual_row = u32::from(cursor_col)
+        .checked_div(u32::from(new_width))
+        .unwrap_or(0)
+        .min(rows_here - 1);
+    let mut total = rows_here - 1 - cursor_visual_row;
+    for &w in last_widths.iter().skip(cursor_line + 1) {
+        total += rows(w);
+    }
+    total.min(u32::from(u16::MAX)) as u16
 }
 
 /// Rows the block occupies after the terminal rewrapped it to `new_width`:
@@ -600,17 +651,62 @@ mod tests {
 
     // ---- resize --------------------------------------------------------
 
+    /// Source pin: the guessed `painted * 2` descent must never come back.
+    /// `resize` computes its descent from `descend_rows` exclusively.
     #[test]
-    fn resize_drops_to_the_bottom_erases_the_rewrapped_rows_and_resets() {
+    fn resize_never_reintroduces_the_painted_times_two_guess() {
+        let prod = include_str!("screen.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            !prod.contains("saturating_mul(2)"),
+            "the painted * 2 descent guess must not return to production code"
+        );
+    }
+
+    /// v0.30.0 assumed the block always sits at the bottom of the screen;
+    /// in a freshly opened session it does not, and the descent overshot
+    /// into blank rows, leaving the block's top rows alive as a ghost.
+    /// Here the block is small (5 lines) and the cursor is already on its
+    /// LAST line, so the correct descent is 0 -- but `painted * 2` would
+    /// still drive the cursor down 10 rows, straight into the blank space
+    /// below the block on a tall screen.
+    #[test]
+    fn resize_descends_by_recorded_rows_not_by_painted_times_two() {
+        let (mut s, buf) = screen(40, 20);
+        let block = lines(&["────", "> hi", "────", "ready", "extra"]);
+        s.paint(&block, 4, 0).unwrap();
+        assert_eq!(s.cursor_up, 0, "cursor is already on the block's last line");
+        buf.clear();
+        s.resize(Size::new(40, 8)).unwrap();
+        let t = buf.text();
+        assert!(
+            !t.contains('B'),
+            "no descent is needed from the block's last line, but a \
+             MoveDown was emitted -- the painted * 2 overshoot into blank \
+             rows below the block: {t:?}"
+        );
+        assert!(
+            !contains_absolute_addressing(t.as_bytes()),
+            "resize must never use absolute addressing (K3): {t:?}"
+        );
+    }
+
+    #[test]
+    fn resize_descends_then_erases_the_rewrapped_rows_and_resets() {
         let (mut s, buf) = screen(80, 20);
         s.paint(&lines(&[&"x".repeat(80), &"y".repeat(80)]), 0, 0)
             .unwrap();
         buf.clear();
         s.resize(Size::new(40, 20)).unwrap();
         let t = buf.text();
+        // Cursor is on line 0 of 2 (cursor_up = 1): 1 row to finish that
+        // line's rewrap (80 wide -> 2 rows at width 40) plus the 2-row
+        // rewrap of the line below it -- descend_rows(3), not painted*2 (4).
         assert!(
-            t.starts_with("\x1b[4B"),
-            "must drop painted*2 rows first: {t:?}"
+            t.starts_with("\x1b[3B"),
+            "must descend by descend_rows first: {t:?}"
         );
         assert_eq!(
             count(&t, CLEAR_LINE),
@@ -637,6 +733,58 @@ mod tests {
             "must end by clearing below: {t:?}"
         );
         assert_eq!(s.painted, 0);
+    }
+
+    // ---- descend_rows (pure) --------------------------------------------
+
+    #[test]
+    fn descend_rows_is_zero_when_the_cursor_is_already_on_the_last_line() {
+        // Width unchanged (no line wraps), cursor on the block's last line.
+        assert_eq!(descend_rows(&[10, 10, 10], 3, 0, 5, 40), 0);
+    }
+
+    #[test]
+    fn descend_rows_matches_cursor_up_when_nothing_wraps() {
+        // Width unchanged, cursor two rows above the last line: with no
+        // rewrap in play, the descent is exactly `cursor_up`.
+        assert_eq!(descend_rows(&[10, 10, 10], 3, 2, 5, 40), 2);
+    }
+
+    #[test]
+    fn descend_rows_adds_one_when_the_cursors_own_line_wraps_and_it_sits_in_the_first_half() {
+        // A single-line block, width 15 wraps to 2 rows at new_width 10. The
+        // cursor at column 3 is in the FIRST visual row, one row above the
+        // wrapped line's bottom.
+        assert_eq!(descend_rows(&[15], 1, 0, 3, 10), 1);
+    }
+
+    #[test]
+    fn descend_rows_adds_nothing_when_the_cursors_own_line_wraps_and_it_sits_in_the_second_half() {
+        // Same wrap as above, but the cursor at column 13 is already in the
+        // SECOND (last) visual row -- already at the wrapped line's bottom.
+        assert_eq!(descend_rows(&[15], 1, 0, 13, 10), 0);
+    }
+
+    #[test]
+    fn descend_rows_adds_two_when_the_two_lines_below_the_cursor_each_wrap_into_two_rows() {
+        // Cursor is 2 logical lines above the last (cursor_up = 2). Its own
+        // line (width 5) does not wrap at new_width 10. The two lines below
+        // it (width 15 each) each wrap into 2 rows, adding 2 extra rows over
+        // the no-wrap baseline of `cursor_up` (2): 2 + 2 = 4.
+        assert_eq!(descend_rows(&[5, 15, 15], 3, 2, 0, 10), 4);
+    }
+
+    #[test]
+    fn descend_rows_is_zero_when_nothing_has_been_painted() {
+        assert_eq!(descend_rows(&[], 0, 0, 0, 40), 0);
+    }
+
+    #[test]
+    fn descend_rows_never_divides_by_zero_and_floors_rows_at_one() {
+        // new_width == 0: no row can be computed by division, so every
+        // logical line counts as exactly 1 row (the same floor
+        // `rewrapped_rows` falls back to). Must not panic.
+        assert_eq!(descend_rows(&[100, 200, 300], 3, 2, 999, 0), 2);
     }
 
     // ---- rewrapped_rows (pure) -----------------------------------------
