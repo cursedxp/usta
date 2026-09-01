@@ -16,9 +16,11 @@ pub(crate) const INPUT_MAX_ROWS: usize = 10;
 
 /// Number of visual content rows `value` wraps to at `width` (the TERMINAL
 /// width — the 2-cell `> ` / `  ` prefix is subtracted internally), capped
-/// at `INPUT_MAX_ROWS`. Always returns at least 1. Derived from the same
-/// `wrap_visual` call `frame_lines` uses, so the two never disagree on row
-/// count.
+/// at `INPUT_MAX_ROWS`. Always returns at least 1. It shares the `wrap_visual`
+/// computation with `frame_lines`, but NOT the cap: `frame_lines` additionally
+/// clamps to half the screen height, so on screens shorter than
+/// `2 * INPUT_MAX_ROWS` the two return different numbers. This is the
+/// row count before any screen-height cap; the two are not substitutable.
 //
 // Not reached from production today: `frame_lines` returns the frame's lines
 // directly, so the paging layer never needs the row count on its own. Kept,

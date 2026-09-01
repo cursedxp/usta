@@ -141,17 +141,26 @@ mod tests {
     /// block erased and forgotten, so a loop that stops calling `draw` shows
     /// no input frame at all — and nothing else in the suite notices, because
     /// the live TUI cannot be driven from a unit test.
+    ///
+    /// The expected COUNT is asserted, not mere presence: `ask.rs` holds TWO
+    /// event loops (`ask_live` and `tui_confirm`), so a presence-only check
+    /// stays green after the confirm loop's repaint is deleted — passing
+    /// against the exact regression it exists to catch. Only the production
+    /// half is scanned, so a `page::draw(` inside a test body cannot satisfy
+    /// it either. Adding a real event loop means bumping the number here.
     #[test]
     fn every_event_loop_repaints_the_bottom_region() {
-        for (name, src) in [
-            ("run.rs", include_str!("run.rs")),
-            ("ask.rs", include_str!("ask.rs")),
-            ("entry.rs", include_str!("entry.rs")),
-            ("intro.rs", include_str!("intro.rs")),
+        for (name, expected, src) in [
+            ("run.rs", 1, include_str!("run.rs")),
+            ("ask.rs", 2, include_str!("ask.rs")),
+            ("entry.rs", 1, include_str!("entry.rs")),
+            ("intro.rs", 1, include_str!("intro.rs")),
         ] {
-            assert!(
-                src.contains("page::draw("),
-                "{name} no longer redraws the bottom region"
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            let found = prod.matches("page::draw(").count();
+            assert_eq!(
+                found, expected,
+                "{name} should repaint the bottom region {expected} time(s), found {found}"
             );
         }
     }

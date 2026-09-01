@@ -311,20 +311,27 @@ mod tests {
 
     // ---- K3: the guard -------------------------------------------------
 
-    /// Branch-wide source pin for K3: NO absolute row addressing anywhere in
-    /// `src/tui/` production code. Every module is named explicitly so a new
-    /// file cannot silently escape the guard — add it here when you add it to
-    /// `mod.rs`. Only the text before `#[cfg(test)]` is scanned, so tests may
-    /// still construct a bad sequence to prove the runtime guard bites.
-    /// `MoveToColumn(` does not match `MoveTo(` — column addressing is safe.
+    /// Branch-wide source pin for K3 AND K1: no absolute row addressing and no
+    /// ratatui inline viewport anywhere in `src/tui/` production code. Every
+    /// module is named explicitly, and the enumeration is then checked against
+    /// the real directory listing — so a new file cannot silently escape the
+    /// guard: forgetting to add it here turns this test red. Only the text
+    /// before `#[cfg(test)]` is scanned, so tests may still construct a bad
+    /// sequence to prove the runtime guard bites. `MoveToColumn(` does not
+    /// match `MoveTo(` — column addressing is safe.
+    ///
+    /// The K1 needle is the CALL form `insert_before(` rather than the bare
+    /// word, because `mod.rs` and `run.rs` still describe the removed flow in
+    /// their module doc comments. The per-file pins in `page.rs` and `term.rs`
+    /// keep the stricter bare-word form for the two modules that used to draw
+    /// through the viewport.
     #[test]
-    fn no_tui_module_uses_absolute_cursor_addressing() {
-        // `backend_wrap.rs` is excluded BY NAME because it still carries the
-        // CPR workaround; Task 5 deletes both the file and this exclusion.
+    fn no_tui_module_uses_absolute_addressing_or_the_inline_viewport() {
         // The `*_tests.rs` entries are test-only modules attached via `#[path]`;
         // they have no production half, so they are scanned whole.
-        for (name, src) in [
+        let modules = [
             ("ask.rs", include_str!("ask.rs")),
+            ("backend_wrap.rs", include_str!("backend_wrap.rs")),
             ("convert.rs", include_str!("convert.rs")),
             ("editor.rs", include_str!("editor.rs")),
             ("entry.rs", include_str!("entry.rs")),
@@ -345,7 +352,8 @@ mod tests {
                 "welcome_data_tests.rs",
                 include_str!("welcome_data_tests.rs"),
             ),
-        ] {
+        ];
+        for (name, src) in modules {
             let prod = src.split("#[cfg(test)]").next().unwrap();
             assert!(
                 !prod.contains("MoveTo("),
@@ -361,6 +369,32 @@ mod tests {
                     "{name} must not use {needle} to fake absolute addressing"
                 );
             }
+            for needle in ["insert_before(", "Viewport::Inline"] {
+                assert!(
+                    !prod.contains(needle),
+                    "{name} must not draw the bottom region through ratatui's \
+                     inline viewport ({needle})"
+                );
+            }
+        }
+
+        // Completeness: the enumeration above must name every `.rs` file that
+        // actually lives in `src/tui/`. Without this, a new module escapes the
+        // guard until a human remembers to add it. A directory that cannot be
+        // read is a FAILURE, never a silent pass.
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/tui");
+        let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {dir}: {e}"));
+        for entry in entries {
+            let entry = entry.unwrap_or_else(|e| panic!("cannot read an entry of {dir}: {e}"));
+            let file = entry.file_name().to_string_lossy().into_owned();
+            if !file.ends_with(".rs") {
+                continue;
+            }
+            assert!(
+                modules.iter().any(|(name, _)| *name == file),
+                "{file} is missing from the guarded module list in screen.rs — \
+                 add it there so the K1/K3 guard covers it"
+            );
         }
     }
 

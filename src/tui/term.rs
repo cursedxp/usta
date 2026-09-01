@@ -72,6 +72,23 @@ mod tests {
     /// and no ratatui inline viewport. The live bottom region is drawn by
     /// `Screen` alone (K1), and the row-addressing bug class this rewrite
     /// removes cannot come back through setup's old CPR seed (K3).
+    ///
+    /// It also pins `term::setup()` BEFORE `EventStream::new()` in `run.rs`.
+    /// The CPR seed that originally motivated that ordering is gone, but the
+    /// ordering is still load-bearing: `setup()` calls
+    /// `crossterm::terminal::supports_keyboard_enhancement()`, which is itself
+    /// a terminal QUERY — it writes `ESC[?u ESC[c` and then polls/reads the
+    /// reply off stdin, taking the same global reader lock an `EventStream`
+    /// holds. Crossterm documents it: "this function will block and possibly
+    /// time out while `crossterm::event::read` or `crossterm::event::poll` are
+    /// being called."
+    ///
+    /// Invert the ordering and the failure is SILENT: a ~2 s startup stall,
+    /// then `supports_keyboard_enhancement()` returns `Err`, the `matches!`
+    /// gate skips the kitty push, and Shift+Enter / Alt+Enter disambiguation is
+    /// lost — with the whole suite still green. Do not delete this assertion on
+    /// the grounds that the CPR seed is gone; the query that replaced it has
+    /// the same stdin-contention contract.
     #[test]
     fn setup_has_no_cpr_seed_and_no_inline_viewport() {
         let prod = include_str!("term.rs")
@@ -85,6 +102,21 @@ mod tests {
         assert!(
             !prod.contains("Viewport::Inline"),
             "term.rs must not build a ratatui inline viewport"
+        );
+
+        let run = include_str!("run.rs");
+        let setup_at = run
+            .find("term::setup(")
+            .expect("run.rs no longer calls term::setup()");
+        let stream_at = run
+            .find("EventStream::new(")
+            .expect("run.rs no longer builds an EventStream");
+        assert!(
+            setup_at < stream_at,
+            "term::setup() must run before EventStream::new(): \
+             supports_keyboard_enhancement() reads its reply off stdin and would \
+             contend with the event stream's reader, silently losing the kitty \
+             keyboard protocol after a 2 s stall"
         );
     }
 }
