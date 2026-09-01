@@ -3,23 +3,22 @@
 //! (cleanup round, Task 4).
 
 use anyhow::Result;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::Size;
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Paragraph, Widget};
 
-use crate::tui::convert::ansi_to_text;
+use crate::tui::convert::{ansi_to_text, text_to_ansi_lines};
 use crate::tui::editor::InputBox;
 use crate::tui::status::{render_status, Status};
-use crate::tui::term::{Tui, VIEWPORT_H};
+use crate::tui::term::Tui;
 use crate::tui::theme;
 use crate::ui;
 
-/// Push persistent content above the viewport (into scrollback).
+/// Push persistent content into the scrollback above the live bottom region.
+/// The region is erased first; the caller's loop repaints it on its next
+/// iteration (K5: this content is printed once and never redrawn).
 pub(crate) fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
-    let h = text.height() as u16;
-    tui.terminal.insert_before(h, |buf| {
-        Paragraph::new(text).render(buf.area, buf);
-    })?;
+    let lines = text_to_ansi_lines(&text, current_width(tui));
+    tui.screen.page(&lines)?;
     Ok(())
 }
 
@@ -65,28 +64,32 @@ pub(crate) fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
 }
 
 /// Current terminal width — keeps wrapping correct after a resize (spec B3).
-/// Falls back to 80 if measurement fails (wrapping doesn't break, just gets narrow).
+/// This is the width the bottom region is currently painted for, so content
+/// and frame never disagree. Falls back to 80 if it is degenerate (wrapping
+/// doesn't break, just gets narrow).
 pub(crate) fn current_width(tui: &Tui) -> u16 {
-    tui.terminal.size().map(|s| s.width).unwrap_or(80)
+    match tui.screen.size().width {
+        0 => 80,
+        w => w,
+    }
 }
 
-/// Refresh the inline viewport after a terminal resize. Without this the
-/// viewport keeps drawing at its stale pre-resize area and the bottom region
-/// garbles (duplicated/shifted lines); the caller's loop redraws on its next
-/// iteration. A `Resize` event reporting an unchanged size is now a no-op:
-/// `autoresize()` only calls `resize()` when the area differs from before.
+/// Adopt the new terminal size after a resize. Without this the bottom region
+/// keeps its stale pre-resize line count and garbles (duplicated/shifted
+/// lines) on the next paint; the caller's loop repaints on its next iteration.
+/// `crossterm::terminal::size()` is a SIZE query — it reads no reply off
+/// stdin, unlike the cursor-position query this rewrite removed (K3).
 pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
-    // ratatui 0.30's `resize()` (invoked by `autoresize()` on every size change) already
-    // clears the viewport unconditionally and full-clears on horizontal shrink, so a
-    // manual `clear()` here is redundant. It is also an avoidable second cursor-position
-    // (CPR) query: 0.30's public `clear()` added its own CPR read that 0.29's `clear()`
-    // never made — CPR itself was never removed from the resize path, it has always been
-    // queried unconditionally by the inline-viewport resize computation.
-    tui.terminal.autoresize()?;
+    let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+    tui.screen.resize(Size::new(w, h))?;
     Ok(())
 }
 
-/// Draw the bottom region: input box (top) + status line (bottom).
+/// Draw the bottom region: input frame (top) + status line (bottom).
+///
+/// The status line is appended as the block's LAST line, so the cursor index
+/// `frame_lines` returns — an index into the frame's own lines, counted from
+/// the top — stays valid unchanged.
 pub(crate) fn draw(
     tui: &mut Tui,
     editor: &InputBox,
@@ -96,16 +99,11 @@ pub(crate) fn draw(
     watch: Option<(bool, bool, usize)>,
     verify_failing: bool,
 ) -> Result<()> {
-    tui.terminal.draw(|f| {
-        let [box_area, status_area] =
-            Layout::vertical([Constraint::Length(VIEWPORT_H - 1), Constraint::Length(1)])
-                .areas(f.area());
-        editor.render(f, box_area);
-        f.render_widget(
-            render_status(status, tokens, window, watch, verify_failing),
-            status_area,
-        );
-    })?;
+    let size = tui.screen.size();
+    let (mut lines, cursor_line, cursor_col) = editor.frame_lines(size.width, size.height);
+    let status_line = render_status(status, tokens, window, watch, verify_failing);
+    lines.extend(text_to_ansi_lines(&Text::from(status_line), size.width));
+    tui.screen.paint(&lines, cursor_line, cursor_col)?;
     Ok(())
 }
 
@@ -135,6 +133,45 @@ mod tests {
         assert!(
             own.contains("fn handle_resize"),
             "page.rs lost its handle_resize helper"
+        );
+    }
+
+    /// Source pin: every event loop repaints the bottom region at the top of
+    /// each iteration. `Screen::page` and `Screen::resize` both leave the
+    /// block erased and forgotten, so a loop that stops calling `draw` shows
+    /// no input frame at all — and nothing else in the suite notices, because
+    /// the live TUI cannot be driven from a unit test.
+    #[test]
+    fn every_event_loop_repaints_the_bottom_region() {
+        for (name, src) in [
+            ("run.rs", include_str!("run.rs")),
+            ("ask.rs", include_str!("ask.rs")),
+            ("entry.rs", include_str!("entry.rs")),
+            ("intro.rs", include_str!("intro.rs")),
+        ] {
+            assert!(
+                src.contains("page::draw("),
+                "{name} no longer redraws the bottom region"
+            );
+        }
+    }
+
+    /// Source pin: the paging layer talks to `Screen` and nothing else. No
+    /// ratatui inline viewport (`insert_before`, K1) and no absolute row
+    /// addressing (`MoveTo(`, K3) — the two mechanisms this rewrite removed.
+    #[test]
+    fn page_rs_uses_neither_insert_before_nor_absolute_addressing() {
+        let prod = include_str!("page.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            !prod.contains("insert_before"),
+            "page.rs must not push content through ratatui's inline viewport"
+        );
+        assert!(
+            !prod.contains("MoveTo("),
+            "page.rs must not address an absolute row"
         );
     }
 }

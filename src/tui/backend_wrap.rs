@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Task 5 deletes this file
 //! Cursor-tracking wrapper around `CrosstermBackend`.
 //!
 //! ratatui's inline viewport asks the backend where the cursor is

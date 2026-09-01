@@ -2,11 +2,8 @@
 //! history. The TUI-path counterpart of Rustyline. Spec §6.
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 use tui_input::backend::crossterm::to_input_request;
 use tui_input::Input;
 
@@ -15,15 +12,17 @@ use crate::tui::theme;
 
 /// Cap on the input frame's content-line count (see `InputBox::frame_lines`),
 /// also bounded by half the screen height, whichever is smaller.
-/// Task 4 wires the frame into the relative renderer.
-#[allow(dead_code)] // Task 4 consumes this.
 pub(crate) const INPUT_MAX_ROWS: usize = 10;
 
 /// Number of visual content rows `value` wraps to at `width` (the TERMINAL
 /// width — the 2-cell `> ` / `  ` prefix is subtracted internally), capped
 /// at `INPUT_MAX_ROWS`. Always returns at least 1. Derived from the same
 /// `wrap_visual` call `frame_lines` uses, so the two never disagree on row
-/// count. Task 4 consumes this.
+/// count.
+//
+// Not reached from production today: `frame_lines` returns the frame's lines
+// directly, so the paging layer never needs the row count on its own. Kept,
+// with its tests, as the pinned definition of the frame's row arithmetic.
 #[allow(dead_code)]
 pub(crate) fn content_rows(value: &str, width: u16) -> usize {
     let inner_w = width.saturating_sub(2) as usize;
@@ -165,56 +164,15 @@ impl InputBox {
         }
     }
 
-    /// Draw the box: rounded border + `> ` prefix + cursor. Long text WRAPS TO
-    /// THE NEXT LINE at the box's inner width (no horizontal scrolling); if it
-    /// exceeds the inner line count, the vertical window follows the cursor.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
-        let inner_w = area.width.saturating_sub(4) as usize; // borders + "> " prefix
-        let visible = area.height.saturating_sub(2).max(1) as usize; // inner lines
-        let (rows, cur_row, cur_col) =
-            wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
-        // Vertical window: last `visible` lines so the cursor stays visible.
-        let start = (cur_row + 1).saturating_sub(visible);
-        let lines: Vec<Line> = rows
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(visible)
-            .map(|(i, r)| {
-                let prefix = if i == 0 { "> " } else { "  " };
-                Line::from(vec![
-                    Span::styled(prefix, theme::brand()),
-                    Span::raw(r.clone()),
-                ])
-            })
-            .collect();
-        let para = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme::DIM)),
-        );
-        f.render_widget(para, area);
-        let x = area.x + 3 + cur_col as u16;
-        let y = area.y + 1 + (cur_row - start) as u16;
-        f.set_cursor_position((
-            x.min(area.x + area.width - 2),
-            y.min(area.y + area.height - 2),
-        ));
-    }
-
     /// Borderless input frame: a full-width `─` rule (styled `theme::DIM`),
     /// the wrapped content (1..=`INPUT_MAX_ROWS` lines, further capped to at
     /// most half of `screen_h`), and a matching rule below — `N + 2` lines
     /// total, index 0 being the top rule. Long text wraps at `width - 2`
     /// (only the `> ` / `  ` prefix is subtracted, no side borders); once the
-    /// cap is hit, the vertical window follows the cursor exactly like
-    /// `render` does today. Returns the frame's ANSI-styled lines, the
+    /// cap is hit, the vertical window follows the cursor. Returns the frame's ANSI-styled lines, the
     /// cursor's line index into that vec (always in `1..=content_rows`), and
     /// the cursor's column (prefix-adjusted, clamped to `width - 1`).
-    /// Degenerate `width`/`screen_h` (0, 1, 2) never panic. Task 4 calls this
-    /// instead of `render`.
-    #[allow(dead_code)] // Task 4 consumes this.
+    /// Degenerate `width`/`screen_h` (0, 1, 2) never panic.
     pub(crate) fn frame_lines(&self, width: u16, screen_h: u16) -> (Vec<String>, u16, u16) {
         let inner_w = width.saturating_sub(2) as usize;
         let (rows, cur_row, cur_col) =

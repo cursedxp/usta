@@ -20,7 +20,6 @@ use ratatui::layout::Size;
 use crate::tui::convert;
 
 /// The live bottom region: input frame plus status line.
-#[allow(dead_code)] // Task 4 wires this into run.rs; consumed there.
 pub(crate) struct Screen<W: Write> {
     out: W,
     /// How many lines the block occupies right now (K2).
@@ -32,7 +31,6 @@ pub(crate) struct Screen<W: Write> {
     size: Size,
 }
 
-#[allow(dead_code)] // Task 4 wires these into run.rs; consumed there.
 impl<W: Write> Screen<W> {
     pub(crate) fn new(out: W, size: Size) -> Self {
         Self {
@@ -42,6 +40,12 @@ impl<W: Write> Screen<W> {
             last_widths: Vec::new(),
             size,
         }
+    }
+
+    /// The terminal size the block is currently painted for. Callers wrap
+    /// their content to this width so content and frame never disagree.
+    pub(crate) fn size(&self) -> Size {
+        self.size
     }
 
     /// Erase the block: drop to its last line, then clear upward `painted`
@@ -163,7 +167,6 @@ impl<W: Write> Screen<W> {
 /// `sum(ceil(w_i / new_width))`, clamped into `painted..=painted * 2`. An empty
 /// line still occupies one row. `new_width == 0` cannot divide, so the recount
 /// falls back to `painted`.
-#[allow(dead_code)] // Task 4 wires this into run.rs; consumed there.
 pub(crate) fn rewrapped_rows(widths: &[u16], new_width: u16, painted: u16) -> u16 {
     if new_width == 0 {
         return painted;
@@ -307,6 +310,59 @@ mod tests {
     }
 
     // ---- K3: the guard -------------------------------------------------
+
+    /// Branch-wide source pin for K3: NO absolute row addressing anywhere in
+    /// `src/tui/` production code. Every module is named explicitly so a new
+    /// file cannot silently escape the guard — add it here when you add it to
+    /// `mod.rs`. Only the text before `#[cfg(test)]` is scanned, so tests may
+    /// still construct a bad sequence to prove the runtime guard bites.
+    /// `MoveToColumn(` does not match `MoveTo(` — column addressing is safe.
+    #[test]
+    fn no_tui_module_uses_absolute_cursor_addressing() {
+        // `backend_wrap.rs` is excluded BY NAME because it still carries the
+        // CPR workaround; Task 5 deletes both the file and this exclusion.
+        // The `*_tests.rs` entries are test-only modules attached via `#[path]`;
+        // they have no production half, so they are scanned whole.
+        for (name, src) in [
+            ("ask.rs", include_str!("ask.rs")),
+            ("convert.rs", include_str!("convert.rs")),
+            ("editor.rs", include_str!("editor.rs")),
+            ("entry.rs", include_str!("entry.rs")),
+            ("intro.rs", include_str!("intro.rs")),
+            ("mod.rs", include_str!("mod.rs")),
+            ("page.rs", include_str!("page.rs")),
+            ("paint.rs", include_str!("paint.rs")),
+            ("polite.rs", include_str!("polite.rs")),
+            ("run.rs", include_str!("run.rs")),
+            ("screen.rs", include_str!("screen.rs")),
+            ("status.rs", include_str!("status.rs")),
+            ("term.rs", include_str!("term.rs")),
+            ("theme.rs", include_str!("theme.rs")),
+            ("welcome.rs", include_str!("welcome.rs")),
+            ("welcome_data.rs", include_str!("welcome_data.rs")),
+            ("welcome_tests.rs", include_str!("welcome_tests.rs")),
+            (
+                "welcome_data_tests.rs",
+                include_str!("welcome_data_tests.rs"),
+            ),
+        ] {
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            assert!(
+                !prod.contains("MoveTo("),
+                "{name} must not address an absolute row"
+            );
+            assert!(
+                !prod.contains("cursor::position()"),
+                "{name} must not query the cursor position"
+            );
+            for needle in ["SavePosition", "RestorePosition"] {
+                assert!(
+                    !prod.contains(needle),
+                    "{name} must not use {needle} to fake absolute addressing"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_absolute_addressing_guard_detects_a_known_bad_sequence() {

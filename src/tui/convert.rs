@@ -1,6 +1,6 @@
-//! Convert termimad ANSI output to ratatui Text — insert_before bridge — and
-//! the reverse: ratatui `Text` to plain ANSI-escaped lines for the
-//! relative-render bottom region.
+//! Convert termimad ANSI output to ratatui Text, and the reverse: ratatui
+//! `Text` to plain ANSI-escaped lines, which is how both the scrollback and
+//! the relative-render bottom region reach the terminal.
 
 use ratatui::style::{Color, Modifier};
 use ratatui::text::Text;
@@ -17,7 +17,6 @@ pub fn ansi_to_text(s: &str) -> Text<'static> {
 /// cells. Only the style facets actually produced anywhere in `src/tui/` are
 /// round-tripped: `Color::Indexed` foreground and the `Modifier::DIM` and
 /// `Modifier::BOLD` bits — this is not a general ANSI style engine.
-#[allow(dead_code)] // Task 4 wires this into the relative renderer; consumed there.
 pub(crate) fn text_to_ansi_lines(t: &Text, width: u16) -> Vec<String> {
     t.lines
         .iter()
@@ -56,7 +55,6 @@ pub(crate) fn text_to_ansi_lines(t: &Text, width: u16) -> Vec<String> {
 ///
 /// Returns the clipped line together with the display width it occupies, so
 /// callers that need that width do not have to scan the line a second time.
-#[allow(dead_code)] // Task 4 wires this into the relative renderer; consumed there.
 pub(crate) fn clip_to_width(line: &str, width: u16) -> (String, u16) {
     if width == 0 {
         return (String::new(), 0);
