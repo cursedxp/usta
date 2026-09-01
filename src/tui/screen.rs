@@ -145,13 +145,19 @@ impl<W: Write> Screen<W> {
     /// sits on screen.
     ///
     /// This computation assumes the terminal RE-WRAPS hard-terminated lines
-    /// when the width narrows — true of common terminals (iTerm2,
-    /// Terminal.app, Ghostty, kitty, WezTerm). On a terminal that does not
-    /// re-wrap, the descent falls short by however many rows the un-wrapped
-    /// lines below the cursor would otherwise have added, and a remnant can
-    /// survive the upward erase below. That risk is narrow and conditional —
-    /// unlike the unconditional bottom-of-screen premise this replaces — and
-    /// lives only here, a candidate for a future policy switch once measured.
+    /// when the width narrows — believed true of common terminals (iTerm2,
+    /// Terminal.app, Ghostty, kitty, WezTerm), though that belief is not
+    /// itself measured here; the amendment's manual resize test is what
+    /// confirms it. On a terminal that does NOT re-wrap when narrowed, each
+    /// hard-terminated line still occupies exactly 1 physical row, while this
+    /// computation's `rows(w) = ceil(w / new_width)` counts 2 or more for any
+    /// line wider than the new width — so the computed descent is too LARGE:
+    /// the cursor overshoots past the block's last line into the space below
+    /// it. The upward erase that follows then starts too low and can stop
+    /// short of the block's top rows, leaving a remnant at the TOP. That risk
+    /// is narrow and conditional — unlike the unconditional bottom-of-screen
+    /// premise this replaces — and lives only here, a candidate for a future
+    /// policy switch once measured.
     /// The caller then reprints with [`Screen::paint`], which clears below
     /// it (K4).
     pub(crate) fn resize(&mut self, size: Size) -> io::Result<()> {
@@ -212,14 +218,18 @@ pub(crate) fn descend_rows(
             u32::from(w).div_ceil(u32::from(new_width)).max(1)
         }
     };
-    let cursor_line = usize::from(painted - 1 - cursor_up);
+    let cursor_line = usize::from(painted.saturating_sub(1).saturating_sub(cursor_up));
     let rows_here = rows(last_widths.get(cursor_line).copied().unwrap_or(1));
     let cursor_visual_row = u32::from(cursor_col)
         .checked_div(u32::from(new_width))
         .unwrap_or(0)
         .min(rows_here - 1);
     let mut total = rows_here - 1 - cursor_visual_row;
-    for &w in last_widths.iter().skip(cursor_line + 1) {
+    for &w in last_widths
+        .iter()
+        .take(usize::from(painted))
+        .skip(cursor_line + 1)
+    {
         total += rows(w);
     }
     total.min(u32::from(u16::MAX)) as u16
