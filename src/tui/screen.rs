@@ -320,11 +320,12 @@ mod tests {
     /// sequence to prove the runtime guard bites. `MoveToColumn(` does not
     /// match `MoveTo(` — column addressing is safe.
     ///
-    /// The K1 needle is the CALL form `insert_before(` rather than the bare
-    /// word, because `mod.rs` and `run.rs` still describe the removed flow in
-    /// their module doc comments. The per-file pins in `page.rs` and `term.rs`
-    /// keep the stricter bare-word form for the two modules that used to draw
-    /// through the viewport.
+    /// The K1 needles are bare words, not call forms: once the last
+    /// viewport-era doc comments were rewritten (Task 5), no production module
+    /// mentions `insert_before` at all, so the needle no longer has to tolerate
+    /// prose. `page.rs` and `term.rs` keep their own per-file pins as well —
+    /// they are the two modules that used to draw through the viewport, and a
+    /// reintroduction there should fail twice, not once.
     #[test]
     fn no_tui_module_uses_absolute_addressing_or_the_inline_viewport() {
         // The `*_tests.rs` entries are test-only modules attached via `#[path]`;
@@ -368,7 +369,7 @@ mod tests {
                     "{name} must not use {needle} to fake absolute addressing"
                 );
             }
-            for needle in ["insert_before(", "Viewport::Inline"] {
+            for needle in ["insert_before", "Viewport::Inline"] {
                 assert!(
                     !prod.contains(needle),
                     "{name} must not draw the bottom region through ratatui's \
