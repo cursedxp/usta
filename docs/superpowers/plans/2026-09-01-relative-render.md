@@ -72,7 +72,7 @@ Sıra spec'in "Mimari" bölümündeki adımların BİREBİR kendisidir.
 
 **Interfaces:**
 - `pub(crate) const INPUT_MAX_ROWS: usize = 10`
-- `pub(crate) fn content_rows(value: &str, width: u16) -> usize` — `1..=INPUT_MAX_ROWS`
+- `pub(crate) fn content_rows(value: &str, width: u16) -> usize` — `1..=INPUT_MAX_ROWS` — v0.30.1'de silindi (bkz. `docs/superpowers/specs/2026-09-01-resize-repark-amendment-design.md`)
 - `InputBox::frame_lines(&self, width: u16, screen_h: u16) -> (Vec<String>, u16, u16)` — satırlar (üst kural + içerik + alt kural) + imleç satırı + imleç sütunu
 - Eski `InputBox::render(&self, f: &mut Frame, area: Rect)` KALDIRILIR. `wrap_visual` KALIR, sarma genişliği `width - 2` olur.
 

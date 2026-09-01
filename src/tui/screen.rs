@@ -147,10 +147,11 @@ impl<W: Write> Screen<W> {
     /// This computation assumes the terminal RE-WRAPS hard-terminated lines
     /// when the width narrows — believed true of common terminals (iTerm2,
     /// Terminal.app, Ghostty, kitty, WezTerm), though that belief is not
-    /// itself measured here; the amendment's manual resize test is what
-    /// confirms it. On a terminal that does NOT re-wrap when narrowed, each
-    /// hard-terminated line still occupies exactly 1 physical row, while this
-    /// computation's `rows(w) = ceil(w / new_width)` counts 2 or more for any
+    /// itself measured here; the amendment's manual resize test is what will
+    /// confirm it, and it has not been run yet. On a terminal that does NOT
+    /// re-wrap when narrowed, each hard-terminated line still occupies
+    /// exactly 1 physical row, while this computation's
+    /// `rows(w) = ceil(w / new_width)` counts 2 or more for any
     /// line wider than the new width — so the computed descent is too LARGE:
     /// the cursor overshoots past the block's last line into the space below
     /// it. The upward erase that follows then starts too low and can stop
@@ -197,10 +198,11 @@ impl<W: Write> Screen<W> {
 /// Rows to descend from the visible cursor to reach the block's last line
 /// after the terminal rewraps to `new_width`: the rows still below the
 /// cursor within its own (possibly rewrapped) logical line, plus the
-/// rewrapped height of every logical line below that one. `painted == 0`
-/// returns `0`. `new_width == 0` cannot divide, so every logical line is
-/// floored to exactly 1 row and the cursor's own visual row is treated as
-/// 0 — the same no-panic fallback `rewrapped_rows` uses.
+/// rewrapped height of every logical line below that one. An empty line
+/// still occupies one row. `painted == 0` returns `0`. `new_width == 0`
+/// cannot divide, so every logical line is floored to exactly 1 row and the
+/// cursor's own visual row is treated as 0 — the same no-panic fallback
+/// `rewrapped_rows` uses.
 pub(crate) fn descend_rows(
     last_widths: &[u16],
     painted: u16,
@@ -633,6 +635,7 @@ mod tests {
         s.paint(&[], 0, 0).unwrap();
         assert_eq!(s.painted, 0);
         assert_eq!(s.cursor_up, 0);
+        assert_eq!(s.cursor_col, 0);
         assert!(s.last_widths.is_empty());
     }
 
@@ -656,6 +659,7 @@ mod tests {
         );
         assert_eq!(s.painted, 0);
         assert_eq!(s.cursor_up, 0);
+        assert_eq!(s.cursor_col, 0);
         assert!(s.last_widths.is_empty());
     }
 
@@ -701,6 +705,11 @@ mod tests {
             !contains_absolute_addressing(t.as_bytes()),
             "resize must never use absolute addressing (K3): {t:?}"
         );
+        assert_eq!(
+            count(&t, CLEAR_LINE),
+            5,
+            "the erase must still happen: {t:?}"
+        );
     }
 
     #[test]
@@ -726,6 +735,28 @@ mod tests {
         assert_eq!(s.size.width, 40);
         assert_eq!(s.painted, 0);
         assert_eq!(s.cursor_up, 0);
+    }
+
+    #[test]
+    fn resize_uses_the_cursor_column_recorded_by_paint() {
+        let (mut s, buf) = screen(80, 20);
+        // Cursor on line 0 of 2, at column 60. At width 40 that line rewraps
+        // into 2 rows and the cursor lands in the SECOND of them, so only the
+        // 2-row rewrap of the line below remains: 2, not the 3 a forgotten
+        // (zero) cursor_col would produce.
+        s.paint(
+            &lines(&["x".repeat(80).as_str(), "y".repeat(80).as_str()]),
+            0,
+            60,
+        )
+        .unwrap();
+        buf.clear();
+        s.resize(Size::new(40, 20)).unwrap();
+        assert!(
+            buf.text().starts_with("\x1b[2B"),
+            "descent must use the recorded cursor_col: {:?}",
+            buf.text()
+        );
     }
 
     // ---- clear_block ---------------------------------------------------
