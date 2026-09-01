@@ -16,7 +16,6 @@ use crossterm::cursor::{MoveDown, MoveToColumn, MoveUp};
 use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType};
 use ratatui::layout::Size;
-use unicode_width::UnicodeWidthChar;
 
 use crate::tui::convert;
 
@@ -71,6 +70,13 @@ impl<W: Write> Screen<W> {
 
     /// Erase the current block and reprint `lines` in its place, leaving the
     /// cursor on row `cursor_line` (0-based within the block) at `cursor_col`.
+    ///
+    /// Two clamps are silent and deliberate. A `cursor_line` at or past the
+    /// block's last row collapses to the last row: the chained
+    /// `saturating_sub` in step 5 floors the upward move at 0. And
+    /// `cursor_col` reaches `MoveToColumn` unclamped against `size.width` —
+    /// a column past the right margin is left to the terminal, which parks
+    /// the cursor on the last column.
     pub(crate) fn paint(
         &mut self,
         lines: &[String],
@@ -87,9 +93,9 @@ impl<W: Write> Screen<W> {
             if i > 0 {
                 self.out.write_all(b"\r\n")?;
             }
-            let clipped = convert::clip_to_width(line, self.size.width);
+            let (clipped, width) = convert::clip_to_width(line, self.size.width);
             self.out.write_all(clipped.as_bytes())?;
-            widths.push(display_width(&clipped));
+            widths.push(width);
         }
 
         queue!(self.out, Clear(ClearType::FromCursorDown))?; // step 4 (K4)
@@ -168,33 +174,6 @@ pub(crate) fn rewrapped_rows(widths: &[u16], new_width: u16, painted: u16) -> u1
         .sum();
     let floor = u32::from(painted);
     sum.clamp(floor, floor * 2).min(u32::from(u16::MAX)) as u16
-}
-
-/// Display width of a possibly ANSI-styled line; escape sequences count zero.
-fn display_width(s: &str) -> u16 {
-    let bytes = s.as_bytes();
-    let mut used = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            let mut j = i + 1;
-            if j < bytes.len() && bytes[j] == b'[' {
-                j += 1;
-                while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
-                    j += 1;
-                }
-                if j < bytes.len() {
-                    j += 1; // include the final byte
-                }
-            }
-            i = j;
-            continue;
-        }
-        let ch = s[i..].chars().next().expect("i is a char boundary");
-        used += UnicodeWidthChar::width(ch).unwrap_or(0);
-        i += ch.len_utf8();
-    }
-    used.min(u16::MAX as usize) as u16
 }
 
 #[cfg(test)]
@@ -317,7 +296,13 @@ mod tests {
         s.paint(&block, 1, 5).unwrap();
         s.resize(Size::new(20, 20)).unwrap();
         s.paint(&lines(&["──", "> h", "──", "rdy"]), 1, 3).unwrap();
+        // A one-line block: step 5's upward move is 0, and the erase that
+        // follows descends by 0 -- both zero-count guards on the up axis.
+        s.paint(&lines(&["only"]), 0, 0).unwrap();
         s.clear_block().unwrap();
+        // Resizing a screen that has never painted: the descend count is 0.
+        let mut fresh = Screen::new(buf.clone(), Size::new(20, 20));
+        fresh.resize(Size::new(40, 20)).unwrap();
         buf
     }
 
@@ -370,22 +355,40 @@ mod tests {
     #[test]
     fn second_paint_erases_exactly_painted_lines() {
         let (mut s, buf) = screen(40, 20);
-        let block = lines(&["a", "b", "c", "d"]);
-        s.paint(&block, 1, 2).unwrap();
+        s.paint(&lines(&["a", "b", "c", "d"]), 1, 2).unwrap();
         buf.clear();
-        s.paint(&block, 1, 2).unwrap();
+        // The second block is SHORTER on purpose. Erasing by the previous
+        // count (4) and erasing by the new count (2) only differ when the two
+        // counts differ -- with equal blocks the bug is invisible.
+        s.paint(&lines(&["a", "b"]), 1, 2).unwrap();
         let t = buf.text();
         assert_eq!(
             count(&t, CLEAR_LINE),
             4,
-            "erase count must equal painted: {t:?}"
+            "erase count must equal the PREVIOUS painted count, not the new one: {t:?}"
         );
-        // painted-1 single-row hops between the erases, and nothing else emits
-        // MoveUp(1) here (step 5 moves up 2).
+        // previous painted - 1 single-row hops between the erases, and nothing
+        // else emits MoveUp(1) here (step 5's `up` is 0 for this block).
         assert_eq!(
             count(&t, "\x1b[1A"),
             3,
             "one MoveUp per erase but the last: {t:?}"
+        );
+    }
+
+    #[test]
+    fn second_paint_descends_to_the_blocks_last_line_before_erasing() {
+        let (mut s, buf) = screen(40, 20);
+        s.paint(&lines(&["a", "b", "c", "d"]), 1, 2).unwrap();
+        assert_eq!(s.cursor_up, 2, "row 1 of 4 is 2 rows above the last");
+        buf.clear();
+        s.paint(&lines(&["a", "b", "c", "d"]), 1, 2).unwrap();
+        let t = buf.text();
+        // MoveDown(cursor_up) then MoveToColumn(0): the erase walks upward from
+        // the block's LAST line, so it has to get there first.
+        assert!(
+            t.starts_with("\x1b[2B\x1b[1G"),
+            "paint must descend cursor_up rows before erasing: {t:?}"
         );
     }
 
@@ -541,13 +544,5 @@ mod tests {
         // Counting the empty lines as zero would give 2, which the floor would
         // silently round up to 3 -- so 4 is what proves the rule.
         assert_eq!(rewrapped_rows(&[0, 0, 80], 40, 3), 4);
-    }
-
-    // ---- display_width -------------------------------------------------
-
-    #[test]
-    fn display_width_ignores_escape_sequences_and_counts_wide_chars() {
-        assert_eq!(display_width("\x1b[38;5;114mab\x1b[0m"), 2);
-        assert_eq!(display_width("a世"), 3);
     }
 }

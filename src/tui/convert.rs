@@ -43,7 +43,7 @@ pub(crate) fn text_to_ansi_lines(t: &Text, width: u16) -> Vec<String> {
                     }
                 })
                 .collect();
-            clip_to_width(&raw, width)
+            clip_to_width(&raw, width).0
         })
         .collect()
 }
@@ -53,10 +53,13 @@ pub(crate) fn text_to_ansi_lines(t: &Text, width: u16) -> Vec<String> {
 /// never split mid-sequence — a sequence is emitted whole or not at all. If
 /// a style escape was still open when clipping stopped, a reset (`\x1b[0m`)
 /// is appended. `width == 0` yields empty content, never panics.
+///
+/// Returns the clipped line together with the display width it occupies, so
+/// callers that need that width do not have to scan the line a second time.
 #[allow(dead_code)] // Task 4 wires this into the relative renderer; consumed there.
-pub(crate) fn clip_to_width(line: &str, width: u16) -> String {
+pub(crate) fn clip_to_width(line: &str, width: u16) -> (String, u16) {
     if width == 0 {
-        return String::new();
+        return (String::new(), 0);
     }
     let width = width as usize;
     let bytes = line.as_bytes();
@@ -95,7 +98,7 @@ pub(crate) fn clip_to_width(line: &str, width: u16) -> String {
     if style_open {
         out.push_str("\x1b[0m");
     }
-    out
+    (out, used.min(u16::MAX as usize) as u16)
 }
 
 #[cfg(test)]
@@ -183,26 +186,39 @@ mod tests {
         // stop after "bc", never slicing through the opening escape and
         // must close the still-open style with a reset.
         let raw = "a\x1b[38;5;114mbcdef";
-        let clipped = clip_to_width(raw, 3);
-        assert_eq!(clipped, "a\x1b[38;5;114mbc\x1b[0m");
+        assert_eq!(
+            clip_to_width(raw, 3),
+            ("a\x1b[38;5;114mbc\x1b[0m".to_string(), 3)
+        );
     }
 
     #[test]
     fn clip_to_width_zero_width_yields_empty_content() {
-        assert_eq!(clip_to_width("\x1b[38;5;114mhello\x1b[0m", 0), "");
+        assert_eq!(
+            clip_to_width("\x1b[38;5;114mhello\x1b[0m", 0),
+            (String::new(), 0)
+        );
     }
 
     #[test]
     fn clip_to_width_unstyled_line_within_width_is_unchanged() {
-        assert_eq!(clip_to_width("hi", 10), "hi");
+        assert_eq!(clip_to_width("hi", 10), ("hi".to_string(), 2));
     }
 
     #[test]
     fn clip_to_width_drops_wide_char_that_would_straddle_the_limit() {
         // "a" (1 cell) leaves exactly 1 cell of budget out of width 2.
         // "世" is a 2-cell CJK character and must not be emitted half-width.
-        let raw = "a世";
-        let clipped = clip_to_width(raw, 2);
-        assert_eq!(clipped, "a");
+        assert_eq!(clip_to_width("a世", 2), ("a".to_string(), 1));
+    }
+
+    #[test]
+    fn clip_to_width_reports_display_width_ignoring_escapes_and_counting_wide_chars() {
+        // Escape sequences occupy zero cells; "世" occupies two.
+        assert_eq!(
+            clip_to_width("\x1b[38;5;114mab\x1b[0m", 10),
+            ("\x1b[38;5;114mab\x1b[0m".to_string(), 2)
+        );
+        assert_eq!(clip_to_width("a世", 10), ("a世".to_string(), 3));
     }
 }
