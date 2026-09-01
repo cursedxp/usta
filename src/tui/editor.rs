@@ -14,25 +14,6 @@ use crate::tui::theme;
 /// also bounded by half the screen height, whichever is smaller.
 pub(crate) const INPUT_MAX_ROWS: usize = 10;
 
-/// Number of visual content rows `value` wraps to at `width` (the TERMINAL
-/// width — the 2-cell `> ` / `  ` prefix is subtracted internally), capped
-/// at `INPUT_MAX_ROWS`. Always returns at least 1. It shares the `wrap_visual`
-/// computation with `frame_lines`, but NOT the cap: `frame_lines` additionally
-/// clamps to half the screen height, so on screens shorter than
-/// `2 * INPUT_MAX_ROWS` the two can return different numbers — they only
-/// diverge once the wrapped row count exceeds the half-screen cap. This is
-/// the row count before any screen-height cap; the two are not substitutable.
-//
-// Not reached from production today: `frame_lines` returns the frame's lines
-// directly, so the paging layer never needs the row count on its own. Kept,
-// with its tests, as the pinned definition of the frame's row arithmetic.
-#[allow(dead_code)]
-pub(crate) fn content_rows(value: &str, width: u16) -> usize {
-    let inner_w = width.saturating_sub(2) as usize;
-    let (rows, _cur_row, _cur_col) = wrap_visual(value, inner_w, 0);
-    rows.len().min(INPUT_MAX_ROWS)
-}
-
 /// Result of key handling — the loop behaves accordingly.
 #[derive(Debug)]
 pub enum Action {
@@ -173,7 +154,7 @@ impl InputBox {
     /// total, index 0 being the top rule. Long text wraps at `width - 2`
     /// (only the `> ` / `  ` prefix is subtracted, no side borders); once the
     /// cap is hit, the vertical window follows the cursor. Returns the frame's ANSI-styled lines, the
-    /// cursor's line index into that vec (always in `1..=content_rows`), and
+    /// cursor's line index into that vec (always in `1..=N`), and
     /// the cursor's column (prefix-adjusted, clamped to `width - 1`).
     /// Degenerate `width`/`screen_h` (0, 1, 2) never panic.
     pub(crate) fn frame_lines(&self, width: u16, screen_h: u16) -> (Vec<String>, u16, u16) {
@@ -407,7 +388,7 @@ mod tests {
         assert_eq!(b.value(), "\n");
     }
 
-    // ── Borderless frame (frame_lines / content_rows) ──────────────────────
+    // ── Borderless frame (frame_lines) ─────────────────────────────────────
 
     /// Strip ANSI escape sequences so assertions can check the DISPLAY
     /// content of a `frame_lines` line without tripping over the styling
@@ -436,35 +417,6 @@ mod tests {
             i += ch.len_utf8();
         }
         out
-    }
-
-    #[test]
-    fn content_rows_empty_is_one() {
-        assert_eq!(content_rows("", 20), 1);
-    }
-
-    #[test]
-    fn content_rows_exactly_fits_is_one() {
-        // width 12 -> inner width 10; a 10-char value fits on one row.
-        let v = "a".repeat(10);
-        assert_eq!(content_rows(&v, 12), 1);
-    }
-
-    #[test]
-    fn content_rows_one_char_over_is_two() {
-        let v = "a".repeat(11);
-        assert_eq!(content_rows(&v, 12), 2);
-    }
-
-    #[test]
-    fn content_rows_newline_increases_it() {
-        assert_eq!(content_rows("ab\ncd", 20), 2);
-    }
-
-    #[test]
-    fn content_rows_caps_at_input_max_rows() {
-        let v = "x\n".repeat(30);
-        assert_eq!(content_rows(&v, 20), INPUT_MAX_ROWS);
     }
 
     #[test]
