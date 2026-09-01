@@ -70,7 +70,7 @@ pub(crate) struct Screen {
 
 ### Resize
 
-> **Superseded in v0.30.1** by `docs/superpowers/specs/2026-09-01-resize-repark-amendment-design.md` — step 1 below (the `painted * 2` descent and its bottom-of-screen premise) is no longer what the code does.
+> **v0.30.1'de değişti** — `docs/superpowers/specs/2026-09-01-resize-repark-amendment-design.md`. Aşağıdaki 1. adım (`painted * 2` inişi ve dayandığı ekran-dibi varsayımı) artık kodun yaptığı şey değildir.
 
 Terminal daraldığında ekranda duran bloğumuzun satırları yeniden sarılmış olabilir — `painted` gerçeği yansıtmaz. Sıra:
 
@@ -103,11 +103,11 @@ Terminal daraldığında ekranda duran bloğumuzun satırları yeniden sarılmı
 - `editor::frame_lines(&self, width: u16, screen_h: u16) -> (Vec<String>, u16, u16)` — basılacak satırlar + imleç satırı + imleç sütunu
 - `term::VIEWPORT_H` KALDIRILIR
 - `backend_wrap.rs` KALDIRILIR (CPR yamasının varlık sebebi ortadan kalkar)
-- ~~`editor::content_rows`~~ — dropped from this binding list in v0.30.1: it ended up called by nothing but its own tests, because `frame_lines` already does the row arithmetic, and binding the two together would have applied the cap in two places (`docs/superpowers/specs/2026-09-01-resize-repark-amendment-design.md`).
+- ~~`editor::content_rows`~~ — v0.30.1'de bu bağlayıcı listeden çıkarıldı: kendi testleri dışında hiçbir yerden çağrılmadı, çünkü satır aritmetiğini zaten `frame_lines` yapıyor; ikisini bağlamak tavanı iki ayrı yerde uygulatırdı (`docs/superpowers/specs/2026-09-01-resize-repark-amendment-design.md`).
 
 ## Test
 
-- Birim `frame_lines` yüksekliği: boş → 1 · tam sığan → 1 · bir karakter taşan → 2 · `\n` → artar · tavan → `INPUT_MAX_ROWS` · kısa ekran → yarıyı geçmez. (Originally specified as a `content_rows` unit; that function was dropped in v0.30.1 and its five tests went with it — the surviving cases are `frame_lines`' own row-count and cap tests.)
+- Birim `frame_lines` yüksekliği: boş → 1 · tam sığan → 1 · bir karakter taşan → 2 · tavan → `INPUT_MAX_ROWS` · kısa ekran → yarıyı geçmez. (Başlangıçta `content_rows` birimi olarak yazılmıştı; o fonksiyon ve beş testi v0.30.1'de kaldırıldı — kalan vakaları `frame_lines`'ın kendi satır sayısı ve tavan testleri karşılıyor. `\n` → artar vakası `frame_lines` düzeyinde değil, `wrap_visual_breaks_on_newline_with_visible_marker` testinde pinlidir.)
 - Birim `Screen`: sahte bir `Write` üzerine basılır, üretilen bayt dizisi doğrulanır — ilk `paint` silme üretmez; ikinci `paint` tam `painted` kez `ESC[2K` üretir; her `paint` `ESC[0J` ile biter; hiçbir çıktı `ESC[<row>;<col>H` İÇERMEZ (K3'ün mekanik bekçisi).
 - Birim `rewrapped` hesabı: genişlik yarıya inince iki katına çıkar, kırpma aralığı tutar.
 - Kaynak-pin: üretim kaynağında `cursor::position()` YOK, `MoveTo(` YOK, `Viewport::Inline` YOK, `insert_before` YOK.
