@@ -14,10 +14,9 @@ pub fn ansi_to_text(s: &str) -> Text<'static> {
 }
 
 /// ratatui `Text` → plain ANSI-escaped lines, clipped to `width` display
-/// cells. Only the style facets the codebase's theme actually produces are
-/// round-tripped: `Color::Indexed` foreground and the `Modifier::DIM` bit
-/// (see `theme.rs`, `status.rs`, `paint.rs`) — this is not a general ANSI
-/// style engine.
+/// cells. Only the style facets actually produced anywhere in `src/tui/` are
+/// round-tripped: `Color::Indexed` foreground and the `Modifier::DIM` and
+/// `Modifier::BOLD` bits — this is not a general ANSI style engine.
 #[allow(dead_code)] // Task 4 wires this into the relative renderer; consumed there.
 pub(crate) fn text_to_ansi_lines(t: &Text, width: u16) -> Vec<String> {
     t.lines
@@ -30,6 +29,9 @@ pub(crate) fn text_to_ansi_lines(t: &Text, width: u16) -> Vec<String> {
                     let mut prefix = String::new();
                     if let Some(Color::Indexed(n)) = span.style.fg {
                         prefix.push_str(&format!("\x1b[38;5;{n}m"));
+                    }
+                    if span.style.add_modifier.contains(Modifier::BOLD) {
+                        prefix.push_str("\x1b[1m");
                     }
                     if span.style.add_modifier.contains(Modifier::DIM) {
                         prefix.push_str("\x1b[2m");
@@ -135,6 +137,33 @@ mod tests {
     }
 
     #[test]
+    fn text_to_ansi_lines_maps_bold_modifier() {
+        let line = Line::from(vec![Span::styled(
+            "bold",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]);
+        let t = Text::from(vec![line]);
+        let out = text_to_ansi_lines(&t, 100);
+        assert_eq!(out, vec!["\x1b[1mbold\x1b[0m".to_string()]);
+    }
+
+    #[test]
+    fn text_to_ansi_lines_mixes_brand_color_and_bold_modifier() {
+        let line = Line::from(vec![Span::styled(
+            "brand bold",
+            Style::default()
+                .fg(Color::Indexed(114))
+                .add_modifier(Modifier::BOLD),
+        )]);
+        let t = Text::from(vec![line]);
+        let out = text_to_ansi_lines(&t, 100);
+        assert_eq!(
+            out,
+            vec!["\x1b[38;5;114m\x1b[1mbrand bold\x1b[0m".to_string()]
+        );
+    }
+
+    #[test]
     fn text_to_ansi_lines_clips_line_wider_than_width() {
         let t = Text::from(vec![Line::from("hello world")]);
         let out = text_to_ansi_lines(&t, 5);
@@ -166,5 +195,14 @@ mod tests {
     #[test]
     fn clip_to_width_unstyled_line_within_width_is_unchanged() {
         assert_eq!(clip_to_width("hi", 10), "hi");
+    }
+
+    #[test]
+    fn clip_to_width_drops_wide_char_that_would_straddle_the_limit() {
+        // "a" (1 cell) leaves exactly 1 cell of budget out of width 2.
+        // "世" is a 2-cell CJK character and must not be emitted half-width.
+        let raw = "a世";
+        let clipped = clip_to_width(raw, 2);
+        assert_eq!(clipped, "a");
     }
 }
