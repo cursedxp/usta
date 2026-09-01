@@ -33,12 +33,12 @@
 - Modify: `Screen.cursor_col: u16` alanı; `paint` onu kaydeder (`forget_block` sıfırlar).
 - Modify: `Screen::resize` — 1. adım `MoveDown(descend_rows(...))`. 3-5. adımlar DEĞİŞMEZ.
 
-- [ ] **Step 1: Failing test — önce ISIRAN regresyon testi.** `screen.rs` test modülüne, bloğun ekran ORTASINDA olduğu durumu temsil eden bir `resize` testi yaz: küçük bir blok boya, sonra `resize` çağır, üretilen baytlardaki `MoveDown` miktarını oku. Beklenen değer `descend_rows`'un döndürdüğü sayı; bugünkü `painted * 2` ile FAIL etmeli. Yorumda neden yazılır: *v0.30.0 assumed the block always sits at the bottom of the screen; in a freshly opened session it does not, and the descent overshot into blank rows, leaving the block's top rows alive as a ghost.*
-- [ ] **Step 2:** Ekin test listesindeki `descend_rows` birim testlerini yaz (yedi vaka: değişmemiş genişlik/imleç sonda · değişmemiş/iki yukarıda · imleç satırı ikiye sarılıyor, imleç ilk yarıda · aynısı ikinci yarıda · alttaki iki satır ikiye sarılıyor · `painted == 0` · `new_width == 0`).
-- [ ] **Step 3:** Testleri koş, DOĞRU sebeple FAIL ettiklerini gör (fonksiyon yok / iniş `painted * 2`).
-- [ ] **Step 4:** Implementasyon: alan, `paint`'te kayıt, `forget_block`'ta sıfırlama, `descend_rows`, `resize`'ın 1. adımı. Doküman yorumu ekin A1/A3'ünü anlatır — ekran-dibi anlatan eski paragraf SİLİNİR, yerine yeniden-sarma varsayımı ve kalan riski yazılır.
-- [ ] **Step 5:** Kaynak-pin: `screen.rs` üretim gövdesinde `saturating_mul(2)` YOK. Pin doğrulaması (protokol): geçici olarak inişi `painted * 2`'ye çevir → hem regresyon testi hem pin FAIL etsin → geri al.
-- [ ] **Step 6:** `cargo test` TÜMÜ, `cargo clippy --all-targets`, `cargo fmt -- src/tui/screen.rs`. Commit: `fix: descend by our own recorded rows on resize, not to the screen bottom`
+- [x] **Step 1: Failing test — önce ISIRAN regresyon testi.** `screen.rs` test modülüne, bloğun ekran ORTASINDA olduğu durumu temsil eden bir `resize` testi yaz: küçük bir blok boya, sonra `resize` çağır, üretilen baytlardaki `MoveDown` miktarını oku. Beklenen değer `descend_rows`'un döndürdüğü sayı; bugünkü `painted * 2` ile FAIL etmeli. Yorumda neden yazılır: *v0.30.0 assumed the block always sits at the bottom of the screen; in a freshly opened session it does not, and the descent overshot into blank rows, leaving the block's top rows alive as a ghost.*
+- [x] **Step 2:** Ekin test listesindeki `descend_rows` birim testlerini yaz (yedi vaka: değişmemiş genişlik/imleç sonda · değişmemiş/iki yukarıda · imleç satırı ikiye sarılıyor, imleç ilk yarıda · aynısı ikinci yarıda · alttaki iki satır ikiye sarılıyor · `painted == 0` · `new_width == 0`).
+- [x] **Step 3:** Testleri koş, DOĞRU sebeple FAIL ettiklerini gör (fonksiyon yok / iniş `painted * 2`).
+- [x] **Step 4:** Implementasyon: alan, `paint`'te kayıt, `forget_block`'ta sıfırlama, `descend_rows`, `resize`'ın 1. adımı. Doküman yorumu ekin A1/A3'ünü anlatır — ekran-dibi anlatan eski paragraf SİLİNİR, yerine yeniden-sarma varsayımı ve kalan riski yazılır.
+- [x] **Step 5:** Kaynak-pin: `screen.rs` üretim gövdesinde `saturating_mul(2)` YOK. Pin doğrulaması (protokol): geçici olarak inişi `painted * 2`'ye çevir → hem regresyon testi hem pin FAIL etsin → geri al.
+- [x] **Step 6:** `cargo test` TÜMÜ, `cargo clippy --all-targets`, `cargo fmt -- src/tui/screen.rs`. Commit: `fix: descend by our own recorded rows on resize, not to the screen bottom`
 
 ---
 
@@ -46,12 +46,12 @@
 
 **Files:** Modify `src/tui/editor.rs`, `docs/superpowers/specs/2026-09-01-relative-render-design.md`, `SPEC.md`, `docs/ROADMAP.md`, `Cargo.toml`, `src/tui/welcome_tests.rs`, `Cargo.lock`
 
-- [ ] **Step 1:** `editor::content_rows` ve `INPUT_MAX_ROWS`'un yalnız onun için var olan parçaları silinir (`INPUT_MAX_ROWS` `frame_lines` tarafından kullanılıyorsa KALIR — önce `grep` ile doğrula). İlgili testler kaldırılır; `frame_lines`'ın satır sayısı ve tavan testleri KALIR. `#[allow(dead_code)]` kalmaz.
-- [ ] **Step 2:** Ana tasarım dosyasının "İsimlendirme (bağlayıcı)" listesinden `content_rows` satırı çıkarılır ve tek cümlelik neden yazılır (çağrısız kaldı, `frame_lines` işi yapıyor, bağlamak tavanı iki kez uygulatırdı). Ana tasarımın `resize` bölümüne, ekin dosya yolunu gösteren tek satırlık "bu bölüm v0.30.1'de değişti" notu düşülür — bölüm SİLİNMEZ.
-- [ ] **Step 3:** `SPEC.md` §4.19'daki v0.30.0 paragrafında "ölçülmemiş ikinci risk" olarak yazılan ekran-dibi premise'i **kapandı** olarak güncellenir: neyin yanlış olduğu, inişin artık `Screen`'in kendi kayıtlarından hesaplandığı, ve yerine geçen dar riskin (yeniden sarmayan terminal) ne olduğu. Paragraf silinmez, düzeltilir.
-- [ ] **Step 4:** `docs/ROADMAP.md` `## Completed` başına kayıt, `v0.30.1.` ile biter. v0.30.0 kaydı silinmez; oradaki "ölçülmemiş risk" ifadesine bu kaydın kapattığı not düşülür.
-- [ ] **Step 5:** Sürüm 0.30.1 (`Cargo.toml` + `src/tui/welcome_tests.rs` pini), `cargo check` ile lock tazele.
-- [ ] **Step 6:** `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check`. Commit: `docs: close the bottom-of-screen premise; drop the unused content_rows; bump to v0.30.1`
+- [x] **Step 1:** `editor::content_rows` ve `INPUT_MAX_ROWS`'un yalnız onun için var olan parçaları silinir (`INPUT_MAX_ROWS` `frame_lines` tarafından kullanılıyorsa KALIR — önce `grep` ile doğrula). İlgili testler kaldırılır; `frame_lines`'ın satır sayısı ve tavan testleri KALIR. `#[allow(dead_code)]` kalmaz.
+- [x] **Step 2:** Ana tasarım dosyasının "İsimlendirme (bağlayıcı)" listesinden `content_rows` satırı çıkarılır ve tek cümlelik neden yazılır (çağrısız kaldı, `frame_lines` işi yapıyor, bağlamak tavanı iki kez uygulatırdı). Ana tasarımın `resize` bölümüne, ekin dosya yolunu gösteren tek satırlık "bu bölüm v0.30.1'de değişti" notu düşülür — bölüm SİLİNMEZ.
+- [x] **Step 3:** `SPEC.md` §4.19'daki v0.30.0 paragrafında "ölçülmemiş ikinci risk" olarak yazılan ekran-dibi premise'i **kapandı** olarak güncellenir: neyin yanlış olduğu, inişin artık `Screen`'in kendi kayıtlarından hesaplandığı, ve yerine geçen dar riskin (yeniden sarmayan terminal) ne olduğu. Paragraf silinmez, düzeltilir.
+- [x] **Step 4:** `docs/ROADMAP.md` `## Completed` başına kayıt, `v0.30.1.` ile biter. v0.30.0 kaydı silinmez; oradaki "ölçülmemiş risk" ifadesine bu kaydın kapattığı not düşülür.
+- [x] **Step 5:** Sürüm 0.30.1 (`Cargo.toml` + `src/tui/welcome_tests.rs` pini), `cargo check` ile lock tazele.
+- [x] **Step 6:** `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check`. Commit: `docs: close the bottom-of-screen premise; drop the unused content_rows; bump to v0.30.1`
 
 ---
 
