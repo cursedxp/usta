@@ -75,12 +75,14 @@ impl<W: Write> Screen<W> {
     /// Erase the current block and reprint `lines` in its place, leaving the
     /// cursor on row `cursor_line` (0-based within the block) at `cursor_col`.
     ///
-    /// Two clamps are silent and deliberate. A `cursor_line` at or past the
+    /// Three clamps are silent and deliberate. A `cursor_line` at or past the
     /// block's last row collapses to the last row: the chained
-    /// `saturating_sub` in step 5 floors the upward move at 0. And
-    /// `cursor_col` reaches `MoveToColumn` unclamped against `size.width` —
-    /// a column past the right margin is left to the terminal, which parks
-    /// the cursor on the last column.
+    /// `saturating_sub` in step 5 floors the upward move at 0. `cursor_col`
+    /// reaches `MoveToColumn` unclamped against `size.width` — a column past
+    /// the right margin is left to the terminal, which parks the cursor on
+    /// the last column. And `lines.len()` is clamped to `u16::MAX` before it
+    /// becomes `painted`, so a block longer than that is undercounted rather
+    /// than overflowing the counter.
     pub(crate) fn paint(
         &mut self,
         lines: &[String],
@@ -131,10 +133,19 @@ impl<W: Write> Screen<W> {
     }
 
     /// Adopt a new terminal size, erasing whatever the terminal made of the
-    /// old block. The cursor is first driven to the bottom-most screen row --
-    /// terminals stop at the last row, so `painted * 2` down is a known place
-    /// and the block is always at the bottom. The caller then reprints with
-    /// [`Screen::paint`], which clears below it (K4).
+    /// old block. The cursor is first driven down by `painted * 2` rows to
+    /// reach the bottom-most screen row: terminals stop at the last row, so
+    /// the descent is self-clamping and needs no height. Landing on the
+    /// block's last line that way ASSUMES the block sits at the bottom of the
+    /// screen. That is a premise inherited from the caller and from the design
+    /// spec (persistent content is always printed above the block); nothing
+    /// here enforces it. While it does not hold — a freshly opened session
+    /// whose output has not yet pushed the block down, so blank rows remain
+    /// below it — the descent stops short of the block's last line, the erase
+    /// walks up over rows K4 already left blank, and the real block survives
+    /// above as a ghost until enough output has scrolled it to the bottom.
+    /// The caller then reprints with [`Screen::paint`], which clears below
+    /// it (K4).
     pub(crate) fn resize(&mut self, size: Size) -> io::Result<()> {
         let down = self.painted.saturating_mul(2);
         if down != 0 {
@@ -229,8 +240,9 @@ mod tests {
     }
 
     /// True if the bytes contain any absolute cursor addressing: CUP (`H`/`f`),
-    /// a cursor-position report/query (`n`), or save/restore (`s`/`u`, `ESC 7`,
-    /// `ESC 8`). This is the mechanical guard for K3 — never weaken it.
+    /// VPA (`d`, what `MoveToRow` emits), a cursor-position report/query (`n`),
+    /// or save/restore (`s`/`u`, `ESC 7`, `ESC 8`). This is the mechanical
+    /// guard for K3 — never weaken it.
     fn contains_absolute_addressing(bytes: &[u8]) -> bool {
         let mut i = 0usize;
         while i < bytes.len() {
@@ -241,7 +253,7 @@ mod tests {
                         j += 1;
                     }
                     if j < bytes.len() {
-                        if matches!(bytes[j], b'H' | b'f' | b'n' | b's' | b'u') {
+                        if matches!(bytes[j], b'H' | b'f' | b'd' | b'n' | b's' | b'u') {
                             return true;
                         }
                         i = j + 1;
@@ -318,7 +330,11 @@ mod tests {
     /// guard: forgetting to add it here turns this test red. Only the text
     /// before `#[cfg(test)]` is scanned, so tests may still construct a bad
     /// sequence to prove the runtime guard bites. `MoveToColumn(` does not
-    /// match `MoveTo(` — column addressing is safe.
+    /// match `MoveTo(` — column addressing is safe. `MoveToRow` is named
+    /// separately for the opposite reason: it does NOT match `MoveTo(` either,
+    /// yet it emits `ESC[{n+1}d`, absolute row addressing under a safe-looking
+    /// name. `MoveToNextLine` / `MoveToPreviousLine` stay unguarded — they
+    /// emit `E` / `F` and are genuinely relative.
     ///
     /// The K1 needles are bare words, not call forms: once the last
     /// viewport-era doc comments were rewritten (Task 5), no production module
@@ -355,10 +371,12 @@ mod tests {
         ];
         for (name, src) in modules {
             let prod = src.split("#[cfg(test)]").next().unwrap();
-            assert!(
-                !prod.contains("MoveTo("),
-                "{name} must not address an absolute row"
-            );
+            for needle in ["MoveTo(", "MoveToRow"] {
+                assert!(
+                    !prod.contains(needle),
+                    "{name} must not address an absolute row ({needle})"
+                );
+            }
             assert!(
                 !prod.contains("cursor::position()"),
                 "{name} must not query the cursor position"
@@ -413,6 +431,7 @@ mod tests {
     #[test]
     fn the_absolute_addressing_guard_detects_a_known_bad_sequence() {
         assert!(contains_absolute_addressing(b"\x1b[3;5H"));
+        assert!(contains_absolute_addressing(b"\x1b[10d"));
         assert!(contains_absolute_addressing(b"\x1b[6n"));
         assert!(contains_absolute_addressing(b"\x1b[s"));
         assert!(!contains_absolute_addressing(

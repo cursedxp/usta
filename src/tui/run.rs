@@ -6,8 +6,8 @@
 //! visual-generation trigger).
 //!
 //! In plain mode (ui::is_plain) this module is never used — main's branching
-//! routes the plain path to run_plain_loop. There is NO alt-screen here: only
-//! an inline viewport, scrollback is preserved.
+//! routes the plain path to run_plain_loop. There is NO alt-screen here: the
+//! live bottom region is drawn in place, scrollback is preserved.
 
 use std::path::{Path, PathBuf};
 
