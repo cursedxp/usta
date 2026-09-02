@@ -263,6 +263,80 @@ pub(crate) fn rewrapped_rows(widths: &[u16], new_width: u16, painted: u16) -> u1
     sum.max(u32::from(painted)).min(u32::from(u16::MAX)) as u16
 }
 
+/// Whether the terminal re-wraps hard-terminated lines when the display
+/// width narrows. `Screen`'s erase arithmetic needs this exactly, not
+/// guessed: under `Reflow` the erase must cover `sum(ceil(w_i/new_width))`
+/// rows, under `NoReflow` it must not exceed `painted` rows or it destroys
+/// the user's transcript above the block. From the same state the two
+/// policies demand opposite treatment, so the policy is an input, not an
+/// average. See `docs/superpowers/specs/2026-09-02-reflow-policy-design.md`.
+///
+/// Not wired into `Screen` yet -- a later task threads this into `Screen`
+/// and `term::setup()`. `#[allow(dead_code)]` is narrow and temporary: it
+/// covers exactly this detection step, exercised by its own tests below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ReflowPolicy {
+    Reflow,
+    NoReflow,
+}
+
+/// Detect the reflow policy from environment variables, via an injected
+/// `get` so no test touches the real process environment (parallel test
+/// runs race `std::env::set_var`).
+///
+/// Precedence (spec P2, exact order):
+/// 1. `USTA_TERM_REFLOW` override -- wins over everything, including a
+///    multiplexer. Escape hatch and test hook.
+/// 2. Multiplexer (`TMUX` defined, or `TERM` starting with `screen`/`tmux`)
+///    -> `NoReflow`, regardless of the outer terminal: the multiplexer
+///    owns the grid, so the outer terminal's own behavior is irrelevant.
+/// 3. Known wrapping terminals -> `Reflow`.
+/// 4. Otherwise -> `NoReflow` (spec P3, binding default: under-erasing
+///    leaves recoverable residue that scrolls away with new output;
+///    over-erasing destroys the user's text permanently. When in doubt,
+///    the text is kept.)
+///
+/// Not called from production code yet -- see the `ReflowPolicy` doc above.
+#[allow(dead_code)]
+pub(crate) fn detect_reflow(get: impl Fn(&str) -> Option<String>) -> ReflowPolicy {
+    if let Some(v) = get("USTA_TERM_REFLOW") {
+        match v.as_str() {
+            "1" | "true" => return ReflowPolicy::Reflow,
+            "0" | "false" => return ReflowPolicy::NoReflow,
+            _ => {}
+        }
+    }
+
+    let term = get("TERM").unwrap_or_default();
+    if get("TMUX").is_some() || term.starts_with("screen") || term.starts_with("tmux") {
+        return ReflowPolicy::NoReflow;
+    }
+
+    const KNOWN_TERM_PROGRAMS: [&str; 6] = [
+        "vscode",
+        "iTerm.app",
+        "Apple_Terminal",
+        "ghostty",
+        "WezTerm",
+        "Hyper",
+    ];
+    const KNOWN_TERMS: [&str; 2] = ["xterm-kitty", "xterm-ghostty"];
+
+    let term_program = get("TERM_PROGRAM").unwrap_or_default();
+    if KNOWN_TERM_PROGRAMS.contains(&term_program.as_str())
+        || KNOWN_TERMS.contains(&term.as_str())
+        || get("KITTY_WINDOW_ID").is_some()
+        || get("WEZTERM_PANE").is_some()
+        || get("VTE_VERSION").is_some()
+        || get("WT_SESSION").is_some()
+    {
+        return ReflowPolicy::Reflow;
+    }
+
+    ReflowPolicy::NoReflow
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
@@ -867,6 +941,117 @@ mod tests {
         // Counting the empty lines as zero would give 2, which the floor would
         // silently round up to 3 -- so 4 is what proves the rule.
         assert_eq!(rewrapped_rows(&[0, 0, 80], 40, 3), 4);
+    }
+
+    // ---- detect_reflow (pure) -------------------------------------------
+
+    /// Builds a fake `get` closure over a fixed set of key/value pairs, so
+    /// no test touches the real process environment (parallel test runs
+    /// race `std::env::set_var`).
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|&(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |key: &str| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn detect_reflow_override_one_forces_reflow() {
+        assert_eq!(
+            detect_reflow(env(&[("USTA_TERM_REFLOW", "1")])),
+            ReflowPolicy::Reflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_override_zero_forces_no_reflow() {
+        assert_eq!(
+            detect_reflow(env(&[("USTA_TERM_REFLOW", "0")])),
+            ReflowPolicy::NoReflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_override_wins_even_inside_a_multiplexer() {
+        // TMUX is defined, which alone would force NoReflow (step 2) -- the
+        // override (step 1) must win anyway.
+        assert_eq!(
+            detect_reflow(env(&[
+                ("USTA_TERM_REFLOW", "1"),
+                ("TMUX", "/tmp/tmux-1000/default")
+            ])),
+            ReflowPolicy::Reflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_multiplexer_wins_over_the_outer_terminal() {
+        // TMUX defined + a known-wrapping outer TERM_PROGRAM: the
+        // multiplexer's precedence (step 2) beats the wrapper list (step 3).
+        assert_eq!(
+            detect_reflow(env(&[
+                ("TMUX", "/tmp/tmux-1000/default"),
+                ("TERM_PROGRAM", "vscode"),
+            ])),
+            ReflowPolicy::NoReflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_term_screen_is_a_multiplexer() {
+        assert_eq!(
+            detect_reflow(env(&[("TERM", "screen-256color")])),
+            ReflowPolicy::NoReflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_term_tmux_is_a_multiplexer() {
+        assert_eq!(
+            detect_reflow(env(&[("TERM", "tmux-256color")])),
+            ReflowPolicy::NoReflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_vscode_is_a_known_wrapper() {
+        assert_eq!(
+            detect_reflow(env(&[("TERM_PROGRAM", "vscode")])),
+            ReflowPolicy::Reflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_iterm_is_a_known_wrapper() {
+        assert_eq!(
+            detect_reflow(env(&[("TERM_PROGRAM", "iTerm.app")])),
+            ReflowPolicy::Reflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_kitty_window_id_is_a_known_wrapper() {
+        assert_eq!(
+            detect_reflow(env(&[("KITTY_WINDOW_ID", "1")])),
+            ReflowPolicy::Reflow
+        );
+    }
+
+    #[test]
+    fn detect_reflow_empty_environment_defaults_to_no_reflow() {
+        // P3: an unknown/empty environment must default to NoReflow --
+        // under-erasing leaves recoverable residue, over-erasing destroys
+        // the user's text permanently.
+        assert_eq!(detect_reflow(env(&[])), ReflowPolicy::NoReflow);
+    }
+
+    #[test]
+    fn detect_reflow_unknown_term_program_defaults_to_no_reflow() {
+        assert_eq!(
+            detect_reflow(env(&[("TERM_PROGRAM", "SomeThing")])),
+            ReflowPolicy::NoReflow
+        );
     }
 
     // ---- the modelled screen: what a byte assertion cannot see ------------
