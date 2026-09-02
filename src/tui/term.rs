@@ -10,7 +10,7 @@ use crossterm::event::{
 };
 use ratatui::layout::Size;
 
-use crate::tui::screen::Screen;
+use crate::tui::screen::{detect_reflow, Screen};
 
 pub struct Tui {
     pub(crate) screen: Screen<Stdout>,
@@ -45,8 +45,12 @@ pub fn setup() -> Result<Tui> {
     // setup(): an unavailable size falls back to a conventional 80x24, which
     // the first `Resize` event corrects.
     let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+    // The only place production code reads the real process environment
+    // (see `detect_reflow`'s doc comment): the policy is decided once,
+    // here, and never re-detected for the life of the session.
+    let policy = detect_reflow(|k| std::env::var(k).ok());
     Ok(Tui {
-        screen: Screen::new(std::io::stdout(), Size::new(w, h)),
+        screen: Screen::new(std::io::stdout(), Size::new(w, h), policy),
     })
 }
 

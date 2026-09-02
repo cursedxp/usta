@@ -31,10 +31,14 @@ pub(crate) struct Screen<W: Write> {
     /// Display widths of the lines as last printed, for the resize recount.
     last_widths: Vec<u16>,
     size: Size,
+    /// Whether the host terminal rewraps hard-terminated lines on narrow.
+    /// Decided once at construction (the terminal does not change mid
+    /// session) and fed verbatim into `descend_rows` / `rewrapped_rows`.
+    policy: ReflowPolicy,
 }
 
 impl<W: Write> Screen<W> {
-    pub(crate) fn new(out: W, size: Size) -> Self {
+    pub(crate) fn new(out: W, size: Size, policy: ReflowPolicy) -> Self {
         Self {
             out,
             painted: 0,
@@ -42,6 +46,7 @@ impl<W: Write> Screen<W> {
             cursor_col: 0,
             last_widths: Vec::new(),
             size,
+            policy,
         }
     }
 
@@ -144,28 +149,17 @@ impl<W: Write> Screen<W> {
     /// `cursor_up`, `cursor_col`) rather than assumed from where the block
     /// sits on screen.
     ///
-    /// This computation assumes the terminal RE-WRAPS hard-terminated lines
-    /// when the width narrows — still only BELIEVED true of common terminals
-    /// (iTerm2, Terminal.app, Ghostty, kitty, WezTerm); no manual resize test
-    /// against a real terminal has been run, so the belief remains unmeasured
-    /// outside the model. On a terminal that does NOT re-wrap, each
-    /// hard-terminated line still occupies exactly 1 physical row while
-    /// `rows(w) = ceil(w / new_width)` counts 2 or more, so both the descent
-    /// and the erase reach too far and the erase destroys transcript rows
-    /// ABOVE the block.
-    ///
-    /// That is not an arithmetic slip left to fix. Measured on the modelled
-    /// screen, the two policies demand OPPOSITE things of the SAME relative
-    /// row from bit-identical state: narrowing 80 -> 40 with the block at the
-    /// screen's bottom, the row two above the cursor is our own rewrapped
-    /// rule (must be cleared) when the terminal reflowed and is the user's
-    /// transcript (must be kept) when it did not. No byte sequence can be
-    /// both. Closing that gap needs an input this module does not have —
-    /// which policy the host terminal follows — i.e. the policy switch this
-    /// comment has flagged since v0.30.1, now measured rather than guessed.
-    /// `bottom_of_screen_leaves_no_residue_without_reflow` is parked on it.
-    /// The caller then reprints with [`Screen::paint`], which clears below
-    /// it (K4).
+    /// Both the descent and the erase are computed under `self.policy` (see
+    /// [`ReflowPolicy`]), decided once at construction from
+    /// [`detect_reflow`] and never re-detected — the terminal does not
+    /// change mid session. Under `Reflow` each hard-terminated line rewraps
+    /// to `ceil(width / new_width)` physical rows; under `NoReflow` each
+    /// stays exactly one physical row, so the descent is exactly
+    /// `cursor_up` and the erase never exceeds `painted` — narrowing
+    /// further than that would destroy transcript rows ABOVE the block.
+    /// From the same recorded state the two policies demand opposite
+    /// formulas; the policy is what tells them apart. The caller then
+    /// reprints with [`Screen::paint`], which clears below it (K4).
     pub(crate) fn resize(&mut self, size: Size) -> io::Result<()> {
         let descend = descend_rows(
             &self.last_widths,
@@ -173,11 +167,12 @@ impl<W: Write> Screen<W> {
             self.cursor_up,
             self.cursor_col,
             size.width,
+            self.policy,
         );
         if descend != 0 {
             queue!(self.out, MoveDown(descend))?;
         }
-        let rewrapped = rewrapped_rows(&self.last_widths, size.width, self.painted);
+        let rewrapped = rewrapped_rows(&self.last_widths, size.width, self.painted, self.policy);
         queue!(self.out, MoveToColumn(0))?;
         for i in 0..rewrapped {
             queue!(self.out, Clear(ClearType::CurrentLine))?;
@@ -201,20 +196,30 @@ impl<W: Write> Screen<W> {
 }
 
 /// Rows to descend from the visible cursor to reach the block's last line
-/// after the terminal rewraps to `new_width`: the rows still below the
-/// cursor within its own (possibly rewrapped) logical line, plus the
-/// rewrapped height of every logical line below that one. An empty line
-/// still occupies one row. `painted == 0` returns `0`. `new_width == 0`
-/// cannot divide, so every logical line is floored to exactly 1 row and the
-/// cursor's own visual row is treated as 0 — the same no-panic fallback
-/// `rewrapped_rows` uses.
+/// after a resize to `new_width`, under `policy` (see [`ReflowPolicy`]).
+///
+/// Under [`ReflowPolicy::NoReflow`] every hard-terminated line stays
+/// exactly one physical row, so the descent is unchanged by the resize:
+/// this returns `cursor_up` verbatim, regardless of `new_width`.
+///
+/// Under [`ReflowPolicy::Reflow`] the terminal rewraps to `new_width`: the
+/// result is the rows still below the cursor within its own (possibly
+/// rewrapped) logical line, plus the rewrapped height of every logical line
+/// below that one. An empty line still occupies one row. `painted == 0`
+/// returns `0`. `new_width == 0` cannot divide, so every logical line is
+/// floored to exactly 1 row and the cursor's own visual row is treated as
+/// 0 — the same no-panic fallback `rewrapped_rows` uses.
 pub(crate) fn descend_rows(
     last_widths: &[u16],
     painted: u16,
     cursor_up: u16,
     cursor_col: u16,
     new_width: u16,
+    policy: ReflowPolicy,
 ) -> u16 {
+    if let ReflowPolicy::NoReflow = policy {
+        return cursor_up;
+    }
     if painted == 0 {
         return 0;
     }
@@ -242,17 +247,34 @@ pub(crate) fn descend_rows(
     total.min(u32::from(u16::MAX)) as u16
 }
 
-/// Rows the block occupies after the terminal rewrapped it to `new_width`:
-/// `sum(ceil(w_i / new_width))`, floored at `painted`. An empty line still
-/// occupies one row. `new_width == 0` cannot divide, so the recount falls
-/// back to `painted`.
+/// Rows the block occupies after a resize to `new_width`, under `policy`
+/// (see [`ReflowPolicy`]).
 ///
-/// There is no ceiling. A `painted * 2` ceiling stood here until it was
-/// measured on a modelled screen: narrowing 200 -> 60 makes the block
-/// occupy 10 rows, the ceiling reported 8, and `resize`'s upward erase
-/// stopped exactly 2 rows short of the block's top -- the two stray rule
-/// rows the user photographed.
-pub(crate) fn rewrapped_rows(widths: &[u16], new_width: u16, painted: u16) -> u16 {
+/// Under [`ReflowPolicy::NoReflow`] every hard-terminated line stays
+/// exactly one physical row, so the block's row count is unchanged by the
+/// resize: this returns `painted` verbatim, regardless of `new_width`.
+/// Exceeding `painted` here would erase transcript rows ABOVE the block
+/// that the resize never touched.
+///
+/// Under [`ReflowPolicy::Reflow`] the terminal rewraps to `new_width`: the
+/// result is `sum(ceil(w_i / new_width))`, floored at `painted`. An empty
+/// line still occupies one row. `new_width == 0` cannot divide, so the
+/// recount falls back to `painted`.
+///
+/// There is no ceiling on the `Reflow` sum. A `painted * 2` ceiling stood
+/// here until it was measured on a modelled screen: narrowing 200 -> 60
+/// makes the block occupy 10 rows, the ceiling reported 8, and `resize`'s
+/// upward erase stopped exactly 2 rows short of the block's top -- the two
+/// stray rule rows the user photographed.
+pub(crate) fn rewrapped_rows(
+    widths: &[u16],
+    new_width: u16,
+    painted: u16,
+    policy: ReflowPolicy,
+) -> u16 {
+    if let ReflowPolicy::NoReflow = policy {
+        return painted;
+    }
     if new_width == 0 {
         return painted;
     }
@@ -271,11 +293,9 @@ pub(crate) fn rewrapped_rows(widths: &[u16], new_width: u16, painted: u16) -> u1
 /// policies demand opposite treatment, so the policy is an input, not an
 /// average. See `docs/superpowers/specs/2026-09-02-reflow-policy-design.md`.
 ///
-/// Not wired into `Screen` yet -- a later task threads this into `Screen`
-/// and `term::setup()`. `#[allow(dead_code)]` is narrow and temporary: it
-/// covers exactly this detection step, exercised by its own tests below.
+/// Decided once, at `Screen::new`, from [`detect_reflow`] -- the terminal
+/// does not change mid session, so there is no runtime re-detection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum ReflowPolicy {
     Reflow,
     NoReflow,
@@ -297,8 +317,8 @@ pub(crate) enum ReflowPolicy {
 ///    over-erasing destroys the user's text permanently. When in doubt,
 ///    the text is kept.)
 ///
-/// Not called from production code yet -- see the `ReflowPolicy` doc above.
-#[allow(dead_code)]
+/// Called once, from `term::setup()`, with `|k| std::env::var(k).ok()` --
+/// the only place production code reads the real process environment.
 pub(crate) fn detect_reflow(get: impl Fn(&str) -> Option<String>) -> ReflowPolicy {
     if let Some(v) = get("USTA_TERM_REFLOW") {
         match v.as_str() {
@@ -374,9 +394,12 @@ mod tests {
         }
     }
 
-    fn screen(width: u16, height: u16) -> (Screen<SharedBuf>, SharedBuf) {
+    fn screen(width: u16, height: u16, policy: ReflowPolicy) -> (Screen<SharedBuf>, SharedBuf) {
         let buf = SharedBuf::default();
-        (Screen::new(buf.clone(), Size::new(width, height)), buf)
+        (
+            Screen::new(buf.clone(), Size::new(width, height), policy),
+            buf,
+        )
     }
 
     fn count(hay: &str, needle: &str) -> usize {
@@ -451,7 +474,7 @@ mod tests {
 
     /// A full lifecycle, used by the guard tests.
     fn lifecycle() -> SharedBuf {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         let block = lines(&["────", "> hi", "────", "ready"]);
         s.paint(&block, 1, 4).unwrap();
         s.paint(&block, 1, 5).unwrap();
@@ -464,7 +487,7 @@ mod tests {
         s.paint(&lines(&["only"]), 0, 0).unwrap();
         s.clear_block().unwrap();
         // Resizing a screen that has never painted: the descend count is 0.
-        let mut fresh = Screen::new(buf.clone(), Size::new(20, 20));
+        let mut fresh = Screen::new(buf.clone(), Size::new(20, 20), ReflowPolicy::Reflow);
         fresh.resize(Size::new(40, 20)).unwrap();
         buf
     }
@@ -610,7 +633,7 @@ mod tests {
 
     #[test]
     fn first_paint_emits_no_line_erase() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["────", "> hi", "────", "ready"]), 1, 4)
             .unwrap();
         let t = buf.text();
@@ -624,7 +647,7 @@ mod tests {
 
     #[test]
     fn second_paint_erases_exactly_painted_lines() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["a", "b", "c", "d"]), 1, 2).unwrap();
         buf.clear();
         // The second block is SHORTER on purpose. Erasing by the previous
@@ -648,7 +671,7 @@ mod tests {
 
     #[test]
     fn second_paint_descends_to_the_blocks_last_line_before_erasing() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["a", "b", "c", "d"]), 1, 2).unwrap();
         assert_eq!(s.cursor_up, 2, "row 1 of 4 is 2 rows above the last");
         buf.clear();
@@ -664,7 +687,7 @@ mod tests {
 
     #[test]
     fn every_paint_clears_from_cursor_down_after_the_last_content() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         let block = lines(&["a", "b", "c"]);
         for _ in 0..2 {
             buf.clear();
@@ -681,14 +704,14 @@ mod tests {
 
     #[test]
     fn paint_writes_lines_separated_by_crlf_with_no_trailing_newline() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["one", "two", "three"]), 0, 0).unwrap();
         assert_eq!(strip_csi(&buf.text()), "one\r\ntwo\r\nthree");
     }
 
     #[test]
     fn cursor_up_is_the_distance_down_to_the_blocks_last_line() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["a", "b", "c", "d"]), 1, 3).unwrap();
         assert_eq!(s.painted, 4);
         assert_eq!(s.cursor_up, 2, "row 1 of 4 is 2 rows above the last");
@@ -701,7 +724,7 @@ mod tests {
 
     #[test]
     fn paint_clips_every_line_to_the_screen_width() {
-        let (mut s, buf) = screen(5, 20);
+        let (mut s, buf) = screen(5, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["hello world"]), 0, 0).unwrap();
         assert_eq!(strip_csi(&buf.text()), "hello");
         assert_eq!(s.last_widths, vec![5]);
@@ -709,14 +732,14 @@ mod tests {
 
     #[test]
     fn paint_flushes_once() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["a"]), 0, 0).unwrap();
         assert_eq!(buf.flushes.get(), 1);
     }
 
     #[test]
     fn painting_an_empty_block_zeroes_the_counters() {
-        let (mut s, _buf) = screen(40, 20);
+        let (mut s, _buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["a", "b"]), 0, 0).unwrap();
         s.paint(&[], 0, 0).unwrap();
         assert_eq!(s.painted, 0);
@@ -729,7 +752,7 @@ mod tests {
 
     #[test]
     fn page_erases_the_block_prints_content_with_crlf_and_zeroes_painted() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["a", "b"]), 0, 0).unwrap();
         buf.clear();
         s.page(&lines(&["hello", "world"])).unwrap();
@@ -774,7 +797,7 @@ mod tests {
     /// below the block on a tall screen.
     #[test]
     fn resize_descends_by_recorded_rows_not_by_painted_times_two() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         let block = lines(&["────", "> hi", "────", "ready", "extra"]);
         s.paint(&block, 4, 0).unwrap();
         assert_eq!(s.cursor_up, 0, "cursor is already on the block's last line");
@@ -800,7 +823,7 @@ mod tests {
 
     #[test]
     fn resize_descends_then_erases_the_rewrapped_rows_and_resets() {
-        let (mut s, buf) = screen(80, 20);
+        let (mut s, buf) = screen(80, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&[&"x".repeat(80), &"y".repeat(80)]), 0, 0)
             .unwrap();
         buf.clear();
@@ -825,7 +848,7 @@ mod tests {
 
     #[test]
     fn resize_uses_the_cursor_column_recorded_by_paint() {
-        let (mut s, buf) = screen(80, 20);
+        let (mut s, buf) = screen(80, 20, ReflowPolicy::Reflow);
         // Cursor on line 0 of 2, at column 60. At width 40 that line rewraps
         // into 2 rows and the cursor lands in the SECOND of them, so only the
         // 2-row rewrap of the line below remains: 2, not the 3 a forgotten
@@ -849,7 +872,7 @@ mod tests {
 
     #[test]
     fn clear_block_erases_the_block_and_clears_everything_below() {
-        let (mut s, buf) = screen(40, 20);
+        let (mut s, buf) = screen(40, 20, ReflowPolicy::Reflow);
         s.paint(&lines(&["a", "b", "c"]), 0, 0).unwrap();
         buf.clear();
         s.clear_block().unwrap();
@@ -867,14 +890,20 @@ mod tests {
     #[test]
     fn descend_rows_is_zero_when_the_cursor_is_already_on_the_last_line() {
         // Width unchanged (no line wraps), cursor on the block's last line.
-        assert_eq!(descend_rows(&[10, 10, 10], 3, 0, 5, 40), 0);
+        assert_eq!(
+            descend_rows(&[10, 10, 10], 3, 0, 5, 40, ReflowPolicy::Reflow),
+            0
+        );
     }
 
     #[test]
     fn descend_rows_matches_cursor_up_when_nothing_wraps() {
         // Width unchanged, cursor two rows above the last line: with no
         // rewrap in play, the descent is exactly `cursor_up`.
-        assert_eq!(descend_rows(&[10, 10, 10], 3, 2, 5, 40), 2);
+        assert_eq!(
+            descend_rows(&[10, 10, 10], 3, 2, 5, 40, ReflowPolicy::Reflow),
+            2
+        );
     }
 
     #[test]
@@ -882,14 +911,14 @@ mod tests {
         // A single-line block, width 15 wraps to 2 rows at new_width 10. The
         // cursor at column 3 is in the FIRST visual row, one row above the
         // wrapped line's bottom.
-        assert_eq!(descend_rows(&[15], 1, 0, 3, 10), 1);
+        assert_eq!(descend_rows(&[15], 1, 0, 3, 10, ReflowPolicy::Reflow), 1);
     }
 
     #[test]
     fn descend_rows_adds_nothing_when_the_cursors_own_line_wraps_and_it_sits_in_the_second_half() {
         // Same wrap as above, but the cursor at column 13 is already in the
         // SECOND (last) visual row -- already at the wrapped line's bottom.
-        assert_eq!(descend_rows(&[15], 1, 0, 13, 10), 0);
+        assert_eq!(descend_rows(&[15], 1, 0, 13, 10, ReflowPolicy::Reflow), 0);
     }
 
     #[test]
@@ -898,12 +927,15 @@ mod tests {
         // line (width 5) does not wrap at new_width 10. The two lines below
         // it (width 15 each) each wrap into 2 rows, adding 2 extra rows over
         // the no-wrap baseline of `cursor_up` (2): 2 + 2 = 4.
-        assert_eq!(descend_rows(&[5, 15, 15], 3, 2, 0, 10), 4);
+        assert_eq!(
+            descend_rows(&[5, 15, 15], 3, 2, 0, 10, ReflowPolicy::Reflow),
+            4
+        );
     }
 
     #[test]
     fn descend_rows_is_zero_when_nothing_has_been_painted() {
-        assert_eq!(descend_rows(&[], 0, 0, 0, 40), 0);
+        assert_eq!(descend_rows(&[], 0, 0, 0, 40, ReflowPolicy::Reflow), 0);
     }
 
     #[test]
@@ -911,28 +943,37 @@ mod tests {
         // new_width == 0: no row can be computed by division, so every
         // logical line counts as exactly 1 row (the same floor
         // `rewrapped_rows` falls back to). Must not panic.
-        assert_eq!(descend_rows(&[100, 200, 300], 3, 2, 999, 0), 2);
+        assert_eq!(
+            descend_rows(&[100, 200, 300], 3, 2, 999, 0, ReflowPolicy::Reflow),
+            2
+        );
     }
 
     // ---- rewrapped_rows (pure) -----------------------------------------
 
     #[test]
     fn rewrapped_rows_roughly_doubles_when_the_width_halves() {
-        assert_eq!(rewrapped_rows(&[80, 80, 80, 80], 40, 4), 8);
+        assert_eq!(
+            rewrapped_rows(&[80, 80, 80, 80], 40, 4, ReflowPolicy::Reflow),
+            8
+        );
     }
 
     #[test]
     fn rewrapped_rows_is_floored_at_painted_with_no_ceiling() {
         // Raw sum is 4 x 8 = 32. The old painted*2 ceiling reported 8 here,
         // and that shortfall IS the residue; the count must not be capped.
-        assert_eq!(rewrapped_rows(&[80, 80, 80, 80], 10, 4), 32);
+        assert_eq!(
+            rewrapped_rows(&[80, 80, 80, 80], 10, 4, ReflowPolicy::Reflow),
+            32
+        );
         // Raw sum is 2, below the painted floor of 6.
-        assert_eq!(rewrapped_rows(&[5, 5], 80, 6), 6);
+        assert_eq!(rewrapped_rows(&[5, 5], 80, 6, ReflowPolicy::Reflow), 6);
     }
 
     #[test]
     fn rewrapped_rows_never_divides_by_zero() {
-        assert_eq!(rewrapped_rows(&[10, 20], 0, 3), 3);
+        assert_eq!(rewrapped_rows(&[10, 20], 0, 3, ReflowPolicy::Reflow), 3);
     }
 
     #[test]
@@ -940,7 +981,41 @@ mod tests {
         // Two empty lines plus one 80-wide line that rewraps to two rows.
         // Counting the empty lines as zero would give 2, which the floor would
         // silently round up to 3 -- so 4 is what proves the rule.
-        assert_eq!(rewrapped_rows(&[0, 0, 80], 40, 3), 4);
+        assert_eq!(rewrapped_rows(&[0, 0, 80], 40, 3, ReflowPolicy::Reflow), 4);
+    }
+
+    // ---- policy binding (pure) -------------------------------------------
+
+    #[test]
+    fn descend_rows_under_no_reflow_returns_cursor_up_verbatim_even_when_width_halves() {
+        // Terminal does not rewrap: descend_rows must equal cursor_up exactly,
+        // ignoring new_width entirely -- narrowing must not add rows the
+        // terminal never created. Reflow would add 1 here (width 15 wraps to
+        // 2 rows at new_width 10); NoReflow must not.
+        assert_eq!(descend_rows(&[15], 1, 0, 3, 10, ReflowPolicy::NoReflow), 0);
+    }
+
+    #[test]
+    fn rewrapped_rows_under_no_reflow_returns_painted_verbatim_even_when_width_halves() {
+        // Terminal does not rewrap: the erase must never exceed `painted`
+        // rows, or it destroys transcript above the block. Reflow would
+        // return 32 here (see rewrapped_rows_is_floored_at_painted_with_no_ceiling).
+        assert_eq!(
+            rewrapped_rows(&[80, 80, 80, 80], 10, 4, ReflowPolicy::NoReflow),
+            4
+        );
+    }
+
+    #[test]
+    fn rewrapped_rows_under_reflow_has_no_ceiling_for_200_to_60() {
+        // The exact shape from the user report: narrowing 200 -> 60 makes a
+        // 4-line block (two 200-wide rules, one 7-wide line, one 5-wide
+        // line) occupy 10 rows. A painted*2 ceiling would report 8 and
+        // leave the erase two rows short.
+        assert_eq!(
+            rewrapped_rows(&[200, 7, 200, 5], 60, 4, ReflowPolicy::Reflow),
+            10
+        );
     }
 
     // ---- detect_reflow (pure) -------------------------------------------
@@ -1081,8 +1156,14 @@ mod tests {
     }
 
     impl Modelled {
+        /// `Screen`'s own policy is fixed at `Reflow` here -- matching the
+        /// only formula it computed before this task's policy wiring, so
+        /// these scenarios keep their pre-existing meaning. A later task
+        /// (see the `#[ignore]`d `bottom_of_screen_leaves_no_residue_without_reflow`
+        /// scenario below) generalizes these to take the model's
+        /// `ResizePolicy` and `Screen`'s `ReflowPolicy` as separate inputs.
         fn new(w: u16, h: u16) -> Self {
-            let (screen, buf) = screen(w, h);
+            let (screen, buf) = screen(w, h, ReflowPolicy::Reflow);
             Self {
                 screen,
                 buf,
