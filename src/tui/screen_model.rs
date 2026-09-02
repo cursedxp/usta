@@ -190,6 +190,11 @@ impl TermModel {
     /// in once a row is filled (see `text_clips_at_right_margin_instead_of_wrapping`).
     fn resize_no_reflow(&self, w: u16) -> (Vec<String>, (u16, u16)) {
         let rows = self.rows.iter().map(|row| clip_or_pad(row, w)).collect();
+        // Convention: `.min(w)` (not `w - 1`) mirrors `put_char`'s fill
+        // convention where `w` means "one past the last cell". This is a
+        // deliberate divergence from `move_to_column`, which clamps to
+        // `w - 1` (the rightmost valid cell) — the two conventions already
+        // coexisted before this module was added.
         let cursor = (self.cursor.0.min(w), self.cursor.1);
         (rows, cursor)
     }
@@ -214,7 +219,11 @@ impl TermModel {
         let mut cursor = (0u16, 0u16);
         for (i, row) in self.rows.iter().enumerate() {
             let content: Vec<char> = row.trim_end_matches(' ').chars().collect();
-            let chunk_count = if content.is_empty() {
+            let chunk_count = if content.is_empty() || width == 0 {
+                // `width == 0` cannot divide, so every logical line is
+                // floored to exactly 1 row -- the same no-panic fallback
+                // `rewrapped_rows` / `descend_rows` use for `new_width == 0`
+                // in `screen.rs`.
                 1
             } else {
                 content.len().div_ceil(width)
@@ -237,7 +246,11 @@ impl TermModel {
                 // mirroring the NoReflow clamp-into-new-width rule.
                 let offset = self.cursor.0 as usize;
                 let last_chunk_index = chunk_count - 1;
-                let chunk_index = (offset / width).min(last_chunk_index);
+                // `width == 0` cannot divide either -- `checked_div` /
+                // `unwrap_or(0)` is the same no-panic fallback
+                // `descend_rows` uses in `screen.rs`; `col`'s `.min(width)`
+                // below already collapses to 0 in that case.
+                let chunk_index = offset.checked_div(width).unwrap_or(0).min(last_chunk_index);
                 let col = (offset - chunk_index * width).min(width);
                 cursor = (col as u16, base + chunk_index as u16);
             }
@@ -260,7 +273,10 @@ impl TermModel {
         h: u16,
         w: u16,
     ) -> (Vec<String>, (u16, u16)) {
-        let h = h as usize;
+        // Floor at 1: the model always keeps at least one row, even when
+        // resized to height 0, so a later `apply()` indexing
+        // `self.rows[cursor.1 as usize]` can never go out of bounds.
+        let h = (h as usize).max(1);
         let (col, row) = cursor;
         if rows.len() > h {
             let excess = (rows.len() - h) as u16;
@@ -630,6 +646,67 @@ mod tests {
         assert_eq!(
             m.cursor.1, 0,
             "cursor's row was entirely dropped, so it pins to the new top row"
+        );
+    }
+
+    #[test]
+    fn reflow_zero_width_resize_does_not_panic() {
+        let mut m = TermModel::new(10, 2);
+        m.apply(b"hi\r\nyo");
+        m.resize(0, 2, ResizePolicy::Reflow);
+        assert_eq!(
+            m.snapshot().len(),
+            2,
+            "zero-width reflow floors every logical line to 1 row instead of panicking"
+        );
+    }
+
+    #[test]
+    fn resize_zero_height_then_apply_does_not_panic() {
+        let mut m = TermModel::new(10, 3);
+        m.apply(b"abc");
+        m.resize(10, 0, ResizePolicy::NoReflow);
+        // If height 0 had left an empty `rows` vec, this would panic
+        // indexing `self.rows[cursor.1 as usize]`.
+        m.apply(b"x");
+        assert_eq!(
+            m.snapshot().len(),
+            1,
+            "row count floors at 1 even when resized to height 0"
+        );
+    }
+
+    #[test]
+    fn reflow_cursor_far_past_short_row_content_clamps_to_that_rows_last_chunk() {
+        // The clamp shape the reviewer flagged as unpinned: the cursor sits
+        // WELL PAST a short row's written content (in trailing blank
+        // padding), then a narrowing Reflow happens, and the cursor's chunk
+        // index is clamped to that row's LAST chunk -- not into an unrelated
+        // row below it. Neither existing reflow-cursor test hits this shape:
+        // `..._at_end_of_full_row_...` uses a row filled edge-to-edge (a
+        // fill boundary, not padding), and `..._mid_content_...` uses an
+        // offset inside real content, which never triggers the clamp.
+        let mut m = TermModel::new(80, 2);
+        m.apply(b"hi\r\nbye"); // row 0 = "hi" (short), row 1 = "bye" (unrelated content)
+        m.apply(b"\x1b[1A"); // back up to row 0; column unchanged (still 3, from "bye")
+        m.apply(b"\x1b[51G"); // column 51 (1-based) -> cursor index 50, deep in row 0's blank padding
+        m.resize(40, 2, ResizePolicy::Reflow);
+
+        // By hand:
+        // - Row 0's content is "hi" (len 2). At width 40 that's
+        //   chunk_count = ceil(2 / 40) = 1, so last_chunk_index = 0 and row 0
+        //   occupies exactly one reflowed row (base = 0).
+        // - The cursor offset is 50, past width 40:
+        //   chunk_index = (50 / 40).min(0) = 0
+        //   col          = (50 - 0 * 40).min(40) = 40
+        // - Cursor row = base + chunk_index = 0 + 0 = 0.
+        // So the cursor must land at (40, 0) -- row 0's own last (only)
+        // chunk -- and NOT on row 1, which holds "bye", an unrelated
+        // logical line one row down.
+        assert_eq!(
+            m.cursor,
+            (40, 0),
+            "cursor far past short row 0's content clamps to row 0's own last chunk, not row 1's unrelated content"
         );
     }
 }
