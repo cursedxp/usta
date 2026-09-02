@@ -311,6 +311,25 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "unrecognized escape sequence")]
+    fn unrecognized_vpa_escape_panics() {
+        // ESC[5d is VPA -- what crossterm's MoveToRow emits. Absolute row
+        // addressing must reach the panic arm, not a silent skip.
+        let mut m = TermModel::new(10, 5);
+        m.apply(b"\x1b[5d");
+    }
+
+    #[test]
+    fn move_to_column_clamps_out_of_range_column_to_rightmost() {
+        let mut m = TermModel::new(10, 1);
+        m.apply(b"\x1b[100G");
+        assert_eq!(
+            m.cursor.0, 9,
+            "ESC[100G on width-10 grid clamps to rightmost column 9"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unrecognized escape sequence")]
     fn clear_current_line_with_wrong_param_panics() {
         let mut m = TermModel::new(5, 2);
         m.apply(b"\x1b[1K");
