@@ -156,6 +156,14 @@ impl TermModel {
     /// the right margin (`w`), further characters in the same write are
     /// simply dropped and the cursor stays pinned at `w` — it does not wrap
     /// to the next row.
+    ///
+    /// That contract only holds while `clip_to_width`'s width agrees with
+    /// the real terminal's — i.e. while `Screen.size` is not stale. This
+    /// model has no way to represent the width disagreeing, so it is
+    /// STRUCTURALLY INCAPABLE of showing the failure mode where we emit a
+    /// line wider than the terminal actually is: a real terminal would
+    /// auto-wrap that line and mark the row wrapped; this one silently
+    /// drops the overflow instead.
     fn put_char(&mut self, c: char) {
         let (col, row) = (self.cursor.0, self.cursor.1);
         if col >= self.w {
@@ -213,6 +221,17 @@ impl TermModel {
     /// actually written, which is what the trailing-blank strip recovers.
     /// An all-blank row still strips down to a single blank logical line
     /// (never zero rows) — a blank row is still a row.
+    ///
+    /// Path-dependence (harsher than reality, currently dormant): every
+    /// resize re-derives logical lines from the CURRENT grid rows, and
+    /// there is no wrapped-line marker carried between them, so a
+    /// multi-step narrowing can over-split a line a real terminal would
+    /// not. E.g. 80 -> 70 -> 60 splits an 80-wide rule into 3 rows here,
+    /// where xterm.js reflows the original logical line directly and gets
+    /// 2. This never bites today because every scenario in this suite
+    /// either repaints between resizes or has already erased the block —
+    /// worth knowing so a future red from a multi-step narrowing scenario
+    /// is read as this, not as a new bug.
     fn resize_reflow(&self, w: u16) -> (Vec<String>, (u16, u16)) {
         let width = w as usize;
         let mut rows = Vec::new();

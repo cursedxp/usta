@@ -1208,6 +1208,13 @@ mod tests {
             self.drain();
         }
 
+        /// Fidelity boundary: this always moves the model and `Screen` to
+        /// the same `w`/`h` in the same step, so no scenario built on top of
+        /// it can express the terminal being at one width while `Screen`
+        /// still believes another -- the exact disagreement `detect_reflow`
+        /// mis-detection produces in the field. `resize`/`we_resize` above
+        /// stay separate calls so a scenario COULD drive them apart, but
+        /// none in this matrix does.
         fn resize(&mut self, w: u16, h: u16, policy: ResizePolicy) {
             self.terminal_resizes(w, h, policy);
             self.we_resize(w, h);
@@ -1261,7 +1268,7 @@ mod tests {
     /// Scenario 1: fresh session on a tall terminal, block mid-screen with
     /// blank rows below it. Narrow, widen, narrow again, painting after each.
     ///
-    /// Blank rows only above the block, so this shape can see residue but is
+    /// Only blank rows above the block, so this shape can see residue but is
     /// BLIND to over-erasure -- erasing into blank rows leaves no trace.
     /// Text loss is measured on `bottom_of_screen`'s shape instead.
     fn fresh_session_mid_screen(model_policy: ResizePolicy, screen_policy: ReflowPolicy) {
@@ -1445,6 +1452,16 @@ mod tests {
     // it does (spec P3): residue is ugly but recoverable -- it scrolls away
     // with the next output -- while destroyed transcript text never comes
     // back.
+    //
+    // CAVEAT: both magnitudes below (2 lost rows, 3 residue rows) are
+    // MODEL-DEPENDENT, not a claim about what a real terminal loses or
+    // leaves behind. Neither test widens -- `run_bottom_of_screen` and
+    // `run_hard_narrowing` are both pure narrows -- so this is not the
+    // model's no-re-merge-on-widen behavior. It comes from the grid
+    // HEIGHT and the rule that a narrowing drops rows off the TOP of the
+    // grid once the re-wrapped content no longer fits: a taller or
+    // shorter modelled screen changes how many rows get dropped, and with
+    // them these exact counts.
 
     /// DOCUMENTED ACCEPTED COST, not a bug: a non-reflowing terminal
     /// mis-detected as reflowing. `Screen` erases the rewrapped row count
@@ -1463,7 +1480,7 @@ mod tests {
     #[test]
     fn mismatch_screen_reflow_on_a_non_reflowing_terminal_destroys_transcript_rows() {
         let (m, survivors) = run_bottom_of_screen(ResizePolicy::NoReflow, ReflowPolicy::Reflow);
-        let lost = survivors.len() - m.transcript_rows().len();
+        let lost = survivors.len().saturating_sub(m.transcript_rows().len());
         assert_eq!(
             lost,
             2,
@@ -1476,7 +1493,7 @@ mod tests {
         // somewhere else on the grid.
         assert_eq!(
             m.transcript_rows(),
-            survivors[..survivors.len() - lost],
+            survivors[..survivors.len().saturating_sub(lost)],
             "the surviving transcript is not the untouched prefix\n{}",
             m.grid()
         );
@@ -1496,9 +1513,15 @@ mod tests {
     fn mismatch_screen_no_reflow_on_a_reflowing_terminal_leaves_residue_rows() {
         let m = run_hard_narrowing(ResizePolicy::Reflow, ReflowPolicy::NoReflow);
         let rows = m.rule_rows();
+        // Rows 14/15/16 are the residue -- stray rule rows left behind
+        // where the under-erase stopped short. Rows 17 and 19 are the
+        // repainted block's own top and bottom rule. Measured at 200x40
+        // narrowing 200 -> 60 (see `run_hard_narrowing`); pinned here so a
+        // regression that shifts the residue elsewhere, while keeping the
+        // total at 5, still fails.
         assert_eq!(
-            rows.len(),
-            5,
+            rows,
+            vec![14u16, 15, 16, 17, 19],
             "expected exactly 2 rule rows plus 3 residue rows from the mis-detection, got {} (rows {rows:?})\n{}",
             rows.len(),
             m.grid()
