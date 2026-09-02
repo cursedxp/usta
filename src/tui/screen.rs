@@ -145,20 +145,25 @@ impl<W: Write> Screen<W> {
     /// sits on screen.
     ///
     /// This computation assumes the terminal RE-WRAPS hard-terminated lines
-    /// when the width narrows — believed true of common terminals (iTerm2,
-    /// Terminal.app, Ghostty, kitty, WezTerm), though that belief is not
-    /// itself measured here; the amendment's manual resize test is what will
-    /// confirm it, and it has not been run yet. On a terminal that does NOT
-    /// re-wrap when narrowed, each hard-terminated line still occupies
-    /// exactly 1 physical row, while this computation's
-    /// `rows(w) = ceil(w / new_width)` counts 2 or more for any
-    /// line wider than the new width — so the computed descent is too LARGE:
-    /// the cursor overshoots past the block's last line into the space below
-    /// it. The upward erase that follows then starts too low and can stop
-    /// short of the block's top rows, leaving a remnant at the TOP. That risk
-    /// is narrow and conditional — unlike the unconditional bottom-of-screen
-    /// premise this replaces — and lives only here, a candidate for a future
-    /// policy switch once measured.
+    /// when the width narrows — still only BELIEVED true of common terminals
+    /// (iTerm2, Terminal.app, Ghostty, kitty, WezTerm); no manual resize test
+    /// against a real terminal has been run, so the belief remains unmeasured
+    /// outside the model. On a terminal that does NOT re-wrap, each
+    /// hard-terminated line still occupies exactly 1 physical row while
+    /// `rows(w) = ceil(w / new_width)` counts 2 or more, so both the descent
+    /// and the erase reach too far and the erase destroys transcript rows
+    /// ABOVE the block.
+    ///
+    /// That is not an arithmetic slip left to fix. Measured on the modelled
+    /// screen, the two policies demand OPPOSITE things of the SAME relative
+    /// row from bit-identical state: narrowing 80 -> 40 with the block at the
+    /// screen's bottom, the row two above the cursor is our own rewrapped
+    /// rule (must be cleared) when the terminal reflowed and is the user's
+    /// transcript (must be kept) when it did not. No byte sequence can be
+    /// both. Closing that gap needs an input this module does not have —
+    /// which policy the host terminal follows — i.e. the policy switch this
+    /// comment has flagged since v0.30.1, now measured rather than guessed.
+    /// `bottom_of_screen_leaves_no_residue_without_reflow` is parked on it.
     /// The caller then reprints with [`Screen::paint`], which clears below
     /// it (K4).
     pub(crate) fn resize(&mut self, size: Size) -> io::Result<()> {
@@ -238,9 +243,15 @@ pub(crate) fn descend_rows(
 }
 
 /// Rows the block occupies after the terminal rewrapped it to `new_width`:
-/// `sum(ceil(w_i / new_width))`, clamped into `painted..=painted * 2`. An empty
-/// line still occupies one row. `new_width == 0` cannot divide, so the recount
-/// falls back to `painted`.
+/// `sum(ceil(w_i / new_width))`, floored at `painted`. An empty line still
+/// occupies one row. `new_width == 0` cannot divide, so the recount falls
+/// back to `painted`.
+///
+/// There is no ceiling. A `painted * 2` ceiling stood here until it was
+/// measured on a modelled screen: narrowing 200 -> 60 makes the block
+/// occupy 10 rows, the ceiling reported 8, and `resize`'s upward erase
+/// stopped exactly 2 rows short of the block's top -- the two stray rule
+/// rows the user photographed.
 pub(crate) fn rewrapped_rows(widths: &[u16], new_width: u16, painted: u16) -> u16 {
     if new_width == 0 {
         return painted;
@@ -249,8 +260,7 @@ pub(crate) fn rewrapped_rows(widths: &[u16], new_width: u16, painted: u16) -> u1
         .iter()
         .map(|&w| u32::from(w.max(1)).div_ceil(u32::from(new_width)))
         .sum();
-    let floor = u32::from(painted);
-    sum.clamp(floor, floor * 2).min(u32::from(u16::MAX)) as u16
+    sum.max(u32::from(painted)).min(u32::from(u16::MAX)) as u16
 }
 
 #[cfg(test)]
@@ -838,9 +848,10 @@ mod tests {
     }
 
     #[test]
-    fn rewrapped_rows_is_clamped_into_the_painted_range() {
-        // Raw sum is 4 x 8 = 32, far above the painted*2 ceiling of 8.
-        assert_eq!(rewrapped_rows(&[80, 80, 80, 80], 10, 4), 8);
+    fn rewrapped_rows_is_floored_at_painted_with_no_ceiling() {
+        // Raw sum is 4 x 8 = 32. The old painted*2 ceiling reported 8 here,
+        // and that shortfall IS the residue; the count must not be capped.
+        assert_eq!(rewrapped_rows(&[80, 80, 80, 80], 10, 4), 32);
         // Raw sum is 2, below the painted floor of 6.
         assert_eq!(rewrapped_rows(&[5, 5], 80, 6), 6);
     }
@@ -1031,8 +1042,40 @@ mod tests {
         );
     }
 
+    /// Scenario 5: the shape the user reported -- narrow PAST the old
+    /// `painted * 2` ceiling so residue would be created, then widen back
+    /// out. Pins that a widen neither creates residue of its own nor carries
+    /// the narrowing's damage forward.
+    ///
+    /// Caveat on the widen leg: `ResizePolicy::Reflow` never re-merges rows
+    /// its own earlier narrowing split (pinned by
+    /// `reflow_previously_split_row_does_not_remerge_on_widen`), where real
+    /// xterm.js would recombine them. So the widen here is modelled MORE
+    /// row-hungry than a real terminal's, which makes this the harsher case,
+    /// not a softer one.
+    fn narrow_past_the_clamp_then_widen(policy: ResizePolicy) {
+        let mut m = Modelled::new(200, 40);
+        m.feed(&"\r\n".repeat(20));
+        m.paint();
+        m.resize(50, 40, policy);
+        m.paint();
+        m.assert_no_residue("narrow 200 -> 50", policy);
+        m.resize(120, 40, policy);
+        m.paint();
+        m.assert_no_residue("narrow 200 -> 50 then widen to 120", policy);
+    }
+
     #[test]
-    #[ignore = "reproduces the v0.30.1 residue; un-ignored by the fix task"]
+    fn narrow_past_the_clamp_then_widen_leaves_no_residue_when_reflowing() {
+        narrow_past_the_clamp_then_widen(ResizePolicy::Reflow);
+    }
+
+    #[test]
+    fn narrow_past_the_clamp_then_widen_leaves_no_residue_without_reflow() {
+        narrow_past_the_clamp_then_widen(ResizePolicy::NoReflow);
+    }
+
+    #[test]
     fn fresh_session_mid_screen_leaves_no_residue_when_reflowing() {
         fresh_session_mid_screen(ResizePolicy::Reflow);
     }
@@ -1053,7 +1096,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reproduces the v0.30.1 residue; un-ignored by the fix task"]
     fn hard_narrowing_leaves_no_residue_when_reflowing() {
         hard_narrowing(ResizePolicy::Reflow);
     }
@@ -1069,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reproduces the v0.30.1 residue; un-ignored by the fix task"]
+    #[ignore = "unreachable without a terminal-reflow-policy input: from bit-identical state the two policies demand opposite treatment of the row two above the cursor (see .superpowers/sdd/smh-task-4-report.md)"]
     fn bottom_of_screen_leaves_no_residue_without_reflow() {
         bottom_of_screen(ResizePolicy::NoReflow);
     }
