@@ -166,6 +166,137 @@ impl TermModel {
         self.rows[row as usize] = chars.into_iter().collect();
         self.cursor.0 += 1;
     }
+
+    /// Resize the grid to `w`x`h`, re-deriving both the row contents and the
+    /// cursor position under `policy`. See `ResizePolicy` for what each
+    /// policy models.
+    pub(crate) fn resize(&mut self, w: u16, h: u16, policy: ResizePolicy) {
+        let (rows, cursor) = match policy {
+            ResizePolicy::NoReflow => self.resize_no_reflow(w),
+            ResizePolicy::Reflow => self.resize_reflow(w),
+        };
+        let (rows, cursor) = Self::adjust_height(rows, cursor, h, w);
+        self.rows = rows;
+        self.cursor = cursor;
+        self.w = w;
+        self.h = h;
+    }
+
+    /// `NoReflow`: every grid row stays exactly one physical row. Content
+    /// past the new width is clipped (or the row is padded, if widening).
+    /// The cursor's row is untouched here; its column clamps into the new
+    /// width — `w` itself is a valid column, meaning "one past the last
+    /// cell", matching the convention `put_char` already leaves the cursor
+    /// in once a row is filled (see `text_clips_at_right_margin_instead_of_wrapping`).
+    fn resize_no_reflow(&self, w: u16) -> (Vec<String>, (u16, u16)) {
+        let rows = self.rows.iter().map(|row| clip_or_pad(row, w)).collect();
+        let cursor = (self.cursor.0.min(w), self.cursor.1);
+        (rows, cursor)
+    }
+
+    /// `Reflow`: each grid row is its own logical line, re-wrapped to the
+    /// new width independently of every other row — hard-terminated lines
+    /// never merge, on narrowing OR widening, so a row previously split by a
+    /// narrowing does not re-merge when widened back out.
+    ///
+    /// Re-wrapping is computed on the row's CONTENT length with trailing
+    /// blanks stripped, not on its padded grid width. Every row in `self.rows`
+    /// is always padded to exactly `self.w` chars (see `TermModel::new` and
+    /// `put_char`'s row-write), so reflowing on the padded length would make
+    /// every row exactly `self.w` wide and split on ANY narrowing, real
+    /// content or not. A real terminal only knows how far a line was
+    /// actually written, which is what the trailing-blank strip recovers.
+    /// An all-blank row still strips down to a single blank logical line
+    /// (never zero rows) — a blank row is still a row.
+    fn resize_reflow(&self, w: u16) -> (Vec<String>, (u16, u16)) {
+        let width = w as usize;
+        let mut rows = Vec::new();
+        let mut cursor = (0u16, 0u16);
+        for (i, row) in self.rows.iter().enumerate() {
+            let content: Vec<char> = row.trim_end_matches(' ').chars().collect();
+            let chunk_count = if content.is_empty() {
+                1
+            } else {
+                content.len().div_ceil(width)
+            };
+            let base = rows.len() as u16;
+            for chunk_index in 0..chunk_count {
+                let start = chunk_index * width;
+                let end = (start + width).min(content.len());
+                let mut chunk = content[start..end].to_vec();
+                chunk.resize(width, ' ');
+                rows.push(chunk.into_iter().collect());
+            }
+            if i as u16 == self.cursor.1 {
+                // The cursor travels with the content it sits on: locate
+                // which chunk its column offset now falls in. An offset at
+                // or beyond the end of content (cursor sitting in blank
+                // padding never captured by the content-based split above,
+                // e.g. moved there without writing) has no chunk of its own
+                // — it is pinned to the last chunk's rightmost column,
+                // mirroring the NoReflow clamp-into-new-width rule.
+                let offset = self.cursor.0 as usize;
+                let last_chunk_index = chunk_count - 1;
+                let chunk_index = (offset / width).min(last_chunk_index);
+                let col = (offset - chunk_index * width).min(width);
+                cursor = (col as u16, base + chunk_index as u16);
+            }
+        }
+        (rows, cursor)
+    }
+
+    /// Shared height handling for both policies, applied after the width
+    /// pass. Mirrors the model's existing no-scrollback contract
+    /// (`line_feed` on the last row): if reflowing/re-clipping produced more
+    /// rows than the new height, the TOPMOST rows are dropped, same as a
+    /// scroll — there is no scrollback to hold them. If it produced fewer,
+    /// blank rows are padded onto the BOTTOM. The cursor's row shifts by
+    /// however many rows were dropped off the top (saturating at 0, so a
+    /// cursor whose row got dropped entirely pins to the new top row —
+    /// there is nothing left of its original content to pin to).
+    fn adjust_height(
+        mut rows: Vec<String>,
+        cursor: (u16, u16),
+        h: u16,
+        w: u16,
+    ) -> (Vec<String>, (u16, u16)) {
+        let h = h as usize;
+        let (col, row) = cursor;
+        if rows.len() > h {
+            let excess = (rows.len() - h) as u16;
+            rows.drain(0..excess as usize);
+            (rows, (col, row.saturating_sub(excess)))
+        } else {
+            while rows.len() < h {
+                rows.push(" ".repeat(w as usize));
+            }
+            (rows, (col, row))
+        }
+    }
+}
+
+/// Clips `row` to `new_w` if it is narrower than the row's current content,
+/// or pads it with trailing spaces if wider. `Vec::resize` does both:
+/// truncating on a shorter length, padding on a longer one.
+fn clip_or_pad(row: &str, new_w: u16) -> String {
+    let mut chars: Vec<char> = row.chars().collect();
+    chars.resize(new_w as usize, ' ');
+    chars.into_iter().collect()
+}
+
+/// How `TermModel::resize` re-derives row contents and the cursor position
+/// when the grid dimensions change. Which real terminals implement which
+/// policy has never been measured (iTerm2/Ghostty/kitty/WezTerm are believed
+/// to reflow; some terminals and some tmux configs are believed not to) — so
+/// neither is treated as "the real one". A fix that must hold under both
+/// stops needing that unmeasured answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResizePolicy {
+    /// Re-wrap logical lines to the new width; see `TermModel::resize_reflow`.
+    Reflow,
+    /// Keep one grid row per physical row, clipping or padding; see
+    /// `TermModel::resize_no_reflow`.
+    NoReflow,
 }
 
 /// Parses a CSI numeric parameter, defaulting to 1 when omitted (ANSI
@@ -340,5 +471,165 @@ mod tests {
     fn clear_screen_variant_other_than_from_cursor_down_panics() {
         let mut m = TermModel::new(5, 2);
         m.apply(b"\x1b[2J");
+    }
+
+    // --- resize: Reflow vs NoReflow ---
+
+    #[test]
+    fn reflow_narrow_splits_full_row_into_two_rows() {
+        let mut m = TermModel::new(80, 1);
+        m.apply("a".repeat(80).as_bytes());
+        m.resize(40, 2, ResizePolicy::Reflow);
+        let snap = m.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[0], "a".repeat(40));
+        assert_eq!(snap[1], "a".repeat(40));
+    }
+
+    #[test]
+    fn no_reflow_narrow_keeps_one_row_and_clips() {
+        let mut m = TermModel::new(80, 1);
+        m.apply("a".repeat(80).as_bytes());
+        m.resize(40, 1, ResizePolicy::NoReflow);
+        let snap = m.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0], "a".repeat(40));
+    }
+
+    #[test]
+    fn reflow_widening_does_not_merge_hard_terminated_lines() {
+        let mut m = TermModel::new(4, 2);
+        m.apply(b"ab\r\ncd");
+        m.resize(8, 2, ResizePolicy::Reflow);
+        let snap = m.snapshot();
+        assert_eq!(
+            snap.len(),
+            2,
+            "two hard-terminated lines must stay two rows"
+        );
+        assert_eq!(snap[0], format!("ab{}", " ".repeat(6)));
+        assert_eq!(snap[1], format!("cd{}", " ".repeat(6)));
+    }
+
+    #[test]
+    fn reflow_previously_split_row_does_not_remerge_on_widen() {
+        let mut m = TermModel::new(80, 1);
+        m.apply("a".repeat(80).as_bytes());
+        m.resize(40, 2, ResizePolicy::Reflow); // splits into two 40-wide rows
+        m.resize(80, 2, ResizePolicy::Reflow); // widen back out
+        let snap = m.snapshot();
+        assert_eq!(
+            snap.len(),
+            2,
+            "a row split by narrowing must not re-merge into one row on widening"
+        );
+        assert_eq!(snap[0], format!("{}{}", "a".repeat(40), " ".repeat(40)));
+        assert_eq!(snap[1], format!("{}{}", "a".repeat(40), " ".repeat(40)));
+    }
+
+    #[test]
+    fn reflow_mostly_blank_row_does_not_split_when_width_halves() {
+        // Naive-bug guard: if reflow were computed on the PADDED row length
+        // (always == the old width) rather than what was actually written,
+        // this 2-char row would wrongly look 80 "wide" and split into two
+        // rows when narrowed from 80 to 40.
+        let mut m = TermModel::new(80, 1);
+        m.apply(b"hi");
+        m.resize(40, 1, ResizePolicy::Reflow);
+        let snap = m.snapshot();
+        assert_eq!(
+            snap.len(),
+            1,
+            "a mostly-blank row must not split when width halves"
+        );
+        assert_eq!(snap[0], format!("hi{}", " ".repeat(38)));
+    }
+
+    #[test]
+    fn reflow_cursor_at_end_of_full_row_travels_to_second_chunk() {
+        let mut m = TermModel::new(80, 1);
+        m.apply("a".repeat(80).as_bytes()); // cursor now (80, 0)
+        m.resize(40, 2, ResizePolicy::Reflow);
+        assert_eq!(
+            m.cursor,
+            (40, 1),
+            "cursor right after the last char of a full 80-char row lands \
+             one-past the last column of the second 40-wide chunk"
+        );
+    }
+
+    #[test]
+    fn reflow_cursor_mid_content_travels_into_correct_chunk_and_column() {
+        let mut m = TermModel::new(80, 1);
+        m.apply("b".repeat(60).as_bytes());
+        m.apply(b"\x1b[46G"); // move cursor to column 46 (1-based) -> index 45
+        m.resize(40, 2, ResizePolicy::Reflow);
+        assert_eq!(m.cursor, (5, 1));
+    }
+
+    #[test]
+    fn no_reflow_cursor_row_unchanged_column_clamps_into_new_width() {
+        let mut m = TermModel::new(80, 2);
+        m.apply(b"ab\r\n");
+        m.apply("c".repeat(80).as_bytes()); // fills row 1 fully, cursor (80, 1)
+        m.resize(40, 2, ResizePolicy::NoReflow);
+        assert_eq!(
+            m.cursor,
+            (40, 1),
+            "NoReflow: cursor row does not change, column clamps into new width"
+        );
+        let snap = m.snapshot();
+        assert_eq!(snap[1], "c".repeat(40));
+    }
+
+    #[test]
+    fn no_reflow_widen_pads_row_with_spaces() {
+        let mut m = TermModel::new(4, 1);
+        m.apply(b"ab");
+        m.resize(8, 1, ResizePolicy::NoReflow);
+        assert_eq!(m.snapshot()[0], "ab      ");
+    }
+
+    #[test]
+    fn resize_height_growth_pads_blank_rows_at_bottom() {
+        let mut m = TermModel::new(5, 2);
+        m.apply(b"ab\r\ncd");
+        m.resize(5, 4, ResizePolicy::NoReflow);
+        let snap = m.snapshot();
+        assert_eq!(snap.len(), 4);
+        assert_eq!(snap[0], "ab   ");
+        assert_eq!(snap[1], "cd   ");
+        assert_eq!(snap[2], "     ");
+        assert_eq!(snap[3], "     ");
+        assert_eq!(
+            m.cursor,
+            (2, 1),
+            "growth pads the bottom, cursor is untouched"
+        );
+    }
+
+    #[test]
+    fn resize_height_shrink_drops_topmost_rows_and_shifts_cursor() {
+        let mut m = TermModel::new(5, 4);
+        m.apply(b"aa\r\nbb\r\ncc\r\ndd");
+        m.resize(5, 2, ResizePolicy::NoReflow);
+        let snap = m.snapshot();
+        assert_eq!(snap, vec!["cc   ".to_string(), "dd   ".to_string()]);
+        assert_eq!(
+            m.cursor,
+            (2, 1),
+            "two rows dropped from the top, cursor row shifts down by the same amount"
+        );
+    }
+
+    #[test]
+    fn resize_height_shrink_pins_cursor_to_top_when_its_row_is_dropped() {
+        let mut m = TermModel::new(5, 4);
+        m.apply(b"aa\r\nbb"); // cursor lands on row 1; rows 2 and 3 are blank
+        m.resize(5, 1, ResizePolicy::NoReflow); // excess 3 drops rows 0..3
+        assert_eq!(
+            m.cursor.1, 0,
+            "cursor's row was entirely dropped, so it pins to the new top row"
+        );
     }
 }
