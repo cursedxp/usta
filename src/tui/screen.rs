@@ -259,6 +259,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::tui::screen_model::{ResizePolicy, TermModel};
 
     /// A writer whose bytes stay inspectable after `Screen` has taken it by
     /// value. Pattern inherited from the removed `backend_wrap.rs` tests;
@@ -855,5 +856,221 @@ mod tests {
         // Counting the empty lines as zero would give 2, which the floor would
         // silently round up to 3 -- so 4 is what proves the rule.
         assert_eq!(rewrapped_rows(&[0, 0, 80], 40, 3), 4);
+    }
+
+    // ---- the modelled screen: what a byte assertion cannot see ------------
+
+    /// A realistic block: two FULL-WIDTH rules around one content line, plus
+    /// a status line. The full-width rules are the part that re-wraps into
+    /// extra rows when the terminal narrows, so they are what residue is
+    /// counted on.
+    fn block(width: u16) -> Vec<String> {
+        let rule = "─".repeat(usize::from(width));
+        vec![
+            rule.clone(),
+            "> hello".to_string(),
+            rule,
+            "ready".to_string(),
+        ]
+    }
+
+    const BLOCK_CURSOR_LINE: u16 = 1;
+    const BLOCK_CURSOR_COL: u16 = 7;
+
+    /// A `Screen` paired with the grid its bytes are actually applied to.
+    struct Modelled {
+        screen: Screen<SharedBuf>,
+        buf: SharedBuf,
+        model: TermModel,
+    }
+
+    impl Modelled {
+        fn new(w: u16, h: u16) -> Self {
+            let (screen, buf) = screen(w, h);
+            Self {
+                screen,
+                buf,
+                model: TermModel::new(w, h),
+            }
+        }
+
+        /// Everything emitted since the last drain, applied in ONE `apply`
+        /// so no escape sequence is ever split across two calls.
+        fn drain(&mut self) {
+            let bytes = self.buf.text().into_bytes();
+            self.buf.clear();
+            self.model.apply(&bytes);
+        }
+
+        /// Ordinary output straight into the grid -- how a real session
+        /// drives the cursor down the screen and fills the transcript.
+        fn feed(&mut self, text: &str) {
+            self.model.apply(text.as_bytes());
+        }
+
+        /// Paint the block at the screen's CURRENT width: callers wrap their
+        /// content to `screen.size().width`, so after a width change the
+        /// rules must be regenerated at the new width.
+        fn paint(&mut self) {
+            let lines = block(self.screen.size().width);
+            self.screen
+                .paint(&lines, BLOCK_CURSOR_LINE, BLOCK_CURSOR_COL)
+                .unwrap();
+            self.drain();
+        }
+
+        /// Step one of a resize: the terminal reflows on its own, before our
+        /// code hears anything about it.
+        fn terminal_resizes(&mut self, w: u16, h: u16, policy: ResizePolicy) {
+            self.model.resize(w, h, policy);
+        }
+
+        /// Step two: the event reaches us and we emit our erase.
+        fn we_resize(&mut self, w: u16, h: u16) {
+            self.screen.resize(Size::new(w, h)).unwrap();
+            self.drain();
+        }
+
+        fn resize(&mut self, w: u16, h: u16, policy: ResizePolicy) {
+            self.terminal_resizes(w, h, policy);
+            self.we_resize(w, h);
+        }
+
+        /// The transcript lines still on the grid, in order.
+        fn transcript_rows(&self) -> Vec<String> {
+            self.model
+                .snapshot()
+                .into_iter()
+                .map(|row| row.trim_end().to_string())
+                .filter(|row| row.starts_with("transcript "))
+                .collect()
+        }
+
+        fn grid(&self) -> String {
+            self.model
+                .snapshot()
+                .iter()
+                .enumerate()
+                .map(|(i, row)| format!("{i:>3} |{}|", row.trim_end()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        /// The acceptance criterion: exactly two rows carry the rule
+        /// character -- the block's top and bottom rule. More is residue.
+        fn assert_no_residue(&self, scenario: &str, policy: ResizePolicy) {
+            let rows = self.model.rows_containing('─');
+            assert_eq!(
+                rows.len(),
+                2,
+                "{scenario} under {policy:?}: {} rule rows, expected 2 (rows {rows:?})\n{}",
+                rows.len(),
+                self.grid()
+            );
+        }
+    }
+
+    /// Scenario 1: fresh session on a tall terminal, block mid-screen with
+    /// blank rows below it. Narrow, widen, narrow again, painting after each.
+    fn fresh_session_mid_screen(policy: ResizePolicy) {
+        let mut m = Modelled::new(80, 40);
+        m.feed(&"\r\n".repeat(15));
+        m.paint();
+        for w in [40u16, 100, 30] {
+            m.resize(w, 40, policy);
+            m.paint();
+        }
+        m.assert_no_residue("fresh session 80 -> 40 -> 100 -> 30", policy);
+    }
+
+    /// Scenario 2: dragging a window edge -- 20 consecutive resizes, each to
+    /// a different width, with a single `paint` at the end.
+    fn dragging(policy: ResizePolicy) {
+        let mut m = Modelled::new(80, 40);
+        m.feed(&"\r\n".repeat(15));
+        m.paint();
+        for w in (60u16..80).rev() {
+            m.resize(w, 40, policy);
+        }
+        m.paint();
+        m.assert_no_residue("drag 80 -> 60 in 20 steps", policy);
+    }
+
+    /// Scenario 3: hard narrowing, 200 -> 60. More than a threefold shrink,
+    /// which is past what `rewrapped_rows`' `painted..=painted * 2` clamp can
+    /// count.
+    fn hard_narrowing(policy: ResizePolicy) {
+        let mut m = Modelled::new(200, 40);
+        m.feed(&"\r\n".repeat(20));
+        m.paint();
+        m.resize(60, 40, policy);
+        m.paint();
+        m.assert_no_residue("hard narrowing 200 -> 60", policy);
+    }
+
+    /// Scenario 4: block on the screen's last rows with a full transcript
+    /// above it. Residue-free AND no text loss: rows the terminal itself
+    /// dropped off the top are its own scroll, but everything it KEPT must
+    /// survive our erase.
+    fn bottom_of_screen(policy: ResizePolicy) {
+        let mut m = Modelled::new(80, 20);
+        for i in 0..16 {
+            m.feed(&format!("transcript line {i:02}\r\n"));
+        }
+        m.paint();
+        m.terminal_resizes(40, 20, policy);
+        let survivors = m.transcript_rows();
+        m.we_resize(40, 20);
+        m.paint();
+        m.assert_no_residue("bottom of screen 80 -> 40", policy);
+        assert_eq!(
+            m.transcript_rows(),
+            survivors,
+            "bottom of screen under {policy:?}: transcript text lost\nkept by the terminal: {survivors:?}\n{}",
+            m.grid()
+        );
+    }
+
+    #[test]
+    #[ignore = "reproduces the v0.30.1 residue; un-ignored by the fix task"]
+    fn fresh_session_mid_screen_leaves_no_residue_when_reflowing() {
+        fresh_session_mid_screen(ResizePolicy::Reflow);
+    }
+
+    #[test]
+    fn fresh_session_mid_screen_leaves_no_residue_without_reflow() {
+        fresh_session_mid_screen(ResizePolicy::NoReflow);
+    }
+
+    #[test]
+    fn dragging_leaves_no_residue_when_reflowing() {
+        dragging(ResizePolicy::Reflow);
+    }
+
+    #[test]
+    fn dragging_leaves_no_residue_without_reflow() {
+        dragging(ResizePolicy::NoReflow);
+    }
+
+    #[test]
+    #[ignore = "reproduces the v0.30.1 residue; un-ignored by the fix task"]
+    fn hard_narrowing_leaves_no_residue_when_reflowing() {
+        hard_narrowing(ResizePolicy::Reflow);
+    }
+
+    #[test]
+    fn hard_narrowing_leaves_no_residue_without_reflow() {
+        hard_narrowing(ResizePolicy::NoReflow);
+    }
+
+    #[test]
+    fn bottom_of_screen_leaves_no_residue_when_reflowing() {
+        bottom_of_screen(ResizePolicy::Reflow);
+    }
+
+    #[test]
+    #[ignore = "reproduces the v0.30.1 residue; un-ignored by the fix task"]
+    fn bottom_of_screen_leaves_no_residue_without_reflow() {
+        bottom_of_screen(ResizePolicy::NoReflow);
     }
 }
