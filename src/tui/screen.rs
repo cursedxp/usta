@@ -1156,14 +1156,14 @@ mod tests {
     }
 
     impl Modelled {
-        /// `Screen`'s own policy is fixed at `Reflow` here -- matching the
-        /// only formula it computed before this task's policy wiring, so
-        /// these scenarios keep their pre-existing meaning. A later task
-        /// (see the `#[ignore]`d `bottom_of_screen_leaves_no_residue_without_reflow`
-        /// scenario below) generalizes these to take the model's
-        /// `ResizePolicy` and `Screen`'s `ReflowPolicy` as separate inputs.
-        fn new(w: u16, h: u16) -> Self {
-            let (screen, buf) = screen(w, h, ReflowPolicy::Reflow);
+        /// The modelled terminal's behaviour (`ResizePolicy`) and what
+        /// `Screen` BELIEVES that behaviour to be (`ReflowPolicy`) are two
+        /// separate inputs, because they can genuinely disagree in the
+        /// field: `detect_reflow` reads the environment, and an environment
+        /// can lie. The matching pairs are the matrix; the crossed pairs are
+        /// the mis-detection cost, measured below.
+        fn new(w: u16, h: u16, screen_policy: ReflowPolicy) -> Self {
+            let (screen, buf) = screen(w, h, screen_policy);
             Self {
                 screen,
                 buf,
@@ -1233,14 +1233,25 @@ mod tests {
                 .join("\n")
         }
 
+        /// Rows carrying the rule character. Exactly two -- the block's top
+        /// and bottom rule -- is clean; anything above that is residue.
+        fn rule_rows(&self) -> Vec<u16> {
+            self.model.rows_containing('─')
+        }
+
         /// The acceptance criterion: exactly two rows carry the rule
         /// character -- the block's top and bottom rule. More is residue.
-        fn assert_no_residue(&self, scenario: &str, policy: ResizePolicy) {
-            let rows = self.model.rows_containing('─');
+        fn assert_no_residue(
+            &self,
+            scenario: &str,
+            model_policy: ResizePolicy,
+            screen_policy: ReflowPolicy,
+        ) {
+            let rows = self.rule_rows();
             assert_eq!(
                 rows.len(),
                 2,
-                "{scenario} under {policy:?}: {} rule rows, expected 2 (rows {rows:?})\n{}",
+                "{scenario} under model {model_policy:?} / screen {screen_policy:?}: {} rule rows, expected 2 (rows {rows:?})\n{}",
                 rows.len(),
                 self.grid()
             );
@@ -1249,63 +1260,95 @@ mod tests {
 
     /// Scenario 1: fresh session on a tall terminal, block mid-screen with
     /// blank rows below it. Narrow, widen, narrow again, painting after each.
-    fn fresh_session_mid_screen(policy: ResizePolicy) {
-        let mut m = Modelled::new(80, 40);
+    ///
+    /// Blank rows only above the block, so this shape can see residue but is
+    /// BLIND to over-erasure -- erasing into blank rows leaves no trace.
+    /// Text loss is measured on `bottom_of_screen`'s shape instead.
+    fn fresh_session_mid_screen(model_policy: ResizePolicy, screen_policy: ReflowPolicy) {
+        let mut m = Modelled::new(80, 40, screen_policy);
         m.feed(&"\r\n".repeat(15));
         m.paint();
         for w in [40u16, 100, 30] {
-            m.resize(w, 40, policy);
+            m.resize(w, 40, model_policy);
             m.paint();
         }
-        m.assert_no_residue("fresh session 80 -> 40 -> 100 -> 30", policy);
+        m.assert_no_residue(
+            "fresh session 80 -> 40 -> 100 -> 30",
+            model_policy,
+            screen_policy,
+        );
     }
 
     /// Scenario 2: dragging a window edge -- 20 consecutive resizes, each to
     /// a different width, with a single `paint` at the end.
-    fn dragging(policy: ResizePolicy) {
-        let mut m = Modelled::new(80, 40);
+    fn dragging(model_policy: ResizePolicy, screen_policy: ReflowPolicy) {
+        let mut m = Modelled::new(80, 40, screen_policy);
         m.feed(&"\r\n".repeat(15));
         m.paint();
         for w in (60u16..80).rev() {
-            m.resize(w, 40, policy);
+            m.resize(w, 40, model_policy);
         }
         m.paint();
-        m.assert_no_residue("drag 80 -> 60 in 20 steps", policy);
+        m.assert_no_residue("drag 80 -> 60 in 20 steps", model_policy, screen_policy);
     }
 
     /// Scenario 3: hard narrowing, 200 -> 60. More than a threefold shrink,
-    /// which is past what `rewrapped_rows`' `painted..=painted * 2` clamp can
-    /// count.
-    fn hard_narrowing(policy: ResizePolicy) {
-        let mut m = Modelled::new(200, 40);
+    /// which is past what `rewrapped_rows`' since-deleted
+    /// `painted..=painted * 2` clamp could count.
+    ///
+    /// Like scenario 1 this feeds only blank rows above the block, so it
+    /// measures residue and nothing else.
+    fn hard_narrowing(model_policy: ResizePolicy, screen_policy: ReflowPolicy) {
+        let m = run_hard_narrowing(model_policy, screen_policy);
+        m.assert_no_residue("hard narrowing 200 -> 60", model_policy, screen_policy);
+    }
+
+    /// Scenario 3's shape, driven but not judged -- so the mismatch test can
+    /// COUNT the residue the same run leaves instead of asserting it away.
+    fn run_hard_narrowing(model_policy: ResizePolicy, screen_policy: ReflowPolicy) -> Modelled {
+        let mut m = Modelled::new(200, 40, screen_policy);
         m.feed(&"\r\n".repeat(20));
         m.paint();
-        m.resize(60, 40, policy);
+        m.resize(60, 40, model_policy);
         m.paint();
-        m.assert_no_residue("hard narrowing 200 -> 60", policy);
+        m
     }
 
     /// Scenario 4: block on the screen's last rows with a full transcript
     /// above it. Residue-free AND no text loss: rows the terminal itself
     /// dropped off the top are its own scroll, but everything it KEPT must
     /// survive our erase.
-    fn bottom_of_screen(policy: ResizePolicy) {
-        let mut m = Modelled::new(80, 20);
+    ///
+    /// This is the ONLY scenario with real text above the block, so it is
+    /// the only one that can see over-erasure at all.
+    fn bottom_of_screen(model_policy: ResizePolicy, screen_policy: ReflowPolicy) {
+        let (m, survivors) = run_bottom_of_screen(model_policy, screen_policy);
+        m.assert_no_residue("bottom of screen 80 -> 40", model_policy, screen_policy);
+        assert_eq!(
+            m.transcript_rows(),
+            survivors,
+            "bottom of screen under model {model_policy:?} / screen {screen_policy:?}: transcript text lost\nkept by the terminal: {survivors:?}\n{}",
+            m.grid()
+        );
+    }
+
+    /// Scenario 4's shape, driven but not judged. Returns the finished
+    /// screen plus the transcript rows the TERMINAL still held after its own
+    /// resize but before our erase -- the baseline any loss is counted from.
+    fn run_bottom_of_screen(
+        model_policy: ResizePolicy,
+        screen_policy: ReflowPolicy,
+    ) -> (Modelled, Vec<String>) {
+        let mut m = Modelled::new(80, 20, screen_policy);
         for i in 0..16 {
             m.feed(&format!("transcript line {i:02}\r\n"));
         }
         m.paint();
-        m.terminal_resizes(40, 20, policy);
+        m.terminal_resizes(40, 20, model_policy);
         let survivors = m.transcript_rows();
         m.we_resize(40, 20);
         m.paint();
-        m.assert_no_residue("bottom of screen 80 -> 40", policy);
-        assert_eq!(
-            m.transcript_rows(),
-            survivors,
-            "bottom of screen under {policy:?}: transcript text lost\nkept by the terminal: {survivors:?}\n{}",
-            m.grid()
-        );
+        (m, survivors)
     }
 
     /// Scenario 5: the shape the user reported -- narrow PAST the old
@@ -1319,66 +1362,146 @@ mod tests {
     /// xterm.js would recombine them. So the widen here is modelled MORE
     /// row-hungry than a real terminal's, which makes this the harsher case,
     /// not a softer one.
-    fn narrow_past_the_clamp_then_widen(policy: ResizePolicy) {
-        let mut m = Modelled::new(200, 40);
+    fn narrow_past_the_clamp_then_widen(model_policy: ResizePolicy, screen_policy: ReflowPolicy) {
+        let mut m = Modelled::new(200, 40, screen_policy);
         m.feed(&"\r\n".repeat(20));
         m.paint();
-        m.resize(50, 40, policy);
+        m.resize(50, 40, model_policy);
         m.paint();
-        m.assert_no_residue("narrow 200 -> 50", policy);
-        m.resize(120, 40, policy);
+        m.assert_no_residue("narrow 200 -> 50", model_policy, screen_policy);
+        m.resize(120, 40, model_policy);
         m.paint();
-        m.assert_no_residue("narrow 200 -> 50 then widen to 120", policy);
+        m.assert_no_residue(
+            "narrow 200 -> 50 then widen to 120",
+            model_policy,
+            screen_policy,
+        );
     }
+
+    // ---- the matrix: five scenarios x matching policy ---------------------
+    //
+    // "Matching" means the modelled terminal really behaves the way `Screen`
+    // believes it does. This is the case the detection aims for, and every
+    // one of the ten must be green: nothing here is allowed to be parked.
 
     #[test]
     fn narrow_past_the_clamp_then_widen_leaves_no_residue_when_reflowing() {
-        narrow_past_the_clamp_then_widen(ResizePolicy::Reflow);
+        narrow_past_the_clamp_then_widen(ResizePolicy::Reflow, ReflowPolicy::Reflow);
     }
 
     #[test]
     fn narrow_past_the_clamp_then_widen_leaves_no_residue_without_reflow() {
-        narrow_past_the_clamp_then_widen(ResizePolicy::NoReflow);
+        narrow_past_the_clamp_then_widen(ResizePolicy::NoReflow, ReflowPolicy::NoReflow);
     }
 
     #[test]
     fn fresh_session_mid_screen_leaves_no_residue_when_reflowing() {
-        fresh_session_mid_screen(ResizePolicy::Reflow);
+        fresh_session_mid_screen(ResizePolicy::Reflow, ReflowPolicy::Reflow);
     }
 
     #[test]
     fn fresh_session_mid_screen_leaves_no_residue_without_reflow() {
-        fresh_session_mid_screen(ResizePolicy::NoReflow);
+        fresh_session_mid_screen(ResizePolicy::NoReflow, ReflowPolicy::NoReflow);
     }
 
     #[test]
     fn dragging_leaves_no_residue_when_reflowing() {
-        dragging(ResizePolicy::Reflow);
+        dragging(ResizePolicy::Reflow, ReflowPolicy::Reflow);
     }
 
     #[test]
     fn dragging_leaves_no_residue_without_reflow() {
-        dragging(ResizePolicy::NoReflow);
+        dragging(ResizePolicy::NoReflow, ReflowPolicy::NoReflow);
     }
 
     #[test]
     fn hard_narrowing_leaves_no_residue_when_reflowing() {
-        hard_narrowing(ResizePolicy::Reflow);
+        hard_narrowing(ResizePolicy::Reflow, ReflowPolicy::Reflow);
     }
 
     #[test]
     fn hard_narrowing_leaves_no_residue_without_reflow() {
-        hard_narrowing(ResizePolicy::NoReflow);
+        hard_narrowing(ResizePolicy::NoReflow, ReflowPolicy::NoReflow);
     }
 
     #[test]
     fn bottom_of_screen_leaves_no_residue_when_reflowing() {
-        bottom_of_screen(ResizePolicy::Reflow);
+        bottom_of_screen(ResizePolicy::Reflow, ReflowPolicy::Reflow);
     }
 
     #[test]
-    #[ignore = "unreachable without a terminal-reflow-policy input: from bit-identical state the two policies demand opposite treatment of the row two above the cursor (see .superpowers/sdd/smh-task-4-report.md)"]
     fn bottom_of_screen_leaves_no_residue_without_reflow() {
-        bottom_of_screen(ResizePolicy::NoReflow);
+        bottom_of_screen(ResizePolicy::NoReflow, ReflowPolicy::NoReflow);
+    }
+
+    // ---- mismatch: the measured price of a wrong detection ----------------
+    //
+    // `detect_reflow` reads the environment, and the environment can be
+    // wrong about the terminal behind it. The two tests below pin what that
+    // costs. Neither is a bug report: both are the DOCUMENTED ACCEPTED COST
+    // of a mis-detection, written down so the price cannot grow silently.
+    //
+    // The two prices are not equal, which is why the default leans the way
+    // it does (spec P3): residue is ugly but recoverable -- it scrolls away
+    // with the next output -- while destroyed transcript text never comes
+    // back.
+
+    /// DOCUMENTED ACCEPTED COST, not a bug: a non-reflowing terminal
+    /// mis-detected as reflowing. `Screen` erases the rewrapped row count
+    /// while the terminal kept every logical line on one row, so the extra
+    /// erase runs off the top of the block and into the user's transcript.
+    ///
+    /// Measured on `bottom_of_screen`'s shape deliberately -- it is the only
+    /// scenario carrying real text above the block. On the blank-row shapes
+    /// (`fresh_session_mid_screen`, `hard_narrowing`) this same over-erasure
+    /// is INVISIBLE, which is exactly how an earlier attempt shipped this
+    /// damage undetected.
+    ///
+    /// This is the direction the default is chosen to AVOID: an unknown
+    /// terminal is assumed `NoReflow`, so `Screen` never over-erases on a
+    /// guess.
+    #[test]
+    fn mismatch_screen_reflow_on_a_non_reflowing_terminal_destroys_transcript_rows() {
+        let (m, survivors) = run_bottom_of_screen(ResizePolicy::NoReflow, ReflowPolicy::Reflow);
+        let lost = survivors.len() - m.transcript_rows().len();
+        assert_eq!(
+            lost,
+            2,
+            "expected exactly 2 transcript rows destroyed by the mis-detection\nkept by the terminal: {survivors:?}\nstill on the grid: {:?}\n{}",
+            m.transcript_rows(),
+            m.grid()
+        );
+        // And they are the LAST two, eaten from the bottom up as the erase
+        // ran off the block's top -- not a coincidental count from damage
+        // somewhere else on the grid.
+        assert_eq!(
+            m.transcript_rows(),
+            survivors[..survivors.len() - lost],
+            "the surviving transcript is not the untouched prefix\n{}",
+            m.grid()
+        );
+    }
+
+    /// DOCUMENTED ACCEPTED COST, not a bug: a reflowing terminal
+    /// mis-detected as non-reflowing. `Screen` erases only `painted` rows
+    /// while the terminal rewrapped the block into more, so the rows above
+    /// the erase survive as residue -- stray rule rows on screen.
+    ///
+    /// This is the mismatch the default's direction makes LIKELY in the
+    /// field: an unknown terminal is assumed `NoReflow`, so a reflowing
+    /// terminal we do not recognise lands exactly here. That is the chosen
+    /// trade -- residue scrolls away with the next output; destroyed text
+    /// does not come back.
+    #[test]
+    fn mismatch_screen_no_reflow_on_a_reflowing_terminal_leaves_residue_rows() {
+        let m = run_hard_narrowing(ResizePolicy::Reflow, ReflowPolicy::NoReflow);
+        let rows = m.rule_rows();
+        assert_eq!(
+            rows.len(),
+            5,
+            "expected exactly 2 rule rows plus 3 residue rows from the mis-detection, got {} (rows {rows:?})\n{}",
+            rows.len(),
+            m.grid()
+        );
     }
 }
