@@ -95,8 +95,9 @@ Spec'teki beş senaryo × iki politika. Kabul ölçütü: kural karakteri (`─`
 
 `cargo install --path .` sonrası — artık keşif değil, ölçütün doğrulaması:
 
-1. `usta reset --factory` sonrası uzun terminalde taze oturum → blok ortada, altında boşluk. Yatay daralt/genişlet → kural çizgisi tam olarak 2 tane.
-2. Kenardan hızlıca sürükle → sürükleme bitince tek temiz blok, birikme yok.
-3. Terminali üçten fazla kat daralt → aynı.
-4. Dolu transcript'li uzun oturumda aynı testler → kalıntı yok **ve** yukarıdaki metin duruyor.
-5. Mentor yanıtı beklerken (spinner) resize → aynı.
+1. **VS Code entegre terminali — ilk ve asıl test** (bozulduğu yer — xterm.js, iTerm2 değil). `usta reset --factory` sonrası uzun panelde taze oturum → blok ortada, altında boşluk. Yatay daralt/genişlet → kural çizgisi tam olarak 2 tane.
+2. `usta reset --factory` sonrası uzun terminalde taze oturum → blok ortada, altında boşluk. Yatay daralt/genişlet → kural çizgisi tam olarak 2 tane.
+3. Kenardan hızlıca sürükle → sürükleme bitince tek temiz blok, birikme yok.
+4. Terminali üçten fazla kat daralt → aynı.
+5. Dolu transcript'li uzun oturumda aynı testler → kalıntı yok **ve** yukarıdaki metin duruyor.
+6. Mentor yanıtı beklerken (spinner) resize → aynı.
