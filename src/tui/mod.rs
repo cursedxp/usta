@@ -11,6 +11,8 @@ pub mod paint;
 pub mod polite;
 pub mod run;
 pub(crate) mod screen;
+#[cfg(test)]
+pub(crate) mod screen_model;
 pub mod status;
 pub mod term;
 pub mod theme;

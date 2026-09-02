@@ -421,6 +421,7 @@ mod tests {
             ("polite.rs", include_str!("polite.rs")),
             ("run.rs", include_str!("run.rs")),
             ("screen.rs", include_str!("screen.rs")),
+            ("screen_model.rs", include_str!("screen_model.rs")),
             ("status.rs", include_str!("status.rs")),
             ("term.rs", include_str!("term.rs")),
             ("theme.rs", include_str!("theme.rs")),
