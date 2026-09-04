@@ -2,17 +2,15 @@
 //! history. The TUI-path counterpart of Rustyline. Spec §6.
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::Frame;
 use tui_input::backend::crossterm::to_input_request;
 use tui_input::Input;
 
-use crate::tui::convert;
 use crate::tui::theme;
-
-/// Cap on the input frame's content-line count (see `InputBox::frame_lines`),
-/// also bounded by half the screen height, whichever is smaller.
-pub(crate) const INPUT_MAX_ROWS: usize = 10;
 
 /// Result of key handling — the loop behaves accordingly.
 #[derive(Debug)]
@@ -148,46 +146,42 @@ impl InputBox {
         }
     }
 
-    /// Borderless input frame: a full-width `─` rule (styled `theme::DIM`),
-    /// the wrapped content (1..=`INPUT_MAX_ROWS` lines, further capped to at
-    /// most half of `screen_h`), and a matching rule below — `N + 2` lines
-    /// total, index 0 being the top rule. Long text wraps at `width - 2`
-    /// (only the `> ` / `  ` prefix is subtracted, no side borders); once the
-    /// cap is hit, the vertical window follows the cursor. Returns the frame's ANSI-styled lines, the
-    /// cursor's line index into that vec (always in `1..=N`), and
-    /// the cursor's column (prefix-adjusted, clamped to `width - 1`).
-    /// Degenerate `width`/`screen_h` (0, 1, 2) never panic.
-    pub(crate) fn frame_lines(&self, width: u16, screen_h: u16) -> (Vec<String>, u16, u16) {
-        let inner_w = width.saturating_sub(2) as usize;
+    /// Draw the box: rounded border + `> ` prefix + cursor. Long text WRAPS TO
+    /// THE NEXT LINE at the box's inner width (no horizontal scrolling); if it
+    /// exceeds the inner line count, the vertical window follows the cursor.
+    pub fn render(&self, f: &mut Frame, area: Rect) {
+        let inner_w = area.width.saturating_sub(4) as usize; // borders + "> " prefix
+        let visible = area.height.saturating_sub(2).max(1) as usize; // inner lines
         let (rows, cur_row, cur_col) =
             wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
-        let half_screen = (screen_h as usize) / 2;
-        let cap = half_screen.clamp(1, INPUT_MAX_ROWS);
-        let n = rows.len().min(cap);
-        let start = (cur_row + 1).saturating_sub(n);
-
-        let rule = "─".repeat(width as usize);
-        let mut text_lines: Vec<Line> = Vec::with_capacity(n + 2);
-        text_lines.push(Line::from(Span::styled(
-            rule.clone(),
-            Style::default().fg(theme::DIM),
-        )));
-        for (i, r) in rows.iter().enumerate().skip(start).take(n) {
-            let prefix = if i == 0 { "> " } else { "  " };
-            text_lines.push(Line::from(vec![
-                Span::styled(prefix, theme::brand()),
-                Span::raw(r.clone()),
-            ]));
-        }
-        text_lines.push(Line::from(Span::styled(
-            rule,
-            Style::default().fg(theme::DIM),
-        )));
-
-        let lines = convert::text_to_ansi_lines(&Text::from(text_lines), width);
-        let cursor_line = 1 + (cur_row - start) as u16;
-        let cursor_col = (2 + cur_col as u16).min(width.saturating_sub(1));
-        (lines, cursor_line, cursor_col)
+        // Vertical window: last `visible` lines so the cursor stays visible.
+        let start = (cur_row + 1).saturating_sub(visible);
+        let lines: Vec<Line> = rows
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible)
+            .map(|(i, r)| {
+                let prefix = if i == 0 { "> " } else { "  " };
+                Line::from(vec![
+                    Span::styled(prefix, theme::brand()),
+                    Span::raw(r.clone()),
+                ])
+            })
+            .collect();
+        let para = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme::DIM)),
+        );
+        f.render_widget(para, area);
+        let x = area.x + 3 + cur_col as u16;
+        let y = area.y + 1 + (cur_row - start) as u16;
+        f.set_cursor_position((
+            x.min(area.x + area.width - 2),
+            y.min(area.y + area.height - 2),
+        ));
     }
 }
 
@@ -386,128 +380,5 @@ mod tests {
         let ae = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
         assert!(matches!(b.handle_key(ae), Action::None));
         assert_eq!(b.value(), "\n");
-    }
-
-    // ── Borderless frame (frame_lines) ─────────────────────────────────────
-
-    /// Strip ANSI escape sequences so assertions can check the DISPLAY
-    /// content of a `frame_lines` line without tripping over the styling
-    /// `text_to_ansi_lines` wraps around it.
-    fn strip_ansi(s: &str) -> String {
-        let bytes = s.as_bytes();
-        let mut out = String::new();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == 0x1b {
-                let mut j = i + 1;
-                if j < bytes.len() && bytes[j] == b'[' {
-                    j += 1;
-                    while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
-                        j += 1;
-                    }
-                    if j < bytes.len() {
-                        j += 1;
-                    }
-                }
-                i = j;
-                continue;
-            }
-            let ch = s[i..].chars().next().expect("i is a char boundary");
-            out.push(ch);
-            i += ch.len_utf8();
-        }
-        out
-    }
-
-    #[test]
-    fn frame_lines_empty_input_is_three_lines() {
-        let b = InputBox::new();
-        let (lines, cursor_line, _cursor_col) = b.frame_lines(20, 40);
-        assert_eq!(lines.len(), 3);
-        assert!((1..=1).contains(&cursor_line));
-    }
-
-    #[test]
-    fn frame_lines_first_and_last_line_are_full_width_rule() {
-        let b = InputBox::new();
-        let (lines, _, _) = b.frame_lines(20, 40);
-        let expected = "─".repeat(20);
-        assert_eq!(strip_ansi(&lines[0]), expected);
-        assert_eq!(strip_ansi(lines.last().unwrap()), expected);
-    }
-
-    #[test]
-    fn frame_lines_no_side_border_characters_anywhere() {
-        let mut b = InputBox::new();
-        type_str(&mut b, "hello world this is a longer line of text");
-        let (lines, _, _) = b.frame_lines(15, 40);
-        for line in &lines {
-            for ch in ['│', '╭', '╰', '╮', '╯'] {
-                assert!(
-                    !line.contains(ch),
-                    "unexpected border char {ch:?} in {line:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn frame_lines_wraps_at_width_minus_two() {
-        let mut b = InputBox::new();
-        // width 12 -> inner width 10.
-        type_str(&mut b, &"a".repeat(10));
-        let (lines, _, _) = b.frame_lines(12, 40);
-        assert_eq!(lines.len(), 3); // rule + 1 content + rule, fits exactly.
-
-        let mut b2 = InputBox::new();
-        type_str(&mut b2, &"a".repeat(11));
-        let (lines2, _, _) = b2.frame_lines(12, 40);
-        assert_eq!(lines2.len(), 4); // rule + 2 content + rule, one over.
-    }
-
-    #[test]
-    fn frame_lines_cap_pins_line_count_and_keeps_cursor_visible() {
-        let mut b = InputBox::new();
-        // 30 single-char rows via newlines, cursor ends up at the last row.
-        for _ in 0..30 {
-            type_str(&mut b, "x");
-            b.insert_str("\n");
-        }
-        let (lines, cursor_line, _) = b.frame_lines(20, 100); // large screen -> cap is INPUT_MAX_ROWS.
-        assert_eq!(lines.len(), INPUT_MAX_ROWS + 2);
-        // Cursor stays visible: it's the last content line of the window.
-        assert_eq!(cursor_line as usize, INPUT_MAX_ROWS);
-    }
-
-    #[test]
-    fn frame_lines_cursor_line_within_content_range() {
-        let mut b = InputBox::new();
-        type_str(&mut b, "abc\ndef\nghi");
-        let (lines, cursor_line, _) = b.frame_lines(20, 40);
-        let content_rows = lines.len() as u16 - 2;
-        assert!((1..=content_rows).contains(&cursor_line));
-    }
-
-    #[test]
-    fn frame_lines_short_screen_does_not_exceed_half_screen_height() {
-        let mut b = InputBox::new();
-        let v = "x\n".repeat(30); // far more than half of any small screen.
-        b.insert_str(&v);
-        let (lines, _, _) = b.frame_lines(20, 4); // screen_h 4 -> half = 2.
-        assert_eq!(lines.len(), 4); // 2 content lines + 2 rules.
-    }
-
-    #[test]
-    fn frame_lines_degenerate_width_and_screen_do_not_panic() {
-        let mut b = InputBox::new();
-        type_str(&mut b, "abc");
-        for width in [0u16, 1, 2] {
-            for screen_h in [0u16, 1] {
-                let (lines, cursor_line, cursor_col) = b.frame_lines(width, screen_h);
-                assert!(!lines.is_empty());
-                assert!(cursor_line >= 1);
-                let _ = cursor_col; // just must not panic / overflow.
-            }
-        }
     }
 }
