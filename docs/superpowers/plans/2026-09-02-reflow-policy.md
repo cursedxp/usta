@@ -79,7 +79,7 @@
 
 `cargo install --path .` sonrası:
 
-1. **VS Code entegre terminali — ilk ve asıl test** (bozulduğu yer). `usta reset --factory` sonrası uzun panelde taze oturum → blok ortada, altında boşluk. Daralt / genişlet / kenardan hızlıca sürükle → kural çizgisi tam 2 tane, birikme yok, üstteki metin duruyor.
+1. **VS Code entegre terminali — ilk ve asıl test** (bozulduğu yer). Paneli uzunlaştır, `usta` aç, çıktı birikmeden ölç → blok ortada, altında boşluk. (Factory reset GEREKMEZ — aranan koşul bloğun ekran dibinde olmaması; reset global beyni ve öğrenme kaydını siler, testin bedeli bu değil.) Daralt / genişlet / kenardan hızlıca sürükle → kural çizgisi tam 2 tane, birikme yok, üstteki metin duruyor.
 2. Terminali üçten fazla kat daralt → aynı.
 3. Dolu transcript'li uzun oturumda aynı testler.
 4. `USTA_TERM_REFLOW=0 usta` ile aynı testler → kalıntı görülebilir, ama **metin kaybı OLMAMALI**. Varsayılanın yönünün doğrulaması budur.
