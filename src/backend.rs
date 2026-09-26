@@ -1,8 +1,9 @@
 //! Pluggable LLM backend: local `claude` CLI (default) or the Anthropic API.
 //!
 //! - **CLI (default):** `claude -p ...` — uses Claude Code's existing auth,
-//!   no API key / token billing. `--allowedTools WebSearch` both enables research
-//!   and enforces "Usta doesn't edit files" at the tool level.
+//!   no API key / token billing. `--allowedTools WebSearch,WebFetch` enables
+//!   research and reading a linked page, and enforces "Usta doesn't edit files"
+//!   at the tool level.
 //! - **API (optional):** the existing `anthropic::Client` reqwest path.
 //!
 //! Selection: `USTA_BACKEND` env (`cli`/`api`) takes priority; otherwise CLI if
@@ -222,6 +223,11 @@ fn render_transcript(history: &[Message]) -> String {
     out.trim_end().to_string()
 }
 
+/// Tools the `claude -p` subprocess may use: research the web and read a
+/// linked page. Nothing that touches files — "Usta doesn't edit" is enforced
+/// here, at the tool level.
+const CLI_ALLOWED_TOOLS: &str = "WebSearch,WebFetch";
+
 /// Run the `claude -p` subprocess: input is written to stdin, JSON output is read back.
 /// If `resume` is given, the server-side session is continued via `--resume <id>`.
 async fn run_claude_cli(
@@ -239,7 +245,7 @@ async fn run_claude_cli(
         .arg("--model")
         .arg(model)
         .arg("--allowedTools")
-        .arg("WebSearch")
+        .arg(CLI_ALLOWED_TOOLS)
         // Usta is standalone: never load the user's Claude Code settings,
         // plugins, skills or hooks into its calls — they cost ~25k tokens per
         // turn and have nothing to do with mentoring (measured: ~51k → ~26k).
@@ -507,5 +513,18 @@ mod tests {
         assert!(g.contains("ANTHROPIC_API_KEY"));
         assert!(g.contains("sk-ant-"));
         assert!(g.contains("q to quit"));
+    }
+
+    #[test]
+    fn cli_allowed_tools_can_research_and_read_links_but_not_touch_files() {
+        let tools: Vec<&str> = CLI_ALLOWED_TOOLS.split(',').collect();
+        assert!(tools.contains(&"WebSearch"), "{tools:?}");
+        assert!(tools.contains(&"WebFetch"), "{tools:?}");
+        for forbidden in ["Bash", "Edit", "Write"] {
+            assert!(
+                !tools.contains(&forbidden),
+                "{forbidden} must stay off: {tools:?}"
+            );
+        }
     }
 }
