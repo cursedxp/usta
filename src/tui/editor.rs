@@ -5,7 +5,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use tui_input::backend::crossterm::to_input_request;
 use tui_input::Input;
@@ -146,11 +146,12 @@ impl InputBox {
         }
     }
 
-    /// Draw the box: rounded border + `> ` prefix + cursor. Long text WRAPS TO
-    /// THE NEXT LINE at the box's inner width (no horizontal scrolling); if it
-    /// exceeds the inner line count, the vertical window follows the cursor.
+    /// Draw the box: a rule above and below (no side borders) + `> ` prefix +
+    /// cursor. Long text WRAPS TO THE NEXT LINE at the full width minus the
+    /// prefix (no horizontal scrolling); if it exceeds the inner line count,
+    /// the vertical window follows the cursor.
     pub fn render(&self, f: &mut Frame, area: Rect) {
-        let inner_w = area.width.saturating_sub(4) as usize; // borders + "> " prefix
+        let inner_w = area.width.saturating_sub(2) as usize; // "> " prefix
         let visible = area.height.saturating_sub(2).max(1) as usize; // inner lines
         let (rows, cur_row, cur_col) =
             wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
@@ -171,15 +172,14 @@ impl InputBox {
             .collect();
         let para = Paragraph::new(lines).block(
             Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
+                .borders(Borders::TOP | Borders::BOTTOM)
                 .border_style(Style::default().fg(theme::DIM)),
         );
         f.render_widget(para, area);
-        let x = area.x + 3 + cur_col as u16;
+        let x = area.x + 2 + cur_col as u16;
         let y = area.y + 1 + (cur_row - start) as u16;
         f.set_cursor_position((
-            x.min(area.x + area.width - 2),
+            x.min(area.x + area.width - 1),
             y.min(area.y + area.height - 2),
         ));
     }
@@ -380,5 +380,64 @@ mod tests {
         let ae = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
         assert!(matches!(b.handle_key(ae), Action::None));
         assert_eq!(b.value(), "\n");
+    }
+
+    /// Render the box into a `TestBackend` and return (rows as strings, cursor x/y).
+    fn render_rows(b: &InputBox, w: u16, h: u16) -> (Vec<String>, (u16, u16)) {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| {
+            let a = f.area();
+            b.render(f, a);
+        })
+        .unwrap();
+        let buf = t.backend().buffer().clone();
+        let rows = (0..h)
+            .map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect())
+            .collect();
+        let pos = t.get_cursor_position().unwrap();
+        (rows, (pos.x, pos.y))
+    }
+
+    #[test]
+    fn render_draws_rules_above_and_below_without_side_borders() {
+        let b = InputBox::new();
+        let (rows, _) = render_rows(&b, 20, 5);
+        assert_eq!(rows[0], "─".repeat(20), "top rule");
+        assert_eq!(rows[4], "─".repeat(20), "bottom rule");
+        assert!(rows[1].starts_with("> "), "prompt row: {:?}", rows[1]);
+        for (i, r) in rows.iter().enumerate() {
+            for c in ['│', '╭', '╮', '╰', '╯'] {
+                assert!(!r.contains(c), "row {i} has {c:?}: {r:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn render_wraps_at_width_minus_prefix() {
+        let mut b = InputBox::new();
+        type_str(&mut b, &"a".repeat(18)); // 20 - "> " = 18 fits one row
+        let (rows, _) = render_rows(&b, 20, 5);
+        assert_eq!(rows[1], format!("> {}", "a".repeat(18)));
+        assert_eq!(rows[2].trim(), "", "nothing wrapped: {:?}", rows[2]);
+
+        let mut b = InputBox::new();
+        type_str(&mut b, &"a".repeat(19)); // one over → second row
+        let (rows, _) = render_rows(&b, 20, 5);
+        assert_eq!(rows[1], format!("> {}", "a".repeat(18)));
+        assert_eq!(rows[2], format!("  a{}", " ".repeat(17)));
+    }
+
+    #[test]
+    fn render_places_cursor_after_prompt_and_clamps_to_last_column() {
+        let b = InputBox::new();
+        let (_, cur) = render_rows(&b, 20, 5);
+        assert_eq!(cur, (2, 1), "empty input: cursor right after \"> \"");
+
+        let mut b = InputBox::new();
+        type_str(&mut b, &"a".repeat(18)); // cursor col 18 → x 20, clamped to 19
+        let (_, cur) = render_rows(&b, 20, 5);
+        assert_eq!(cur, (19, 1));
     }
 }
