@@ -2808,7 +2808,7 @@ dependencies = [
 
 [[package]]
 name = "usta"
-version = "0.31.1"
+version = "0.31.2"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
