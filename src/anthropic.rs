@@ -1,5 +1,5 @@
 //! Anthropic Messages API — request/response types + non-streaming client.
-//! Server-side `web_search` tool: the research runs on Anthropic's side, the
+//! Server-side `web_search` + `web_fetch` tools: the research / page read runs on Anthropic's side, the
 //! result comes back in the same response. `pause_turn` → re-send the message (server-tool loop).
 
 use anyhow::{bail, Context, Result};
@@ -74,10 +74,16 @@ impl MessageRequest {
             messages,
             thinking: Thinking { kind: "adaptive" },
             output_config: OutputConfig { effort: "high" },
-            tools: vec![Tool {
-                kind: "web_search_20260209",
-                name: "web_search",
-            }],
+            tools: vec![
+                Tool {
+                    kind: "web_search_20260209",
+                    name: "web_search",
+                },
+                Tool {
+                    kind: "web_fetch_20260209",
+                    name: "web_fetch",
+                },
+            ],
         }
     }
 }
@@ -99,12 +105,14 @@ pub fn extract_text(content: &[Value]) -> String {
         .join("")
 }
 
-/// Did the response include a web search? (for the UI hint)
+/// Did the response use the web (search or page fetch)? (for the UI hint)
 pub fn used_web_search(content: &[Value]) -> bool {
     content.iter().any(|b| {
         matches!(
             b.get("type").and_then(Value::as_str),
-            Some("web_search_tool_result") | Some("server_tool_use")
+            Some("web_search_tool_result")
+                | Some("web_fetch_tool_result")
+                | Some("server_tool_use")
         )
     })
 }
@@ -199,6 +207,8 @@ mod tests {
         assert_eq!(v["output_config"]["effort"], "high");
         assert_eq!(v["tools"][0]["type"], "web_search_20260209");
         assert_eq!(v["tools"][0]["name"], "web_search");
+        assert_eq!(v["tools"][1]["type"], "web_fetch_20260209");
+        assert_eq!(v["tools"][1]["name"], "web_fetch");
         assert_eq!(v["messages"][0]["role"], "user");
         assert_eq!(v["messages"][0]["content"], "merhaba");
     }
@@ -219,6 +229,7 @@ mod tests {
         assert!(used_web_search(&[
             json!({"type": "web_search_tool_result"})
         ]));
+        assert!(used_web_search(&[json!({"type": "web_fetch_tool_result"})]));
         assert!(!used_web_search(&[json!({"type": "text", "text": "x"})]));
     }
 
