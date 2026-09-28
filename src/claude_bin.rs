@@ -34,7 +34,7 @@ fn known_dirs() -> Vec<PathBuf> {
 }
 
 /// Locate `claude` from the real environment. If `USTA_CLAUDE` is set but
-/// isn't a file, warns once to stderr and falls through to PATH / known
+/// isn't a file, warns to stderr and falls through to PATH / known
 /// dirs exactly as if it weren't set.
 pub fn find_claude() -> Option<PathBuf> {
     let explicit = std::env::var_os("USTA_CLAUDE");
