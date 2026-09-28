@@ -132,7 +132,7 @@ mod tests {
         let empty = scratch("known-empty-path");
         let local_bin = scratch("known-local-bin");
         touch(&local_bin.join("claude"));
-        let got = find_claude_in(None, os(&empty), &[local_bin.clone()], UNIX);
+        let got = find_claude_in(None, os(&empty), std::slice::from_ref(&local_bin), UNIX);
         assert_eq!(got, Some(local_bin.join("claude")));
     }
 
@@ -152,7 +152,7 @@ mod tests {
         let npm = scratch("win-npm");
         touch(&npm.join("claude.cmd"));
         assert_eq!(
-            find_claude_in(None, None, &[npm.clone()], WIN),
+            find_claude_in(None, None, std::slice::from_ref(&npm), WIN),
             Some(npm.join("claude.cmd"))
         );
     }
@@ -167,7 +167,10 @@ mod tests {
     #[test]
     fn nothing_anywhere_is_none() {
         let d = scratch("nothing");
-        assert_eq!(find_claude_in(None, os(&d), &[d.clone()], WIN), None);
+        assert_eq!(
+            find_claude_in(None, os(&d), std::slice::from_ref(&d), WIN),
+            None
+        );
         assert_eq!(find_claude_in(None, None, &[], UNIX), None);
     }
 
