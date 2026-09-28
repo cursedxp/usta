@@ -1,0 +1,28 @@
+usta — Windows (64-bit) test sürümü
+==========================================
+
+Yeni: bir link verirsen ("şu sayfaya bak: https://...") sayfayı açıp okuyabilir.
+Eski sürümü sildikten sonra yeni usta.exe'yi aynı yere koyman yeterli.
+
+1) usta.exe'yi bir klasöre koy, ör. C:\Users\<sen>\usta\
+   Windows "tanınmayan uygulama" uyarısı verebilir (imzasız):
+   "Ek bilgi" -> "Yine de çalıştır".
+
+2) Terminal: "Windows Terminal" kullan (Windows 11'de hazır gelir).
+   Eski siyah cmd penceresinde ekran bozuk görünebilir.
+
+3) Yapay zekâ bağlantısı — İKİSİNDEN BİRİ gerekli:
+
+   A) Anthropic API anahtarı (en kolay):
+      Terminalde bir kez çalıştır, sonra terminali kapatıp aç:
+        setx ANTHROPIC_API_KEY "sk-ant-..."
+
+   B) Claude Code yüklüyse (Windows yükleyicisiyle kurulmuş olmalı):
+        setx USTA_BACKEND "cli"
+      Not: usta Windows'ta claude'u kendiliğinden bulamıyor, bu satır şart.
+
+4) Çalıştırma — terminalde usta.exe'nin olduğu klasöre gir:
+        cd C:\Users\<sen>\usta
+        .\usta.exe start
+
+Sorun olursa: ekranın fotoğrafını çek + ne yaptığını yaz, Anil'e gönder.
