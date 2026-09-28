@@ -5,6 +5,7 @@ mod anthropic;
 mod backend;
 mod brain;
 mod check;
+mod claude_bin;
 mod cli;
 mod config;
 mod context_report;
