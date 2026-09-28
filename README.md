@@ -48,6 +48,8 @@ cargo build --release
 
 **Windows (prebuilt, no Rust needed):** download [usta-windows-x64.zip](https://github.com/cursedxp/usta/releases/latest/download/usta-windows-x64.zip) (always the latest release), unzip, and run `.\usta.exe start` in [Windows Terminal](https://aka.ms/terminal). The binary is unsigned, so SmartScreen may warn — *More info → Run anyway*. On Windows, Usta doesn't find `claude` on its own yet: set `setx USTA_BACKEND "cli"` (Claude Code installed with the native Windows installer) or `setx ANTHROPIC_API_KEY "sk-ant-..."`, then reopen the terminal. `OKUBENI.txt` in the zip has the same steps in Turkish.
 
+**macOS (prebuilt, universal — Apple Silicon + Intel):** download [usta-macos-universal.tar.gz](https://github.com/cursedxp/usta/releases/latest/download/usta-macos-universal.tar.gz), extract, move `usta` onto your PATH (e.g. `~/.local/bin`). It isn't notarized — if macOS blocks it, run `xattr -d com.apple.quarantine ~/.local/bin/usta` once. Setup steps are in `README.txt` inside the archive.
+
 **LLM backend** (either one is enough):
 
 1. **Claude CLI (default, recommended)** — if [Claude Code](https://claude.com/claude-code) is on PATH, Usta uses it. Your existing subscription, **no API key needed**.
