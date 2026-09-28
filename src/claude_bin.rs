@@ -33,13 +33,26 @@ fn known_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// Locate `claude` from the real environment.
+/// Locate `claude` from the real environment. If `USTA_CLAUDE` is set but
+/// isn't a file, warns once to stderr and falls through to PATH / known
+/// dirs exactly as if it weren't set.
 pub fn find_claude() -> Option<PathBuf> {
-    find_claude_in(
-        std::env::var_os("USTA_CLAUDE"),
-        std::env::var_os("PATH"),
-        &known_dirs(),
-        names(),
+    let explicit = std::env::var_os("USTA_CLAUDE");
+    if let Some(p) = &explicit {
+        let path = PathBuf::from(p);
+        if !path.is_file() {
+            eprintln!("{}", ignoring_bad_env_warning(&path));
+        }
+    }
+    find_claude_in(explicit, std::env::var_os("PATH"), &known_dirs(), names())
+}
+
+/// Wording for `find_claude()`'s stderr warning — split out so it's
+/// unit-testable without touching real env vars.
+fn ignoring_bad_env_warning(path: &Path) -> String {
+    format!(
+        "usta: USTA_CLAUDE is set but \"{}\" is not a file — ignoring it",
+        path.display()
     )
 }
 
@@ -66,12 +79,21 @@ pub fn find_claude_in(
         .find(|c| c.is_file())
 }
 
-/// `.cmd` / `.bat` run through cmd.exe, where a multi-line argument isn't
-/// safe — those get the system prompt from a file instead.
-pub fn needs_prompt_file(bin: &Path) -> bool {
-    bin.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+/// Whether the system prompt must be handed to `claude` via a temp file
+/// (`--append-system-prompt-file`) instead of inline (`--append-system-prompt
+/// <text>`). Two independent reasons force this:
+/// - **Windows, always** (`windows` = `cfg!(windows)`): `CreateProcessW` caps
+///   the whole command line at 32,767 UTF-16 chars, and usta's system prompt
+///   is already ~25K chars and growing — this applies to every spawn,
+///   including `claude.exe`, not just shims.
+/// - **`.cmd` / `.bat`, on any OS:** these run through `cmd.exe`, which can't
+///   safely take a multi-line argument at all, regardless of length.
+pub fn prompt_via_file(bin: &Path, windows: bool) -> bool {
+    windows
+        || bin
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
 }
 
 #[cfg(test)]
@@ -175,12 +197,35 @@ mod tests {
     }
 
     #[test]
-    fn prompt_file_only_for_batch_shims() {
-        assert!(needs_prompt_file(Path::new(r"C:\npm\claude.cmd")));
-        assert!(needs_prompt_file(Path::new("claude.CMD")));
-        assert!(needs_prompt_file(Path::new("claude.bat")));
-        assert!(!needs_prompt_file(Path::new(r"C:\bin\claude.exe")));
-        assert!(!needs_prompt_file(Path::new("/usr/local/bin/claude")));
-        assert!(!needs_prompt_file(Path::new("claude")));
+    fn prompt_via_file_on_windows_always_true_else_only_batch_shims() {
+        // Windows: every spawn goes through the file (command-line cap),
+        // exe included.
+        assert!(prompt_via_file(Path::new(r"C:\bin\claude.exe"), true));
+        assert!(prompt_via_file(Path::new("claude"), true));
+        // Non-Windows: only `.cmd`/`.bat` shims need it.
+        assert!(prompt_via_file(Path::new("x.cmd"), false));
+        assert!(prompt_via_file(Path::new("x.CMD"), false));
+        assert!(prompt_via_file(Path::new("x.bat"), false));
+        assert!(!prompt_via_file(Path::new("x.exe"), false));
+        assert!(!prompt_via_file(Path::new("/usr/local/bin/claude"), false));
+    }
+
+    #[test]
+    fn ignoring_bad_env_warning_names_the_path_and_the_var() {
+        let msg = ignoring_bad_env_warning(Path::new("/nope/claude"));
+        assert!(msg.contains("USTA_CLAUDE"));
+        assert!(msg.contains("/nope/claude"));
+        assert!(msg.contains("ignoring"));
+    }
+
+    #[test]
+    fn find_claude_warning_lives_in_the_env_wrapper_not_the_pure_core() {
+        // Source pin: `find_claude()` (env-reading wrapper) must own the
+        // stderr warning; `find_claude_in` (pure core) must not.
+        let src = include_str!("claude_bin.rs");
+        let (before_find_claude_in, rest) = src.split_once("pub fn find_claude_in").unwrap();
+        assert!(before_find_claude_in.contains("eprintln!"));
+        let pure_core = rest.split("#[cfg(test)]").next().unwrap();
+        assert!(!pure_core.contains("eprintln!"));
     }
 }

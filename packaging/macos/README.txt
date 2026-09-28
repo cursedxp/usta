@@ -10,7 +10,9 @@ usta — macOS (universal: Apple Silicon + Intel)
         xattr -d com.apple.quarantine ~/.local/bin/usta
 
 3) LLM backend — ONE of these is required:
-   A) Claude Code on your PATH (`claude`) — found automatically, no key needed.
+   A) Claude Code — found automatically (PATH or its install folders, e.g.
+      ~/.local/bin), no key needed. Lives somewhere unusual? Point usta at it:
+        export USTA_CLAUDE=/path/to/claude
    B) export ANTHROPIC_API_KEY=sk-ant-...
 
 4) Run:

@@ -75,3 +75,12 @@ kalkar → "Claude Code kuruluysa kendiliğinden bulunur; bulunamazsa `setx USTA
 ## Sürüm
 
 v0.31.4 — bump + SPEC §6 selection satırı + ROADMAP + Windows/macOS paketleri + GitHub Release.
+
+## Review sonrası (2026-09-28)
+
+`needs_prompt_file(bin) -> bool` yerine `prompt_via_file(bin, windows) -> bool` geldi: Windows'ta
+CreateProcessW komut satırını ~32K UTF-16 karakterle sınırlıyor ve usta'nın sistem talimatı zaten
+~25K karakter ve büyüyor — bu yüzden Windows'ta **her** spawn (`claude.exe` dahil) dosya yolunu
+kullanmak zorunda, sadece `.cmd`/`.bat` değil. `windows` parametresi çağrı yerinde `cfg!(windows)`
+ile geçiliyor, böylece fonksiyon saf ve testte gerçek platformdan bağımsız kalıyor. macOS/Linux
+davranışı değişmedi (inline argüman).

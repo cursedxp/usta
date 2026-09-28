@@ -250,9 +250,11 @@ async fn run_claude_cli(
 ) -> Result<(String, Option<String>, Option<u64>)> {
     let mut cmd = Command::new(bin);
     cmd.arg("-p").arg("--output-format").arg("json");
-    // `.cmd`/`.bat` (npm on Windows) run through cmd.exe, where the multi-line
-    // system prompt isn't a safe argument → hand it over as a file instead.
-    let _prompt_file = if crate::claude_bin::needs_prompt_file(bin) {
+    // On Windows every spawn (exe included) uses the file form — the command
+    // line is capped at 32,767 UTF-16 chars and usta's system prompt is
+    // already ~25K and growing. `.cmd`/`.bat` shims need it on any OS too:
+    // cmd.exe can't take a multi-line argument at all.
+    let _prompt_file = if crate::claude_bin::prompt_via_file(bin, cfg!(windows)) {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("usta-system-{}-{n}.md", std::process::id()));
@@ -540,19 +542,31 @@ mod tests {
     }
 
     #[test]
-    fn cli_call_uses_a_prompt_file_for_batch_shims() {
-        // Source pin (the args live inside an async spawn fn): the `.cmd`
-        // branch must hand the system prompt over as a file, the default
-        // branch keeps passing it inline.
+    fn cli_call_uses_a_prompt_file_on_windows_and_batch_shims() {
+        // Source pin (the args live inside an async spawn fn): the file
+        // branch must cover every Windows spawn (command-line cap) plus
+        // `.cmd`/`.bat` shims on any OS; the default branch keeps passing
+        // the prompt inline.
         let src = include_str!("backend.rs");
         let production = src.split("#[cfg(test)]").next().unwrap();
-        assert!(production.contains("needs_prompt_file(bin)"));
+        assert!(production.contains("prompt_via_file(bin, cfg!(windows))"));
         assert!(production.contains("--append-system-prompt-file"));
         assert!(production.contains("\"--append-system-prompt\""));
         assert!(
             !production.contains("fn claude_on_path"),
             "replaced by claude_bin::find_claude"
         );
+    }
+
+    #[test]
+    fn prompt_file_deletes_on_drop() {
+        let path =
+            std::env::temp_dir().join(format!("usta-prompt-file-drop-test-{}", std::process::id()));
+        std::fs::write(&path, "system prompt").unwrap();
+        {
+            let _pf = PromptFile(path.clone());
+        }
+        assert!(!path.exists());
     }
 
     #[test]
