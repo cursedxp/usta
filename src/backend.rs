@@ -7,9 +7,10 @@
 //! - **API (optional):** the existing `anthropic::Client` reqwest path.
 //!
 //! Selection: `USTA_BACKEND` env (`cli`/`api`) takes priority; otherwise CLI if
-//! `claude` is on PATH, otherwise API if `ANTHROPIC_API_KEY` is set, else a clear error.
+//! `claude` is found (PATH or its install folders, see `claude_bin`), otherwise API if `ANTHROPIC_API_KEY` is set, else a clear error.
 
 use anyhow::{bail, Context, Result};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -35,6 +36,9 @@ pub enum Backend {
     Cli {
         model: String,
         session_id: Option<String>,
+        /// Resolved `claude` executable (`claude_bin::find_claude`), or the
+        /// bare name `claude` when `USTA_BACKEND=cli` forced it unfound.
+        bin: PathBuf,
     },
     /// Anthropic Messages API — reqwest, requires a key.
     Api {
@@ -46,12 +50,14 @@ pub enum Backend {
 /// Select a backend based on environment signals.
 pub fn select() -> Result<Backend> {
     match std::env::var("USTA_BACKEND").ok().as_deref() {
-        Some("cli") => Ok(cli_backend()),
+        Some("cli") => Ok(cli_backend(
+            crate::claude_bin::find_claude().unwrap_or_else(|| PathBuf::from("claude")),
+        )),
         Some("api") => api_backend(),
         Some(other) => bail!("USTA_BACKEND invalid: '{other}'. Valid values: 'cli' or 'api'."),
         None => {
-            if claude_on_path() {
-                Ok(cli_backend())
+            if let Some(bin) = crate::claude_bin::find_claude() {
+                Ok(cli_backend(bin))
             } else if std::env::var("ANTHROPIC_API_KEY")
                 .ok()
                 .is_some_and(|k| !k.trim().is_empty())
@@ -69,10 +75,11 @@ pub fn select() -> Result<Backend> {
     }
 }
 
-fn cli_backend() -> Backend {
+fn cli_backend(bin: PathBuf) -> Backend {
     Backend::Cli {
         model: DEFAULT_CLI_MODEL.to_string(),
         session_id: None,
+        bin,
     }
 }
 
@@ -81,17 +88,6 @@ fn api_backend() -> Result<Backend> {
     Ok(Backend::Api {
         client: anthropic::Client::new(key),
         model: anthropic::DEFAULT_MODEL.to_string(),
-    })
-}
-
-/// Is the `claude` executable on PATH?
-fn claude_on_path() -> bool {
-    let Ok(path) = std::env::var("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        let candidate = dir.join("claude");
-        candidate.is_file()
     })
 }
 
@@ -139,19 +135,24 @@ impl Backend {
                     context_tokens: tokens,
                 })
             }
-            Backend::Cli { model, session_id } => {
+            Backend::Cli {
+                model,
+                session_id,
+                bin,
+            } => {
                 let resume = session_id.clone();
                 let input = match &resume {
                     Some(_) => last_user_text(history),
                     None => render_transcript(history),
                 };
-                let attempt = run_claude_cli(model, system, &input, resume.as_deref()).await;
+                let attempt = run_claude_cli(bin, model, system, &input, resume.as_deref()).await;
                 let (text, new_sid, tokens) = match attempt {
                     Ok(v) => v,
                     // Stale/deleted session — retry once from scratch with the full transcript.
                     Err(_) if resume.is_some() => {
                         *session_id = None;
-                        run_claude_cli(model, system, &render_transcript(history), None).await?
+                        run_claude_cli(bin, model, system, &render_transcript(history), None)
+                            .await?
                     }
                     Err(e) => return Err(e),
                 };
@@ -228,21 +229,40 @@ fn render_transcript(history: &[Message]) -> String {
 /// here, at the tool level.
 const CLI_ALLOWED_TOOLS: &str = "WebSearch,WebFetch";
 
+/// Deletes the system-prompt file when the call ends (success, error or spawn failure).
+struct PromptFile(PathBuf);
+
+impl Drop for PromptFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Run the `claude -p` subprocess: input is written to stdin, JSON output is read back.
 /// If `resume` is given, the server-side session is continued via `--resume <id>`.
 async fn run_claude_cli(
+    bin: &Path,
     model: &str,
     system: &str,
     input: &str,
     resume: Option<&str>,
 ) -> Result<(String, Option<String>, Option<u64>)> {
-    let mut cmd = Command::new("claude");
-    cmd.arg("-p")
-        .arg("--output-format")
-        .arg("json")
-        .arg("--append-system-prompt")
-        .arg(system)
-        .arg("--model")
+    let mut cmd = Command::new(bin);
+    cmd.arg("-p").arg("--output-format").arg("json");
+    // `.cmd`/`.bat` (npm on Windows) run through cmd.exe, where the multi-line
+    // system prompt isn't a safe argument → hand it over as a file instead.
+    let _prompt_file = if crate::claude_bin::needs_prompt_file(bin) {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("usta-system-{}-{n}.md", std::process::id()));
+        std::fs::write(&path, system).context("failed to write the system prompt file")?;
+        cmd.arg("--append-system-prompt-file").arg(&path);
+        Some(PromptFile(path))
+    } else {
+        cmd.arg("--append-system-prompt").arg(system);
+        None
+    };
+    cmd.arg("--model")
         .arg(model)
         .arg("--allowedTools")
         .arg(CLI_ALLOWED_TOOLS)
@@ -261,7 +281,7 @@ async fn run_claude_cli(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("`claude` CLI failed to start — is it on PATH?")?;
+        .with_context(|| format!("`{}` failed to start", bin.display()))?;
 
     // Write the input to stdin, then close it (EOF).
     {
@@ -401,11 +421,13 @@ mod tests {
         let opus = Backend::Cli {
             model: "opus".into(),
             session_id: None,
+            bin: PathBuf::from("claude"),
         };
         assert_eq!(opus.context_window(), 1_000_000);
         let haiku = Backend::Cli {
             model: "claude-haiku-4-5".into(),
             session_id: None,
+            bin: PathBuf::from("claude"),
         };
         assert_eq!(haiku.context_window(), 200_000);
     }
@@ -417,6 +439,7 @@ mod tests {
         let mut b = Backend::Cli {
             model: "opus".into(),
             session_id: Some("sid-123".into()),
+            bin: PathBuf::from("claude"),
         };
         b.reset_session();
         let Backend::Cli { session_id, .. } = &b else {
@@ -513,6 +536,22 @@ mod tests {
         assert!(g.contains("ANTHROPIC_API_KEY"));
         assert!(g.contains("sk-ant-"));
         assert!(g.contains("q to quit"));
+    }
+
+    #[test]
+    fn cli_call_uses_a_prompt_file_for_batch_shims() {
+        // Source pin (the args live inside an async spawn fn): the `.cmd`
+        // branch must hand the system prompt over as a file, the default
+        // branch keeps passing it inline.
+        let src = include_str!("backend.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(production.contains("needs_prompt_file(bin)"));
+        assert!(production.contains("--append-system-prompt-file"));
+        assert!(production.contains("\"--append-system-prompt\""));
+        assert!(
+            !production.contains("fn claude_on_path"),
+            "replaced by claude_bin::find_claude"
+        );
     }
 
     #[test]

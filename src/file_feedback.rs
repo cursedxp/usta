@@ -1287,6 +1287,7 @@ mod tests {
         let mut backend = Backend::Cli {
             model: "opus".to_string(),
             session_id: None,
+            bin: std::path::PathBuf::from("claude"),
         };
         let mut session = Session::new("rust", "system prompt");
         let recorder_path = dir.join("transcript.jsonl");
