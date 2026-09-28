@@ -146,13 +146,13 @@ impl InputBox {
         }
     }
 
-    /// Draw the box: a rule above and below (no side borders) + `> ` prefix +
+    /// Draw the box: a single rule above (no side or bottom borders) + `> ` prefix +
     /// cursor. Long text WRAPS TO THE NEXT LINE at the full width minus the
     /// prefix (no horizontal scrolling); if it exceeds the inner line count,
     /// the vertical window follows the cursor.
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let inner_w = area.width.saturating_sub(2) as usize; // "> " prefix
-        let visible = area.height.saturating_sub(2).max(1) as usize; // inner lines
+        let visible = area.height.saturating_sub(1).max(1) as usize; // lines under the rule
         let (rows, cur_row, cur_col) =
             wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
         // Vertical window: last `visible` lines so the cursor stays visible.
@@ -172,7 +172,7 @@ impl InputBox {
             .collect();
         let para = Paragraph::new(lines).block(
             Block::default()
-                .borders(Borders::TOP | Borders::BOTTOM)
+                .borders(Borders::TOP)
                 .border_style(Style::default().fg(theme::DIM)),
         );
         f.render_widget(para, area);
@@ -180,7 +180,7 @@ impl InputBox {
         let y = area.y + 1 + (cur_row - start) as u16;
         f.set_cursor_position((
             x.min(area.x + area.width - 1),
-            y.min(area.y + area.height - 2),
+            y.min(area.y + area.height - 1),
         ));
     }
 }
@@ -401,12 +401,14 @@ mod tests {
     }
 
     #[test]
-    fn render_draws_rules_above_and_below_without_side_borders() {
+    fn render_draws_only_a_top_rule() {
         let b = InputBox::new();
         let (rows, _) = render_rows(&b, 20, 5);
         assert_eq!(rows[0], "─".repeat(20), "top rule");
-        assert_eq!(rows[4], "─".repeat(20), "bottom rule");
         assert!(rows[1].starts_with("> "), "prompt row: {:?}", rows[1]);
+        for (i, r) in rows.iter().enumerate().skip(1) {
+            assert!(!r.contains('─'), "row {i} has a rule: {r:?}");
+        }
         for (i, r) in rows.iter().enumerate() {
             for c in ['│', '╭', '╮', '╰', '╯'] {
                 assert!(!r.contains(c), "row {i} has {c:?}: {r:?}");
@@ -439,5 +441,17 @@ mod tests {
         type_str(&mut b, &"a".repeat(18)); // cursor col 18 → x 20, clamped to 19
         let (_, cur) = render_rows(&b, 20, 5);
         assert_eq!(cur, (19, 1));
+    }
+
+    #[test]
+    fn render_uses_the_freed_row_for_a_fourth_content_line() {
+        let mut b = InputBox::new();
+        type_str(&mut b, &"a".repeat(55)); // 18 + 18 + 18 + 1 → four visual rows
+        let (rows, cur) = render_rows(&b, 20, 5);
+        assert_eq!(rows[1], format!("> {}", "a".repeat(18)));
+        assert_eq!(rows[2], format!("  {}", "a".repeat(18)));
+        assert_eq!(rows[3], format!("  {}", "a".repeat(18)));
+        assert_eq!(rows[4], format!("  a{}", " ".repeat(17)));
+        assert_eq!(cur, (3, 4), "cursor after the last char on row 4");
     }
 }
