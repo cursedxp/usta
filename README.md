@@ -33,7 +33,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 🔎 **Research** | Searches the web for what it doesn't know (WebSearch) and reads pages you link (WebFetch) — no making things up. |
 | 🌍 **Any topic** | Not Rust-specific. For a new topic (Linux security, GTM, anything) Usta **derives the approach through an introduction** and builds a web-researched **curriculum map** (`not seen → seen → settled → deepened`). Scope guarding: nothing stays hanging in the air. |
 | 📚 **Bring your own material** | Drop your book/course notes (md/txt — PDFs auto-convert if `pdftotext` is installed) into `materials/` — Usta anchors the curriculum to its chapters, assigns reading, and quizzes you on it. You read; it never summarizes the book at you. |
-| 🎨 **Terminal UI** | Claude Code-style terminal UI: two-column welcome box on open (learning status + what's next), a borderless live input area (a single rule above, fixed height), sticky status line (spinner + context gauge); a calm, colorblind-safe visual language (glyph+color pairs, one accent), designed in a full TUI design system. The bottom region is drawn directly, by relative erase-and-reprint — the flow stays in normal scrollback, so scroll up and copy. Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
+| 🎨 **Terminal UI** | Claude Code-style terminal UI: two-column welcome box on open (learning status + what's next), a borderless live input area (a single rule above, fixed height), sticky status line (spinner + context gauge); a calm, colorblind-safe visual language (glyph+color pairs, one accent), designed in a full TUI design system. The bottom region is a small inline viewport pinned under the conversation — the flow stays in normal scrollback, so scroll up and copy. Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
 | 🗂️ **Management** | `usta topics` shows what you're learning where; `reset` clears a topic or everything. |
 | 📈 **Visible progress** | Every session lands in a lightweight history — `usta stats` shows your week (sessions, map %, settled items) and streaks. Broken streak? No guilt: it shows your longest instead. |
 
@@ -52,7 +52,7 @@ cargo build --release
 
 **LLM backend** (either one is enough):
 
-1. **Claude CLI (default, recommended)** — if [Claude Code](https://claude.com/claude-code) is on PATH, Usta uses it. Your existing subscription, **no API key needed**.
+1. **Claude CLI (default, recommended)** — if [Claude Code](https://claude.com/claude-code) is installed, Usta finds it on its own — on PATH or in its install folders, on macOS, Linux and Windows. Your existing subscription, **no API key needed**. Somewhere unusual? Set `USTA_CLAUDE=/path/to/claude`.
 2. **Anthropic API** — `export ANTHROPIC_API_KEY=sk-ant-...`
 
 Force one with `USTA_BACKEND=cli|api`.
