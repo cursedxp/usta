@@ -1,6 +1,7 @@
 usta — Windows (64-bit) test sürümü
 ==========================================
 
+Yeni: Claude Code'u artık kendisi buluyor — USTA_BACKEND ayarına gerek yok (önceden yaptıysan kalabilir, zararı yok).
 Yeni: bir link verirsen ("şu sayfaya bak: https://...") sayfayı açıp okuyabilir.
 Eski sürümü sildikten sonra yeni usta.exe'yi aynı yere koyman yeterli.
 
@@ -17,9 +18,9 @@ Eski sürümü sildikten sonra yeni usta.exe'yi aynı yere koyman yeterli.
       Terminalde bir kez çalıştır, sonra terminali kapatıp aç:
         setx ANTHROPIC_API_KEY "sk-ant-..."
 
-   B) Claude Code yüklüyse (Windows yükleyicisiyle kurulmuş olmalı):
-        setx USTA_BACKEND "cli"
-      Not: usta Windows'ta claude'u kendiliğinden bulamıyor, bu satır şart.
+   B) Claude Code yüklüyse — usta kendisi bulur, bir şey ayarlaman gerekmez.
+      Bulamazsa (alışılmadık bir klasöre kurulduysa) yerini göster:
+        setx USTA_CLAUDE "C:\...\claude.exe"
 
 4) Çalıştırma — terminalde usta.exe'nin olduğu klasöre gir:
         cd C:\Users\<sen>\usta

@@ -13,10 +13,9 @@ usta — Windows (64-bit)
    A) Anthropic API key (simplest). Run once, then reopen the terminal:
         setx ANTHROPIC_API_KEY "sk-ant-..."
 
-   B) Claude Code, installed with the native Windows installer:
-        setx USTA_BACKEND "cli"
-      Note: on Windows Usta doesn't find `claude` on its own yet, so this
-      line is required.
+   B) Claude Code installed — Usta finds it on its own, nothing to set.
+      If it isn't found (unusual install folder), point Usta at it:
+        setx USTA_CLAUDE "C:\path\to\claude.exe"
 
 4) Run — in the terminal, go to the folder with usta.exe:
         cd C:\Users\<you>\usta

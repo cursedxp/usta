@@ -7,7 +7,8 @@
 //! - **API (optional):** the existing `anthropic::Client` reqwest path.
 //!
 //! Selection: `USTA_BACKEND` env (`cli`/`api`) takes priority; otherwise CLI if
-//! `claude` is found (PATH or its install folders, see `claude_bin`), otherwise API if `ANTHROPIC_API_KEY` is set, else a clear error.
+//! `claude` is found (PATH or its install folders, see `claude_bin`),
+//! otherwise API if `ANTHROPIC_API_KEY` is set, else a clear error.
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -66,7 +67,7 @@ pub fn select() -> Result<Backend> {
             } else {
                 bail!(
                     "No LLM backend found. One of two options is required:\n  \
-                     1) Add the `claude` CLI to PATH (uses Claude Code auth, no key needed), or\n  \
+                     1) Install Claude Code (usta finds `claude` on PATH or in its install folders), or\n  \
                      2) export ANTHROPIC_API_KEY=sk-ant-... (Anthropic API path).\n  \
                      To force a backend: export USTA_BACKEND=cli|api"
                 )

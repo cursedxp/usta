@@ -28,6 +28,8 @@
 
 ## Completed
 
+- 2026-09-28: Claude discovery (v0.31.4) — Usta finds `claude` on any OS: PATH with the platform's file names plus the folders Claude Code installs into, `USTA_CLAUDE` as an override. Windows no longer needs `USTA_BACKEND=cli`; npm's `claude.cmd` gets the system prompt from a temp file.
+
 - 2026-09-26: Link reading (v0.31.3) — the model can open a page the user links: `WebFetch` allowed on the CLI backend, the `web_fetch` server tool on the API backend. Still no file-touching tools.
 
 - 2026-09-28: Top-rule input (v0.31.3) — the input box drops its bottom rule too; one `─` above, the freed row is a fourth content line. Look only: viewport, resize and CPR untouched.
