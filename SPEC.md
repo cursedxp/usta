@@ -241,6 +241,8 @@ Design detail: `docs/superpowers/specs/2026-08-16-tui-design-apply-design.md`.
 
 **v0.31.2 (borderless input, look only):** the input box drops its side borders and rounded corners — a plain `─` rule above and below in `theme::DIM`, nothing left or right. Only `InputBox::render` changed: `Borders::TOP | Borders::BOTTOM`, content wraps at `width - 2` (only the `> ` / `  ` prefix is deducted; it was `width - 4`), the cursor sits at `area.x + 2` and clamps to the last column. The height stays fixed (`VIEWPORT_H = 6`: three content rows, two rules, the status line) — the inline viewport, the resize path and CPR are untouched. This is the look v0.30.0 shipped bundled with the relative renderer; the look was never the problem, so it returns alone. A height that grows with the text was considered and deferred: it needs either a rebuilt inline viewport (the v0.29.1 path) or a blank-row reserve below the status line. The resize ghosting of v0.29.3 is unchanged — ghosts now show as rules instead of boxes. Design: `docs/superpowers/specs/2026-09-26-borderless-input-design.md`.
 
+**v0.31.3 (top rule only):** the input box also drops its bottom rule — a single `─` rule above in `theme::DIM`, nothing below or beside. The freed row becomes a fourth content row (`visible = height - 1`, cursor clamps to `area.y + height - 1`); the box height and `VIEWPORT_H = 6` are unchanged, so the status line now sits directly under the text. Only `InputBox::render` changed. Design: `docs/superpowers/specs/2026-09-28-top-rule-input-design.md`.
+
 ## 4.20 Prompt Diet (v0.19)
 
 Binding principle: nothing that can be resolved deterministically by the shell is written into the prompt; a section whose condition the shell knows isn't loaded unconditionally.
@@ -349,8 +351,8 @@ usta start rust-takvim
 - **Rust = thin shell:** CLI, LLM backend, file watching (`notify` crate), web research, health auditing.
 - **Intelligence + personality = in markdown files** (the headspace pattern). Changing behavior = edit markdown, don't touch Rust.
 - **Pluggable LLM backend (both supported — some have an API, some don't):**
-  - **CLI (default):** the local `claude` CLI (Claude Code) → existing auth/subscription, **no API key, no token bill**. `--allowedTools WebSearch` opens research + enforces "no touching" at the tool level. `--setting-sources ""` (v0.25.1) keeps Usta standalone: the user's Claude Code plugins/skills/hooks/settings never load into its calls — measured ~25k tokens of unrelated catalog per turn without it (~51k → ~26k baseline).
-  - **API (optional):** the Anthropic Messages API via `ANTHROPIC_API_KEY` (reqwest), model `claude-opus-4-8`, server-side web_search, adaptive thinking.
+  - **CLI (default):** the local `claude` CLI (Claude Code) → existing auth/subscription, **no API key, no token bill**. `--allowedTools WebSearch,WebFetch` (v0.31.3: WebFetch added so a linked page can be read — without it `-p` mode silently denied the fetch and the model reported "no permission") opens research + enforces "no touching" at the tool level. `--setting-sources ""` (v0.25.1) keeps Usta standalone: the user's Claude Code plugins/skills/hooks/settings never load into its calls — measured ~25k tokens of unrelated catalog per turn without it (~51k → ~26k baseline).
+  - **API (optional):** the Anthropic Messages API via `ANTHROPIC_API_KEY` (reqwest), model `claude-opus-4-8`, server-side web_search + web_fetch (v0.31.3), adaptive thinking.
   - Selection: `USTA_BACKEND=cli|api` takes priority; otherwise `claude` on PATH → CLI, otherwise if a key exists → API.
 - **Call:** non-streaming (no client timeout in raw reqwest → robust). Streaming in a later version. The CLI backend continues a session with `--resume <session_id>` — the first call captures the id from `--output-format json`, subsequent turns send only the new message (on a stale session it falls back to the full transcript).
 
