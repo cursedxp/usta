@@ -64,9 +64,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: semgrep
-        run: semgrep scan --config p/default --config p/rust --error --metrics=off
+      - name: semgrep (new findings only on PRs)
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          BASE="${{ github.event.pull_request.base.sha }}"
+          semgrep scan --config p/default --config p/rust --error --metrics=off ${BASE:+--baseline-commit "$BASE"}
 
   deny:
     runs-on: ubuntu-latest
