@@ -1,6 +1,8 @@
 //! Live input box: ratatui-textarea editing engine + Vec-based up/down
 //! history. The TUI-path counterpart of Rustyline. Spec §6.
 
+use std::sync::Arc;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -25,17 +27,27 @@ pub enum Action {
 
 pub struct InputBox {
     ta: TextArea<'static>,
-    history: Vec<String>,
+    history: Vec<Entry>,
     /// None = fresh text; Some(i) = history[i] is being shown.
     cursor: Option<usize>,
     /// Fresh text from before entering history — comes back with Down.
-    stash: String,
+    stash: Entry,
     /// Images attached to the text being composed, with their `[Image #N]` number.
-    images: Vec<(usize, PastedImage)>,
+    images: Vec<(usize, Arc<PastedImage>)>,
     /// Next token number (1-based, restarts after every submit / clear).
     next_image: usize,
     /// Images of the last submitted line - drained by `take_images`.
     submitted: Vec<PastedImage>,
+}
+
+/// Only the newest this-many history entries keep their images (matches the A1 horizon).
+const HISTORY_IMAGE_ENTRIES: usize = 20;
+
+/// A submitted (or stashed) line and the images its `[Image #N]` tokens point at.
+#[derive(Default, Clone)]
+struct Entry {
+    text: String,
+    images: Vec<(usize, Arc<PastedImage>)>,
 }
 
 /// TextArea holding `s`, cursor at the very end (recall / reset).
@@ -56,7 +68,7 @@ impl InputBox {
             ta: TextArea::default(),
             history: Vec::new(),
             cursor: None,
-            stash: String::new(),
+            stash: Entry::default(),
             images: Vec::new(),
             next_image: 1,
             submitted: Vec::new(),
@@ -102,8 +114,15 @@ impl InputBox {
                 if line.is_empty() {
                     return Action::None;
                 }
-                self.history.push(line.clone());
-                self.submitted = self.referenced_images(&line);
+                let images = self.referenced_images(&line);
+                self.submitted = images.iter().map(|(_, i)| (**i).clone()).collect();
+                self.history.push(Entry {
+                    text: line.clone(),
+                    images,
+                });
+                if let Some(old) = self.history.len().checked_sub(HISTORY_IMAGE_ENTRIES + 1) {
+                    self.history[old].images.clear();
+                }
                 self.clear();
                 Action::Submit(line)
             }
@@ -246,7 +265,7 @@ impl InputBox {
         let n = self.next_image;
         self.next_image += 1;
         self.ta.insert_str(image_token(n));
-        self.images.push((n, img));
+        self.images.push((n, Arc::new(img)));
     }
 
     /// Bracketed paste: a dragged-in image file (the terminal pastes its path) becomes a
@@ -272,11 +291,10 @@ impl InputBox {
     }
 
     /// Pending images whose `[Image #N]` token survives in `line`, in attach order.
-    fn referenced_images(&mut self, line: &str) -> Vec<PastedImage> {
+    fn referenced_images(&mut self, line: &str) -> Vec<(usize, Arc<PastedImage>)> {
         std::mem::take(&mut self.images)
             .into_iter()
             .filter(|(n, _)| line.contains(&image_token(*n)))
-            .map(|(_, img)| img)
             .collect()
     }
 
@@ -287,7 +305,7 @@ impl InputBox {
 
     /// True when the shown text was edited after a recall — opencode won't overwrite it.
     fn edited_recall(&self) -> bool {
-        matches!(self.cursor, Some(i) if !self.value().is_empty() && self.history[i] != self.value())
+        matches!(self.cursor, Some(i) if !self.value().is_empty() && self.history[i].text != self.value())
     }
 
     fn recall_prev(&mut self) {
@@ -296,14 +314,24 @@ impl InputBox {
         }
         let next = match self.cursor {
             None => {
-                self.stash = self.value();
+                self.stash = Entry {
+                    text: self.value(),
+                    images: std::mem::take(&mut self.images),
+                };
                 self.history.len() - 1
             }
             Some(0) => 0,
             Some(i) => i - 1,
         };
         self.cursor = Some(next);
-        self.ta = area_with(&self.history[next]);
+        self.show(self.history[next].clone());
+    }
+
+    /// Make `e` the composed text + images (recall / back to stash).
+    fn show(&mut self, e: Entry) {
+        self.ta = area_with(&e.text);
+        self.next_image = e.images.iter().map(|(n, _)| n + 1).max().unwrap_or(1);
+        self.images = e.images;
     }
 
     fn recall_next(&mut self) {
@@ -314,11 +342,12 @@ impl InputBox {
             None => {}
             Some(i) if i + 1 < self.history.len() => {
                 self.cursor = Some(i + 1);
-                self.ta = area_with(&self.history[i + 1]);
+                self.show(self.history[i + 1].clone());
             }
             Some(_) => {
                 self.cursor = None;
-                self.ta = area_with(&std::mem::take(&mut self.stash));
+                let stash = std::mem::take(&mut self.stash);
+                self.show(stash);
             }
         }
     }
@@ -1038,5 +1067,62 @@ mod tests {
         b.apply_clip(Clip::Text(" and text".into()));
         b.apply_clip(Clip::Empty);
         assert_eq!(b.value(), "[Image #1] and text");
+    }
+
+    #[test]
+    fn recalled_line_resends_its_images() {
+        let mut b = InputBox::new();
+        b.attach_image(pasted(1));
+        type_str(&mut b, " what");
+        b.handle_key(code(KeyCode::Enter));
+        assert_eq!(b.take_images(), vec![pasted(1)]);
+        b.handle_key(code(KeyCode::Up));
+        assert_eq!(b.value(), "[Image #1] what");
+        assert!(matches!(
+            b.handle_key(code(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+        assert_eq!(b.take_images(), vec![pasted(1)]);
+    }
+
+    #[test]
+    fn recall_uses_the_entrys_image_not_the_stashs() {
+        let mut b = InputBox::new();
+        b.attach_image(pasted(1));
+        b.handle_key(code(KeyCode::Enter));
+        b.take_images();
+        b.attach_image(pasted(9)); // half-typed stash with its own #1
+        b.handle_key(code(KeyCode::Up));
+        assert_eq!(b.value(), "[Image #1]");
+        b.handle_key(code(KeyCode::Enter));
+        assert_eq!(b.take_images(), vec![pasted(1)]);
+    }
+
+    #[test]
+    fn down_restores_the_stash_image_and_numbering() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "old");
+        b.handle_key(code(KeyCode::Enter));
+        b.attach_image(pasted(7));
+        b.handle_key(code(KeyCode::Up));
+        b.handle_key(code(KeyCode::Down));
+        assert_eq!(b.value(), "[Image #1]");
+        b.attach_image(pasted(8));
+        assert_eq!(b.value(), "[Image #1][Image #2]");
+        b.handle_key(code(KeyCode::Enter));
+        assert_eq!(b.take_images(), vec![pasted(7), pasted(8)]);
+    }
+
+    #[test]
+    fn only_recent_history_entries_keep_images() {
+        let mut b = InputBox::new();
+        for i in 0..25u8 {
+            b.attach_image(pasted(i));
+            b.handle_key(code(KeyCode::Enter));
+            b.take_images();
+        }
+        let with_images = b.history.iter().filter(|e| !e.images.is_empty()).count();
+        assert_eq!(with_images, 20);
+        assert!(b.history[0].images.is_empty());
     }
 }
