@@ -43,9 +43,9 @@ fn media_type(f: ImageFormat) -> Option<&'static str> {
 }
 
 /// File bytes -> `PastedImage`. The format is sniffed from the bytes (never the file
-/// extension). A valid image within both caps is passed through byte-for-byte; anything
-/// larger is decoded, downscaled and re-encoded: JPEG stays JPEG, others PNG (JPEG if the
-/// PNG is still too big).
+/// extension). A valid image within both caps is decoded (to reject a corrupt body) and
+/// passed through byte-for-byte; anything larger is downscaled and re-encoded: JPEG stays
+/// JPEG, others PNG (JPEG if the PNG is still too big).
 pub fn prepare(bytes: Vec<u8>) -> Result<PastedImage> {
     let reader = ImageReader::new(Cursor::new(&bytes))
         .with_guessed_format()
@@ -55,6 +55,10 @@ pub fn prepare(bytes: Vec<u8>) -> Result<PastedImage> {
         bail!("unsupported image format {format:?} (png, jpeg, gif, webp only)");
     };
     let (w, h) = reader.into_dimensions().context("cannot read image size")?;
+    // Full decode even on the pass-through path: a truncated/corrupt body behind a
+    // valid header would otherwise reach the API and fail every later turn.
+    let img = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|e| anyhow::anyhow!("image could not be read: {e}"))?;
     if w.max(h) <= MAX_EDGE && bytes.len() <= MAX_RAW_BYTES {
         return Ok(PastedImage {
             media_type: mt,
@@ -63,7 +67,6 @@ pub fn prepare(bytes: Vec<u8>) -> Result<PastedImage> {
             height: h,
         });
     }
-    let img = image::load_from_memory_with_format(&bytes, format).context("cannot decode image")?;
     shrink(img, format)
 }
 
@@ -200,6 +203,24 @@ mod tests {
         assert_eq!(img.media_type, "image/png");
         assert_eq!((img.width, img.height), (64, 32));
         assert_eq!(img.data, bytes);
+    }
+
+    #[test]
+    fn prepare_rejects_a_truncated_png_with_a_valid_header() {
+        let mut bytes = png_bytes(64, 32);
+        // IEND + the tail of IDAT gone.
+        bytes.truncate(bytes.len() - 20);
+        // Precondition: the header-only size read still succeeds (that was the hole).
+        let size = ImageReader::new(Cursor::new(&bytes))
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions();
+        assert!(size.is_ok());
+        let err = prepare(bytes).unwrap_err();
+        assert!(
+            err.to_string().starts_with("image could not be read"),
+            "{err}"
+        );
     }
 
     #[test]

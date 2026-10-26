@@ -51,6 +51,12 @@ impl Session {
         });
     }
 
+    /// Roll history back to `len` messages — a failed turn leaves history exactly
+    /// as before it (review P1-6). No-op when `len >= history.len()`.
+    pub fn truncate_history(&mut self, len: usize) {
+        self.history.truncate(len);
+    }
+
     /// Read-only access to history (to pass to the backend).
     pub fn history(&self) -> &[Message] {
         &self.history
@@ -172,5 +178,19 @@ mod tests {
             HISTORY_MAX_IMAGES
         );
         assert_eq!(s.history()[0].text(), "turn 0 [Image #1]");
+    }
+
+    #[test]
+    fn truncate_history_rolls_back_a_turn_and_ignores_a_longer_mark() {
+        let mut s = Session::new("rust", "sistem");
+        s.push_user("a");
+        s.push_assistant("b".into());
+        let mark = s.history().len();
+        s.push_user_with_images("c [Image #1]", &[]);
+        s.truncate_history(mark);
+        assert_eq!(s.history().len(), 2);
+        assert_eq!(s.history()[1].role, "assistant");
+        s.truncate_history(10);
+        assert_eq!(s.history().len(), 2);
     }
 }

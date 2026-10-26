@@ -68,8 +68,9 @@ pub fn delete_unflushed(files: &[PathBuf]) -> (usize, Vec<String>) {
 
 /// Read a transcript file written by `Recorder` (`{"role","text"}` per line)
 /// and reconstruct it as `Message` history, preserving order. Any line that
-/// fails to parse, or carries a role other than "user"/"assistant", fails
-/// the whole read — a salvage flush must not silently drop turns.
+/// fails to parse, or carries a role other than "user"/"assistant"/"rollback", fails
+/// the whole read — a salvage flush must not silently drop turns. A "rollback" line
+/// drops the user turn the live session rolled back.
 pub fn read_history(path: &Path) -> Result<Vec<Message>> {
     let content = std::fs::read_to_string(path)?;
     let mut out = Vec::new();
@@ -91,6 +92,11 @@ pub fn read_history(path: &Path) -> Result<Vec<Message>> {
                 role: role.to_string(),
                 content: serde_json::Value::String(text.to_string()),
             }),
+            "rollback" => {
+                if out.last().is_some_and(|m| m.role == "user") {
+                    out.pop();
+                }
+            }
             other => bail!("unknown role in transcript line: {other}"),
         }
     }
@@ -140,6 +146,12 @@ impl Recorder {
 
     pub fn assistant(&self, text: &str) {
         self.append("assistant", text);
+    }
+
+    /// Mark the last user turn as rolled back (the call failed) — `read_history`
+    /// drops it, so recovery replays the history the live session kept.
+    pub fn rollback(&self) {
+        self.append("rollback", "");
     }
 
     fn append(&self, role: &str, text: &str) {
@@ -208,6 +220,31 @@ mod tests {
         mark_done(&p).unwrap();
         assert!(!p.exists());
         assert!(base.join("rust-1.done.jsonl").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_history_drops_the_user_turn_a_rollback_undid() {
+        let base =
+            std::env::temp_dir().join(format!("usta_transcript_rollback_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let p = base.join("rust-1.jsonl");
+        let r = Recorder::new(p.clone());
+        r.user("merhaba");
+        r.assistant("selam");
+        r.user("bozuk resim");
+        // Raw marker line, so this fails on the old reader (unknown role) rather
+        // than on a missing method.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&p)
+            .unwrap()
+            .write_all(line("rollback", "").as_bytes())
+            .unwrap();
+        let h = read_history(&p).unwrap();
+        assert_eq!(h.len(), 2);
+        assert_eq!(h[1].role, "assistant");
         let _ = std::fs::remove_dir_all(&base);
     }
 

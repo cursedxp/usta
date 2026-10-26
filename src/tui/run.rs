@@ -164,6 +164,7 @@ pub async fn run(
         )?),
     };
     if let Some(opening) = opening {
+        let mark = session.history().len();
         session.push_user(&opening);
         recorder.user(&opening);
         match crate::tui::ask::ask_live(
@@ -202,6 +203,7 @@ pub async fn run(
                 crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
             }
             Err(e) => {
+                crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
                 crate::tui::page::page_error(&mut tui, &format!("opening turn skipped: {e}"))?
             }
         }
@@ -330,6 +332,7 @@ pub async fn run(
                             // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
                             crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, &mut monitor, line.clone()).await?
                         };
+                        let mark = session.history().len();
                         let dropped = session.push_user_with_images(&outgoing, &images);
                         if dropped > 0 {
                             crate::tui::page::page_notice(&mut tui, &format!("{dropped} older image(s) dropped from context (size limit)"))?;
@@ -356,7 +359,10 @@ pub async fn run(
                                 backend.reset_session();
                                 crate::tui::page::page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
                             }
-                            Err(e) => crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?,
+                            Err(e) => {
+                                crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
+                                crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?;
+                            }
                         }
                     }
                 }

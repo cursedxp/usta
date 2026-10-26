@@ -41,6 +41,16 @@ pub(crate) async fn ask_usta(
     result
 }
 
+/// Undo a failed turn: history back to `mark` (taken before the user turn was
+/// pushed) plus a transcript rollback marker, so a corrupt image, an API error or
+/// an empty reply never stays in the conversation (review P1-6).
+pub(crate) fn rollback_turn(session: &mut Session, recorder: &Recorder, mark: usize) {
+    if session.history().len() > mark {
+        session.truncate_history(mark);
+        recorder.rollback();
+    }
+}
+
 /// Session setup once the topic is known — system prompt + Session + write its
 /// own lock + recorder + has_progress. The lock-CONFLICT confirmation is NOT here
 /// (handled by the caller depending on the path: plain stdin, TUI single-key). Returns:
@@ -384,5 +394,46 @@ mod tests {
         assert!(body.contains("progress not saved: the reply named no known file"));
         let restore = body.find("restore_game_pref(").expect("restore");
         assert!(bail < restore, "bail must precede post-write steps");
+    }
+
+    #[test]
+    fn rollback_turn_restores_history_and_marks_the_transcript() {
+        let dir = std::env::temp_dir().join(format!("usta_rollback_turn_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rec = Recorder::new(dir.join("rust-20260101-000000.jsonl"));
+        let mut s = Session::new("rust", "sys");
+        s.push_user("hi");
+        rec.user("hi");
+        s.push_assistant("hello".into());
+        rec.assistant("hello");
+        let mark = s.history().len();
+        s.push_user_with_images("broken [Image #1]", &[]);
+        rec.user("broken [Image #1]");
+        rollback_turn(&mut s, &rec, mark);
+        assert_eq!(s.history().len(), 2);
+        let replay = transcript::read_history(rec.path()).unwrap();
+        assert_eq!(replay.len(), 2);
+        assert_eq!(replay[1].role, "assistant");
+        // Nothing to undo -> no marker (it would pop a legitimate user line on replay).
+        s.push_user("next");
+        rec.user("next");
+        let n = s.history().len();
+        rollback_turn(&mut s, &rec, n);
+        assert_eq!(transcript::read_history(rec.path()).unwrap().len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Source pin: every push->ask site rolls the turn back on error (the TUI/plain
+    /// loops need a live terminal + backend, no mock exists).
+    #[test]
+    fn every_push_ask_site_rolls_back_on_error() {
+        for (name, src, n) in [
+            ("tui/run.rs", include_str!("tui/run.rs"), 2),
+            ("plain.rs", include_str!("plain.rs"), 3),
+            ("file_feedback.rs", include_str!("file_feedback.rs"), 2),
+        ] {
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            assert_eq!(prod.matches("rollback_turn(").count(), n, "{name}");
+        }
     }
 }

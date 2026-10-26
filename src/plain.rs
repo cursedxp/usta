@@ -18,7 +18,7 @@ use crate::file_feedback::{
 use crate::help;
 use crate::index;
 use crate::input;
-use crate::lifecycle::{ask_usta, maybe_compact, sleep_until_deadline, today};
+use crate::lifecycle::{ask_usta, maybe_compact, rollback_turn, sleep_until_deadline, today};
 use crate::progress;
 use crate::session::Session;
 use crate::setup::confirm;
@@ -193,6 +193,7 @@ pub(crate) async fn run_plain_loop(
             &due,
             has_questions,
         );
+        let mark = session.history().len();
         session.push_user(&opening);
         ctx.recorder.user(&opening);
         match ask_usta(backend, &session.system, session.history()).await {
@@ -210,7 +211,10 @@ pub(crate) async fn run_plain_loop(
                     .await;
             }
             // Drill failed → don't block the session, fall silently back into normal flow.
-            Err(e) => ui::warn(&format!("opening drill skipped: {e}")),
+            Err(e) => {
+                rollback_turn(session, ctx.recorder, mark);
+                ui::warn(&format!("opening drill skipped: {e}"))
+            }
         }
     } else {
         // New topic: no approach/map yet — introduction turn, Usta speaks first.
@@ -226,6 +230,7 @@ pub(crate) async fn run_plain_loop(
             project_known,
             material_digest.as_deref(),
         );
+        let mark = session.history().len();
         session.push_user(&onboarding);
         ctx.recorder.user(&onboarding);
         match ask_usta(backend, &session.system, session.history()).await {
@@ -242,7 +247,10 @@ pub(crate) async fn run_plain_loop(
                 trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic)
                     .await;
             }
-            Err(e) => ui::warn(&format!("introduction turn skipped: {e}")),
+            Err(e) => {
+                rollback_turn(session, ctx.recorder, mark);
+                ui::warn(&format!("introduction turn skipped: {e}"))
+            }
         }
     }
 
@@ -331,6 +339,7 @@ pub(crate) async fn run_plain_loop(
                         line
                     };
                     if !line.is_empty() {
+                        let mark = session.history().len();
                         session.push_user(&line);
                         ctx.recorder.user(&line);
                         match ask_usta(backend, &session.system, session.history()).await {
@@ -343,7 +352,10 @@ pub(crate) async fn run_plain_loop(
                                 maybe_compact(backend, session, ctx.project_root, tokens).await;
                                 trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic).await;
                             }
-                            Err(e) => ui::warn(&format!("error: {e}")),
+                            Err(e) => {
+                                rollback_turn(session, ctx.recorder, mark);
+                                ui::warn(&format!("error: {e}"));
+                            }
                         }
                     }
                     let _ = ready_tx.send(());

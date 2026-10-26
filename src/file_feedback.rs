@@ -9,7 +9,7 @@ use anyhow::Result;
 
 use crate::backend::{self, Backend};
 use crate::feedback;
-use crate::lifecycle::ask_usta;
+use crate::lifecycle::{ask_usta, rollback_turn};
 use crate::session::Session;
 use crate::transcript;
 use crate::{check, progress, visual};
@@ -217,9 +217,16 @@ pub(crate) async fn handle_file_change(
             injected.push_str(&check_result_block(&check_result));
         }
     }
+    let mark = session.history().len();
     session.push_user(&injected);
     recorder.user(&injected);
-    let reply = ask_usta(backend, &session.system, session.history()).await?;
+    let reply = match ask_usta(backend, &session.system, session.history()).await {
+        Ok(r) => r,
+        Err(e) => {
+            rollback_turn(session, recorder, mark);
+            return Err(e);
+        }
+    };
     let tokens = reply.context_tokens;
     // Marker (Görev 4) is stripped BEFORE recording/pushing — history never
     // carries `[[show: ...]]`, only the clean text does.
@@ -364,9 +371,16 @@ pub(crate) async fn handle_batch_change(
             injected.push_str(&check_result_block(&check_result));
         }
     }
+    let mark = session.history().len();
     session.push_user(&injected);
     recorder.user(&injected);
-    let reply = ask_usta(backend, &session.system, session.history()).await?;
+    let reply = match ask_usta(backend, &session.system, session.history()).await {
+        Ok(r) => r,
+        Err(e) => {
+            rollback_turn(session, recorder, mark);
+            return Err(e);
+        }
+    };
     let tokens = reply.context_tokens;
     // Marker (Görev 4) is stripped BEFORE recording/pushing — same rule as
     // handle_file_change: history never carries `[[show: ...]]`.
