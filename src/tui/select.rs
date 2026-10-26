@@ -11,21 +11,18 @@ use ratatui::text::Line;
 use unicode_width::UnicodeWidthChar;
 
 /// A drag selection in flat chat-line coordinates: (flat line index, display column).
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sel {
     pub anchor: (usize, u16),
     pub head: (usize, u16),
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// Mouse cell -> flat position; `None` outside `area`. `top` = flat index of the pane's first row.
 pub fn cell_to_pos(area: Rect, top: usize, x: u16, y: u16) -> Option<(usize, u16)> {
     let inside = x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
     inside.then(|| (top + (y - area.y) as usize, x - area.x))
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// Like `cell_to_pos`, but a cell outside `area` is clamped onto its nearest edge row/column.
 pub fn clamp_pos(area: Rect, top: usize, x: u16, y: u16) -> (usize, u16) {
     let cx = x.clamp(area.x, area.x + area.width.saturating_sub(1));
@@ -33,7 +30,6 @@ pub fn clamp_pos(area: Rect, top: usize, x: u16, y: u16) -> (usize, u16) {
     (top + (cy - area.y) as usize, cx - area.x)
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// (start, end) in reading order, both inclusive.
 pub fn ordered(sel: &Sel) -> ((usize, u16), (usize, u16)) {
     if sel.anchor <= sel.head {
@@ -43,7 +39,6 @@ pub fn ordered(sel: &Sel) -> ((usize, u16), (usize, u16)) {
     }
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// Columns of row `row` covered by the selection, inclusive (`u16::MAX` = to the end).
 fn row_range(row: usize, start: (usize, u16), end: (usize, u16)) -> (u16, u16) {
     let from = if row == start.0 { start.1 } else { 0 };
@@ -51,7 +46,6 @@ fn row_range(row: usize, start: (usize, u16), end: (usize, u16)) -> (u16, u16) {
     (from, to)
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// Selected text. A char is included when its starting display column is inside the
 /// row's selected range (wide chars never split). Hard rows join with '\n', soft
 /// (continuation) rows with "" because the wrap keeps the break space on the upper row.
@@ -84,13 +78,11 @@ pub fn extract(lines: &[Line<'_>], soft: &[bool], sel: &Sel) -> String {
     out
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 fn trim_end_spaces(s: &mut String) {
     let keep = s.trim_end_matches(' ').len();
     s.truncate(keep);
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// Add `Modifier::REVERSED` to the selected cells that are visible in `area`.
 pub fn highlight(buf: &mut Buffer, area: Rect, top: usize, sel: &Sel) {
     let (start, end) = ordered(sel);
@@ -111,7 +103,6 @@ pub fn highlight(buf: &mut Buffer, area: Rect, top: usize, sel: &Sel) {
     }
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// OSC 52 clipboard sequence for `text`.
 pub fn osc52(text: &str) -> String {
     format!(
@@ -120,7 +111,6 @@ pub fn osc52(text: &str) -> String {
     )
 }
 
-#[allow(dead_code)] // wired in by page::nav (Task 3)
 /// Put `text` on the system clipboard (arboard, handle kept alive in a OnceLock);
 /// when that fails or `SSH_TTY` is set, also emit OSC 52 on stdout.
 pub fn copy(text: &str) {

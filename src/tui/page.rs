@@ -3,7 +3,7 @@
 //! (cleanup round, Task 4).
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, MouseEventKind};
+use crossterm::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -77,37 +77,44 @@ pub(crate) fn current_width(tui: &Tui) -> u16 {
 const WHEEL_LINES: usize = 3;
 const NEW_MESSAGE: &str = "↓ new message";
 
-/// Chat navigation shared by every event loop: wheel + PageUp/PageDown.
-/// Returns true when the event was navigation (consumed) — the caller then
-/// skips its own handling. Other mouse events (motion, clicks) are swallowed
-/// too: mouse capture reports them and no prompt wants them.
+/// Chat navigation + selection shared by every event loop: wheel, PageUp/PageDown,
+/// left-button drag to select (copied on release). Returns true when the event was
+/// consumed — the caller then skips its own handling. Other mouse events (motion,
+/// other buttons) are swallowed too: mouse capture reports them and no prompt wants them.
 pub(crate) fn handle_nav(tui: &mut Tui, ev: &Event) -> bool {
-    nav(&mut tui.chat, ev)
+    nav(&mut tui.chat, ev, &mut crate::tui::select::copy)
 }
 
-fn nav(chat: &mut ChatBuffer, ev: &Event) -> bool {
+fn nav(chat: &mut ChatBuffer, ev: &Event, copy: &mut dyn FnMut(&str)) -> bool {
     match ev {
         Event::Mouse(m) => {
             match m.kind {
                 MouseEventKind::ScrollUp => chat.scroll_up(WHEEL_LINES),
                 MouseEventKind::ScrollDown => chat.scroll_down(WHEEL_LINES),
+                MouseEventKind::Down(MouseButton::Left) => chat.mouse_down(m.column, m.row),
+                MouseEventKind::Drag(MouseButton::Left) => chat.mouse_drag(m.column, m.row),
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if let Some(text) = chat.mouse_up(m.column, m.row) {
+                        copy(&text);
+                    }
+                }
                 _ => {}
             }
             true
         }
-        Event::Key(KeyEvent {
-            code: KeyCode::PageUp,
-            ..
-        }) => {
-            chat.page_up();
-            true
-        }
-        Event::Key(KeyEvent {
-            code: KeyCode::PageDown,
-            ..
-        }) => {
-            chat.page_down();
-            true
+        Event::Key(k) => {
+            chat.clear_flash();
+            match k.code {
+                KeyCode::PageUp => {
+                    chat.page_up();
+                    true
+                }
+                KeyCode::PageDown => {
+                    chat.page_down();
+                    true
+                }
+                _ => false,
+            }
         }
         _ => false,
     }
@@ -118,6 +125,7 @@ fn nav(chat: &mut ChatBuffer, ev: &Event) -> bool {
 /// screen and `ChatBuffer` re-wraps from source at the new width. An unchanged
 /// size is a no-op (`autoresize()` only resizes when the area differs).
 pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
+    tui.chat.clear_selection(); // flat indices change with the width
     tui.terminal.autoresize()?;
     Ok(())
 }
@@ -150,8 +158,14 @@ pub(crate) fn render_screen(
     .areas(area);
     let lines = chat.visible_in(chat_area);
     f.render_widget(Paragraph::new(lines), chat_area);
+    if let Some(sel) = chat.selection() {
+        let top = chat.view_top();
+        crate::tui::select::highlight(f.buffer_mut(), chat_area, top, &sel);
+    }
     editor.render(f, box_area);
-    if chat.unread() {
+    if let Some(label) = chat.flash() {
+        rule_label(f.buffer_mut(), box_area, label, theme::brand());
+    } else if chat.unread() {
         rule_label(f.buffer_mut(), box_area, NEW_MESSAGE, theme::brand());
     }
     f.render_widget(status, status_area);
@@ -180,8 +194,11 @@ pub(crate) fn draw(
 mod tests {
     use super::*;
     use crate::tui::chat::Source;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
     use ratatui::Terminal;
 
     fn screen_rows(w: u16, h: u16, chat: &mut ChatBuffer, editor: &InputBox) -> Vec<String> {
@@ -307,13 +324,17 @@ mod tests {
         );
     }
 
-    fn mouse(kind: MouseEventKind) -> Event {
+    fn mouse_at(kind: MouseEventKind, column: u16, row: u16) -> Event {
         Event::Mouse(MouseEvent {
             kind,
-            column: 0,
-            row: 0,
+            column,
+            row,
             modifiers: KeyModifiers::NONE,
         })
+    }
+
+    fn mouse(kind: MouseEventKind) -> Event {
+        mouse_at(kind, 0, 0)
     }
 
     fn filled_chat(n: usize) -> ChatBuffer {
@@ -328,12 +349,12 @@ mod tests {
     #[test]
     fn nav_wheel_scrolls_three_lines_and_consumes_mouse_events() {
         let mut c = filled_chat(20);
-        assert!(nav(&mut c, &mouse(MouseEventKind::ScrollUp)));
+        assert!(nav(&mut c, &mouse(MouseEventKind::ScrollUp), &mut |_| {}));
         assert_eq!(c.visible(80, 5)[0].spans[0].content, "l12");
-        assert!(nav(&mut c, &mouse(MouseEventKind::ScrollDown)));
+        assert!(nav(&mut c, &mouse(MouseEventKind::ScrollDown), &mut |_| {}));
         assert!(c.is_following());
         // motion / clicks are swallowed but change nothing
-        assert!(nav(&mut c, &mouse(MouseEventKind::Moved)));
+        assert!(nav(&mut c, &mouse(MouseEventKind::Moved), &mut |_| {}));
         assert!(c.is_following());
     }
 
@@ -341,12 +362,85 @@ mod tests {
     fn nav_page_keys_scroll_a_page_and_other_keys_pass_through() {
         let mut c = filled_chat(40);
         let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
-        assert!(nav(&mut c, &key(KeyCode::PageUp)));
+        assert!(nav(&mut c, &key(KeyCode::PageUp), &mut |_| {}));
         assert!(!c.is_following());
-        assert!(nav(&mut c, &key(KeyCode::PageDown)));
+        assert!(nav(&mut c, &key(KeyCode::PageDown), &mut |_| {}));
         assert!(c.is_following());
-        assert!(!nav(&mut c, &key(KeyCode::Char('a'))));
-        assert!(!nav(&mut c, &Event::Paste("x".into())));
+        assert!(!nav(&mut c, &key(KeyCode::Char('a')), &mut |_| {}));
+        assert!(!nav(&mut c, &Event::Paste("x".into()), &mut |_| {}));
+    }
+
+    #[test]
+    fn nav_drag_copies_on_release_and_flashes() {
+        let mut c = filled_chat(20);
+        c.visible_in(Rect::new(0, 0, 80, 5));
+        let mut copied = Vec::new();
+        let mut cp = |t: &str| copied.push(t.to_string());
+        let left = MouseButton::Left;
+        assert!(nav(
+            &mut c,
+            &mouse_at(MouseEventKind::Down(left), 0, 1),
+            &mut cp
+        ));
+        assert!(nav(
+            &mut c,
+            &mouse_at(MouseEventKind::Drag(left), 2, 2),
+            &mut cp
+        ));
+        assert!(nav(
+            &mut c,
+            &mouse_at(MouseEventKind::Up(left), 2, 2),
+            &mut cp
+        ));
+        assert_eq!(copied, vec!["l16\nl17".to_string()]);
+        assert_eq!(c.flash(), Some(crate::tui::chat::COPIED));
+        assert!(c.selection().is_none());
+        // any key clears the flash and still passes non-nav keys through
+        let key = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(!nav(&mut c, &key, &mut |_| {}));
+        assert!(c.flash().is_none());
+    }
+
+    #[test]
+    fn nav_drag_below_the_pane_scrolls_down() {
+        let mut c = filled_chat(40);
+        c.visible_in(Rect::new(0, 0, 80, 5));
+        c.scroll_up(6);
+        let before = c.offset();
+        let left = MouseButton::Left;
+        nav(
+            &mut c,
+            &mouse_at(MouseEventKind::Down(left), 0, 0),
+            &mut |_| {},
+        );
+        nav(
+            &mut c,
+            &mouse_at(MouseEventKind::Drag(left), 0, 9),
+            &mut |_| {},
+        );
+        assert_eq!(c.offset(), before - 1);
+    }
+
+    #[test]
+    fn selection_renders_reversed_and_flash_takes_the_rule_slot() {
+        let mut chat = filled_chat(60);
+        let editor = InputBox::new();
+        screen_rows(80, 24, &mut chat, &editor); // records the 80x21 pane
+        chat.mouse_down(0, 19);
+        chat.mouse_drag(2, 20);
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| render_screen(f, &mut chat, &editor, Line::raw("status")))
+            .unwrap();
+        let b = term.backend().buffer();
+        assert!(b[(0, 19)].modifier.contains(Modifier::REVERSED));
+        assert!(b[(2, 20)].modifier.contains(Modifier::REVERSED));
+        assert!(!b[(3, 20)].modifier.contains(Modifier::REVERSED));
+        chat.mouse_up(2, 20);
+        chat.scroll_up(3);
+        chat.push(Source::Text(Text::raw("fresh"))); // unread too: flash wins the slot
+        let rows = screen_rows(80, 24, &mut chat, &editor);
+        assert!(rows[21].starts_with('─'));
+        assert!(rows[21].trim_end().ends_with("copied"), "{:?}", rows[21]);
     }
 
     #[test]

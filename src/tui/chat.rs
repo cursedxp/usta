@@ -262,7 +262,6 @@ impl ChatBuffer {
     }
 
     /// Flat index of the pane's first visible row at the current offset.
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn view_top(&mut self) -> usize {
         let w = self.width;
         let total = self.flat(w).len();
@@ -271,14 +270,12 @@ impl ChatBuffer {
         (total - off).saturating_sub(h)
     }
 
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn mouse_down(&mut self, x: u16, y: u16) {
         self.flash = None;
         let top = self.view_top();
         self.sel = select::cell_to_pos(self.area, top, x, y).map(|p| Sel { anchor: p, head: p });
     }
 
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn mouse_drag(&mut self, x: u16, y: u16) {
         if self.sel.is_none() {
             return;
@@ -301,7 +298,6 @@ impl ChatBuffer {
     }
 
     /// Finish the drag: `Some(text)` when something was selected (flash set to "copied").
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn mouse_up(&mut self, x: u16, y: u16) -> Option<String> {
         self.set_head(x, y); // no auto-scroll on release
         let sel = self.sel.take()?;
@@ -319,24 +315,25 @@ impl ChatBuffer {
         Some(text)
     }
 
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn selection(&self) -> Option<Sel> {
         self.sel
     }
 
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn flash(&self) -> Option<&'static str> {
         self.flash
     }
 
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn clear_flash(&mut self) {
         self.flash = None;
     }
 
-    #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn clear_selection(&mut self) {
         self.sel = None;
+    }
+
+    #[cfg(test)]
+    pub fn offset(&self) -> usize {
+        self.offset
     }
 
     pub fn scroll_up(&mut self, n: usize) {
