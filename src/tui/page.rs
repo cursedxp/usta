@@ -10,7 +10,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use crate::tui::convert::ansi_to_text;
 use crate::tui::editor::InputBox;
 use crate::tui::status::{render_status, Status};
-use crate::tui::term::{Tui, VIEWPORT_H};
+use crate::tui::term::{viewport_height, Tui};
 use crate::tui::theme;
 use crate::ui;
 
@@ -96,10 +96,12 @@ pub(crate) fn draw(
     watch: Option<(bool, bool, usize)>,
     verify_failing: bool,
 ) -> Result<()> {
+    let width = current_width(tui);
+    tui.set_height(viewport_height(editor.desired_rows(width)))?;
+    let box_h = tui.height() - 1;
     tui.terminal.draw(|f| {
         let [box_area, status_area] =
-            Layout::vertical([Constraint::Length(VIEWPORT_H - 1), Constraint::Length(1)])
-                .areas(f.area());
+            Layout::vertical([Constraint::Length(box_h), Constraint::Length(1)]).areas(f.area());
         editor.render(f, box_area);
         f.render_widget(
             render_status(status, tokens, window, watch, verify_failing),
@@ -136,5 +138,16 @@ mod tests {
             own.contains("fn handle_resize"),
             "page.rs lost its handle_resize helper"
         );
+    }
+
+    #[test]
+    fn draw_resizes_the_viewport_before_painting() {
+        let src = include_str!("page.rs");
+        let draw = src.split("pub(crate) fn draw(").nth(1).expect("draw var");
+        let set = draw.find("set_height(").expect("draw set_height çağırmalı");
+        let paint = draw
+            .find("terminal.draw(")
+            .expect("draw terminal.draw çağırmalı");
+        assert!(set < paint, "yükseklik çizimden önce ayarlanmalı");
     }
 }

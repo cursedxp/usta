@@ -242,7 +242,6 @@ impl InputBox {
     }
 
     /// Text rows this box wants at `width` (prefix deducted), clamped to 1..=MAX_INPUT_ROWS.
-    #[allow(dead_code)] // consumed by the viewport sizing in Task 3
     pub fn desired_rows(&self, width: u16) -> u16 {
         let inner = width.saturating_sub(2) as usize;
         let (rows, _, _) = wrap_rows(self.lines(), inner, self.cursor_rc());
@@ -289,7 +288,6 @@ impl InputBox {
 }
 
 /// Most text rows the box shows before it scrolls (opencode-style growth, 1..=8).
-#[allow(dead_code)] // consumed by the viewport sizing in Task 3
 pub const MAX_INPUT_ROWS: u16 = 8;
 
 fn cell(ch: char) -> usize {

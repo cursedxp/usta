@@ -13,12 +13,16 @@ use ratatui::layout::Position;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use crate::tui::backend_wrap::{fallback_seed, TrackedBackend};
+use crate::tui::editor::MAX_INPUT_ROWS;
 
-/// Bottom region: input box (3-5 lines) + status line (1).
-pub const VIEWPORT_H: u16 = 6;
+/// Bottom region: rule + 1..=8 input rows + status line, height follows the text.
+pub fn viewport_height(rows: u16) -> u16 {
+    rows.clamp(1, MAX_INPUT_ROWS) + 2
+}
 
 pub struct Tui {
     pub terminal: Terminal<TrackedBackend<Stdout>>,
+    height: u16,
 }
 
 /// Raw mode + inline viewport. Restore is chained onto the panic hook — the
@@ -54,13 +58,45 @@ pub fn setup() -> Result<Tui> {
     let seed = crossterm::cursor::position()
         .map(|(x, y)| Position { x, y })
         .unwrap_or_else(|_| fallback_seed(crossterm::terminal::size().map_or(0, |(_, h)| h)));
-    let terminal = Terminal::with_options(
+    let height = viewport_height(1);
+    let terminal = inline_terminal(seed, height)?;
+    Ok(Tui { terminal, height })
+}
+
+fn inline_terminal(seed: Position, h: u16) -> Result<Terminal<TrackedBackend<Stdout>>> {
+    Ok(Terminal::with_options(
         TrackedBackend::new(CrosstermBackend::new(std::io::stdout()), seed),
         TerminalOptions {
-            viewport: Viewport::Inline(VIEWPORT_H),
+            viewport: Viewport::Inline(h),
         },
-    )?;
-    Ok(Tui { terminal })
+    )?)
+}
+
+impl Tui {
+    pub fn height(&self) -> u16 {
+        self.height
+    }
+
+    /// ratatui 0.30 has no API to change an inline viewport's height. Clear the old
+    /// region, then rebuild the inline terminal seeded at the old viewport's top row —
+    /// growing near the bottom scrolls the screen up (ratatui's own inline placement),
+    /// shrinking leaves the region top-anchored. No CPR query: the seed is known.
+    pub fn set_height(&mut self, h: u16) -> Result<()> {
+        if h == self.height {
+            return Ok(());
+        }
+        let top = self.terminal.get_frame().area().y;
+        self.terminal.clear()?;
+        // clear() puts the real cursor back on the input caret, but the rebuild's
+        // `append_lines` prints its newlines from the REAL cursor while the new
+        // TrackedBackend assumes the seed row — park it on the seed so both agree,
+        // or every growth at the bottom leaves blank rows above the region.
+        self.terminal
+            .set_cursor_position(Position { x: 0, y: top })?;
+        self.terminal = inline_terminal(Position { x: 0, y: top }, h)?;
+        self.height = h;
+        Ok(())
+    }
 }
 
 /// Turn off raw mode — idempotent, swallows errors (no panics on the shutdown path).
@@ -81,6 +117,25 @@ impl Drop for Tui {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn viewport_is_rule_plus_rows_plus_status() {
+        assert_eq!(viewport_height(1), 3);
+        assert_eq!(viewport_height(8), 10);
+    }
+
+    /// Source pin: the rebuild's `append_lines` writes from the REAL cursor, so it
+    /// must sit on the seed row before the new terminal is built.
+    #[test]
+    fn set_height_parks_the_cursor_on_the_seed_before_rebuilding() {
+        let src = include_str!("term.rs");
+        let body = src.split("pub fn set_height(").nth(1).expect("set_height");
+        let park = body.find("set_cursor_position(").expect("cursor parked");
+        let rebuild = body.find("inline_terminal(").expect("rebuild");
+        assert!(park < rebuild);
+    }
+
     /// Source pin: the ONLY real CPR happens in setup(), before any
     /// `EventStream` exists (run.rs creates the stream after calling setup).
     /// Guards both halves so neither can silently regress.
