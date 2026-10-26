@@ -221,21 +221,32 @@ fn last_user_text(history: &[Message]) -> String {
         .unwrap_or_default()
 }
 
-/// Parse `claude -p --output-format json` output. If it's not JSON (old
-/// version / unexpected output) fall back to raw text — continues without a session id.
-pub fn parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>) {
+/// Parse `claude -p --output-format json` output. An `is_error` result (credit,
+/// API error, missing session — exit 0 or not) is an `Err` carrying its text,
+/// never a mentor reply. Not JSON (old version / unexpected output) → raw text,
+/// continuing without a session id.
+pub fn parse_cli_output(stdout: &str) -> Result<(String, Option<String>, Option<u64>)> {
     #[derive(serde::Deserialize)]
     struct CliJson {
         result: Option<String>,
         session_id: Option<String>,
         usage: Option<serde_json::Value>,
+        is_error: Option<bool>,
+        subtype: Option<String>,
     }
     match serde_json::from_str::<CliJson>(stdout) {
+        Ok(j) if j.is_error == Some(true) => {
+            let why = j.result.or(j.subtype);
+            bail!(
+                "claude CLI error: {}",
+                why.as_deref().unwrap_or("unknown error")
+            )
+        }
         Ok(j) => {
             let tokens = j.usage.as_ref().and_then(anthropic::sum_context_tokens);
-            (j.result.unwrap_or_default(), j.session_id, tokens)
+            Ok((j.result.unwrap_or_default(), j.session_id, tokens))
         }
-        Err(_) => (stdout.trim().to_string(), None, None),
+        Err(_) => Ok((stdout.trim().to_string(), None, None)),
     }
 }
 
@@ -287,25 +298,19 @@ pub fn parse_stream_output(stdout: &str) -> Result<(String, Option<String>, Opti
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .find(|v| v["type"] == "result")
         .context("claude CLI returned no result")?;
-    if v["is_error"] == true {
-        let why = v["result"]
-            .as_str()
-            .or(v["subtype"].as_str())
-            .unwrap_or("unknown error");
-        bail!("claude CLI error: {why}");
-    }
-    Ok(parse_cli_output(&v.to_string()))
+    parse_cli_output(&v.to_string())
 }
 
-/// On a non-zero exit in stream mode the useful message is the `is_error` result line on
-/// stdout (stderr is empty). `None` -> fall back to the stderr-based exit-status error.
-fn stream_failure(stream: bool, stdout: &str) -> Option<String> {
-    if !stream {
-        return None;
-    }
-    parse_stream_output(stdout)
-        .err()
-        .map(|e| e.to_string())
+/// On a non-zero exit the useful message is the `is_error` result on stdout (stderr
+/// is empty) — json mode prints one object, stream mode a result line among NDJSON.
+/// `None` → fall back to the stderr-based exit-status error.
+fn cli_failure(stream: bool, stdout: &str) -> Option<String> {
+    let err = if stream {
+        parse_stream_output(stdout).err()
+    } else {
+        parse_cli_output(stdout).err()
+    };
+    err.map(|e| e.to_string())
         .filter(|m| m.starts_with("claude CLI error:"))
 }
 
@@ -429,7 +434,7 @@ async fn run_claude_cli(
         .context("error waiting for claude CLI output")?;
 
     if !output.status.success() {
-        if let Some(msg) = stream_failure(stream, &String::from_utf8_lossy(&output.stdout)) {
+        if let Some(msg) = cli_failure(stream, &String::from_utf8_lossy(&output.stdout)) {
             bail!("{msg}");
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -444,7 +449,7 @@ async fn run_claude_cli(
     if stream {
         parse_stream_output(&stdout)
     } else {
-        Ok(parse_cli_output(&stdout))
+        parse_cli_output(&stdout)
     }
 }
 
@@ -637,14 +642,14 @@ mod tests {
     #[test]
     fn parse_cli_output_reads_json_result_and_session() {
         let out = r#"{"type":"result","result":"merhaba","session_id":"abc-123","is_error":false}"#;
-        let (text, sid, _) = parse_cli_output(out);
+        let (text, sid, _) = parse_cli_output(out).unwrap();
         assert_eq!(text, "merhaba");
         assert_eq!(sid, Some("abc-123".to_string()));
     }
 
     #[test]
     fn parse_cli_output_falls_back_to_plain_text() {
-        let (text, sid, _) = parse_cli_output("  düz metin yanıt  ");
+        let (text, sid, _) = parse_cli_output("  düz metin yanıt  ").unwrap();
         assert_eq!(text, "düz metin yanıt");
         assert_eq!(sid, None);
     }
@@ -652,15 +657,22 @@ mod tests {
     #[test]
     fn parse_cli_output_reads_usage_tokens() {
         let out = r#"{"result":"m","session_id":"s1","usage":{"input_tokens":100,"cache_read_input_tokens":900}}"#;
-        let (_, _, tokens) = parse_cli_output(out);
+        let (_, _, tokens) = parse_cli_output(out).unwrap();
         assert_eq!(tokens, Some(1000));
     }
 
     #[test]
     fn parse_cli_output_tokens_none_when_usage_missing() {
         let out = r#"{"result":"m","session_id":"s1"}"#;
-        let (_, _, tokens) = parse_cli_output(out);
+        let (_, _, tokens) = parse_cli_output(out).unwrap();
         assert_eq!(tokens, None);
+    }
+
+    #[test]
+    fn parse_cli_output_errors_on_is_error_json() {
+        let out = r#"{"type":"result","subtype":"success","is_error":true,"result":"Credit balance is too low","session_id":"s"}"#;
+        let err = parse_cli_output(out).unwrap_err().to_string();
+        assert_eq!(err, "claude CLI error: Credit balance is too low");
     }
 
     #[test]
@@ -846,14 +858,22 @@ mod tests {
     }
 
     #[test]
-    fn stream_failure_surfaces_the_result_line_error() {
-        let out = "{\"type\":\"system\"}\n{\"type\":\"result\",\"is_error\":true,\"subtype\":\"error_during_execution\"}\n";
-        let msg = stream_failure(true, out).unwrap();
+    fn cli_failure_surfaces_the_result_error_in_both_modes() {
+        let stream_out = "{\"type\":\"system\"}\n{\"type\":\"result\",\"is_error\":true,\"subtype\":\"error_during_execution\"}\n";
+        let msg = cli_failure(true, stream_out).unwrap();
         assert!(msg.contains("error_during_execution"), "{msg}");
-        // Non-stream mode and stdout without a result line keep the stderr bail.
-        assert!(stream_failure(false, out).is_none());
-        assert!(stream_failure(true, "").is_none());
-        assert!(stream_failure(true, "{\"type\":\"system\"}\n").is_none());
+        // json mode: the exit-1 result text is no longer dropped (stderr is empty).
+        let json_out = r#"{"type":"result","is_error":true,"result":"API Error: Claude's response exceeded the 32000 output token maximum"}"#;
+        let msg = cli_failure(false, json_out).unwrap();
+        assert!(
+            msg.contains("exceeded the 32000 output token maximum"),
+            "{msg}"
+        );
+        // stdout without an is_error result keeps the stderr bail.
+        assert!(cli_failure(true, "").is_none());
+        assert!(cli_failure(true, "{\"type\":\"system\"}\n").is_none());
+        assert!(cli_failure(false, "plain text").is_none());
+        assert!(cli_failure(false, r#"{"result":"ok","is_error":false}"#).is_none());
     }
 
     #[test]
