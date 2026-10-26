@@ -283,6 +283,7 @@ pub(crate) async fn ask_topic(
     loop {
         crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None, false)?;
         match events.next().await {
+            Some(Ok(ev)) if crate::tui::page::handle_nav(tui, &ev) => {}
             Some(Ok(Event::Key(k))) => {
                 // Empty Enter = resume sentinel (only when there's a topic to resume) —
                 // we catch it before the editor swallows the empty line (spec K1 rule 1).

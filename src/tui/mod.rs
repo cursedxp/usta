@@ -2,7 +2,6 @@
 //! In plain mode (ui::is_plain) this module is never used.
 
 pub mod ask;
-#[allow(dead_code)] // scroll/unread API wired in Task 4
 pub mod chat;
 pub mod convert;
 pub mod editor;

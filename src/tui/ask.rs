@@ -53,6 +53,7 @@ pub(crate) async fn ask_live(
         tokio::select! {
             r = &mut fut => return Ok(AskOutcome::Reply(r?)),
             Some(Ok(ev)) = events.next() => {
+                if crate::tui::page::handle_nav(tui, &ev) { continue; }
                 // Paste is still processed by the editor even while locked (doesn't submit).
                 if let Event::Paste(s) = &ev {
                     editor.insert_str(s);
@@ -109,6 +110,7 @@ pub(crate) async fn tui_confirm(
     loop {
         crate::tui::page::draw(tui, editor, &Status::Idle, None, 0, None, false)?;
         match events.next().await {
+            Some(Ok(ev)) if crate::tui::page::handle_nav(tui, &ev) => {}
             Some(Ok(Event::Key(k))) => {
                 if matches!(k.code, KeyCode::Esc) {
                     editor.clear();

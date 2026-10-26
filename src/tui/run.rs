@@ -6,8 +6,8 @@
 //! visual-generation trigger).
 //!
 //! In plain mode (ui::is_plain) this module is never used — main's branching
-//! routes the plain path to run_plain_loop. There is NO alt-screen here: only
-//! an inline viewport, scrollback is preserved.
+//! routes the plain path to run_plain_loop. The UI owns the fullscreen
+//! alternate screen; the chat lives in usta's own pane, not in scrollback.
 
 use std::path::{Path, PathBuf};
 
@@ -449,6 +449,7 @@ pub async fn run(
                     if maybe_ev.is_none() { break; } // stream ended = Eof (spec B4)
                     continue; // single event error — ignore
                 };
+                if crate::tui::page::handle_nav(&mut tui, &ev) { continue; }
                 let k = match ev {
                     Event::Key(k) => k,
                     // Bracketed paste: single event, Enter isn't triggered, structure is preserved.

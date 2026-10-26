@@ -3,8 +3,9 @@
 //! (cleanup round, Task 4).
 
 use anyhow::Result;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::text::{Line, Text};
+use crossterm::event::{Event, KeyCode, KeyEvent, MouseEventKind};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
@@ -61,6 +62,7 @@ pub(crate) fn flush_notices(tui: &mut Tui) -> Result<()> {
 
 /// Push the user's submitted line to the chat pane (wrapped at render time).
 pub(crate) fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
+    tui.chat.jump_bottom();
     tui.chat.push(Source::Echo(line.to_string()));
     Ok(())
 }
@@ -69,6 +71,46 @@ pub(crate) fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
 /// Falls back to 80 if measurement fails (wrapping doesn't break, just gets narrow).
 pub(crate) fn current_width(tui: &Tui) -> u16 {
     tui.terminal.size().map(|s| s.width).unwrap_or(80)
+}
+
+/// Wheel notch = this many chat lines.
+const WHEEL_LINES: usize = 3;
+const NEW_MESSAGE: &str = "↓ new message";
+
+/// Chat navigation shared by every event loop: wheel + PageUp/PageDown.
+/// Returns true when the event was navigation (consumed) — the caller then
+/// skips its own handling. Other mouse events (motion, clicks) are swallowed
+/// too: mouse capture reports them and no prompt wants them.
+pub(crate) fn handle_nav(tui: &mut Tui, ev: &Event) -> bool {
+    nav(&mut tui.chat, ev)
+}
+
+fn nav(chat: &mut ChatBuffer, ev: &Event) -> bool {
+    match ev {
+        Event::Mouse(m) => {
+            match m.kind {
+                MouseEventKind::ScrollUp => chat.scroll_up(WHEEL_LINES),
+                MouseEventKind::ScrollDown => chat.scroll_down(WHEEL_LINES),
+                _ => {}
+            }
+            true
+        }
+        Event::Key(KeyEvent {
+            code: KeyCode::PageUp,
+            ..
+        }) => {
+            chat.page_up();
+            true
+        }
+        Event::Key(KeyEvent {
+            code: KeyCode::PageDown,
+            ..
+        }) => {
+            chat.page_down();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Refresh ratatui's idea of the screen size after a terminal resize. The next
@@ -98,6 +140,17 @@ pub(crate) fn render_screen(
     .areas(area);
     let lines = chat.visible(chat_area.width, chat_area.height);
     f.render_widget(Paragraph::new(lines), chat_area);
+    if chat.unread() && chat_area.height > 0 {
+        let row = Rect {
+            y: chat_area.y + chat_area.height - 1,
+            height: 1,
+            ..chat_area
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(NEW_MESSAGE, theme::brand())).right_aligned()),
+            row,
+        );
+    }
     editor.render(f, box_area);
     f.render_widget(status, status_area);
 }
@@ -122,6 +175,7 @@ pub(crate) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -228,5 +282,91 @@ mod tests {
             !draw.contains("set_height("),
             "no viewport rebuild in fullscreen"
         );
+    }
+
+    fn mouse(kind: MouseEventKind) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn filled_chat(n: usize) -> ChatBuffer {
+        let mut c = ChatBuffer::default();
+        for i in 0..n {
+            c.push(Source::Text(Text::raw(format!("l{i}"))));
+        }
+        c.visible(80, 5);
+        c
+    }
+
+    #[test]
+    fn nav_wheel_scrolls_three_lines_and_consumes_mouse_events() {
+        let mut c = filled_chat(20);
+        assert!(nav(&mut c, &mouse(MouseEventKind::ScrollUp)));
+        assert_eq!(c.visible(80, 5)[0].spans[0].content, "l12");
+        assert!(nav(&mut c, &mouse(MouseEventKind::ScrollDown)));
+        assert!(c.is_following());
+        // motion / clicks are swallowed but change nothing
+        assert!(nav(&mut c, &mouse(MouseEventKind::Moved)));
+        assert!(c.is_following());
+    }
+
+    #[test]
+    fn nav_page_keys_scroll_a_page_and_other_keys_pass_through() {
+        let mut c = filled_chat(40);
+        let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        assert!(nav(&mut c, &key(KeyCode::PageUp)));
+        assert!(!c.is_following());
+        assert!(nav(&mut c, &key(KeyCode::PageDown)));
+        assert!(c.is_following());
+        assert!(!nav(&mut c, &key(KeyCode::Char('a'))));
+        assert!(!nav(&mut c, &Event::Paste("x".into())));
+    }
+
+    #[test]
+    fn indicator_shows_only_while_unread() {
+        let mut chat = filled_chat(30);
+        let editor = InputBox::new();
+        let rows = screen_rows(40, 10, &mut chat, &editor); // pane = 7 rows
+        assert!(!rows[6].contains("new message"));
+        chat.scroll_up(3);
+        chat.push(Source::Text(Text::raw("fresh")));
+        let rows = screen_rows(40, 10, &mut chat, &editor);
+        assert!(
+            rows[6].trim_end().ends_with("↓ new message"),
+            "{:?}",
+            rows[6]
+        );
+        chat.scroll_down(100);
+        let rows = screen_rows(40, 10, &mut chat, &editor);
+        assert!(!rows[6].contains("new message"));
+    }
+
+    /// Source pin: every loop that reads the EventStream routes through handle_nav
+    /// (otherwise the wheel is silently ignored in that prompt, like Resize once was).
+    #[test]
+    fn mouse_and_page_keys_are_handled_in_every_event_loop() {
+        for (name, src, loops) in [
+            ("run.rs", include_str!("run.rs"), 1),
+            ("ask.rs", include_str!("ask.rs"), 2),
+            ("entry.rs", include_str!("entry.rs"), 1),
+            ("intro.rs", include_str!("intro.rs"), 1),
+        ] {
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            assert_eq!(
+                prod.matches("page::handle_nav(").count(),
+                loops,
+                "{name}: expected {loops} handle_nav call(s)"
+            );
+        }
+        let own = include_str!("page.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(own.contains("Event::Mouse"));
+        assert!(own.contains("KeyCode::PageUp") && own.contains("KeyCode::PageDown"));
     }
 }
