@@ -39,6 +39,8 @@ pub struct InputBox {
     next_image: usize,
     /// Images of the last submitted line - drained by `take_images`.
     submitted: Vec<PastedImage>,
+    /// Image attach is live only once the session loop owns the editor (spec A4).
+    allow_images: bool,
 }
 
 /// Only the newest this-many history entries keep their images (matches the A1 horizon).
@@ -73,6 +75,7 @@ impl InputBox {
             images: Vec::new(),
             next_image: 1,
             submitted: Vec::new(),
+            allow_images: false,
         }
     }
 
@@ -269,9 +272,17 @@ impl InputBox {
         self.images.push((n, Arc::new(img)));
     }
 
+    /// Allow `[Image #N]` attach (Ctrl+V image, dropped image file). Off until the session starts.
+    pub fn set_allow_images(&mut self, on: bool) {
+        self.allow_images = on;
+    }
+
     /// Bracketed paste: a dragged-in image file (the terminal pastes its path) becomes a
     /// token; anything else is ordinary text.
     pub fn paste(&mut self, s: &str) {
+        if !self.allow_images {
+            return self.insert_str(s);
+        }
         match image_paste::load_dropped(s) {
             Some(Ok(img)) => self.attach_image(img),
             Some(Err(e)) => {
@@ -289,7 +300,8 @@ impl InputBox {
 
     fn apply_clip(&mut self, clip: Clip) {
         match clip {
-            Clip::Image(img) => self.attach_image(img),
+            Clip::Image(img) if self.allow_images => self.attach_image(img),
+            Clip::Image(_) => ui::notice("images can be attached once the session has started"),
             Clip::Text(t) => self.insert_str(&t),
             Clip::Failed(e) => ui::notice(&format!("couldn't attach image: {e}")),
             Clip::Empty => {}
@@ -1046,6 +1058,7 @@ mod tests {
             .save(&p)
             .unwrap();
         let mut b = InputBox::new();
+        b.set_allow_images(true);
         b.paste(&p.to_str().unwrap().replace(' ', "\\ "));
         assert_eq!(b.value(), "[Image #1]");
         assert!(matches!(
@@ -1084,6 +1097,7 @@ mod tests {
         std::fs::write(&p, b"not a png").unwrap();
         let raw = p.to_str().unwrap().to_string();
         let mut b = InputBox::new();
+        b.set_allow_images(true);
         let n = notices_after(|| b.paste(&raw));
         assert_eq!(b.value(), raw);
         assert!(
@@ -1095,6 +1109,7 @@ mod tests {
     #[test]
     fn failed_clipboard_image_leaves_a_notice() {
         let mut b = InputBox::new();
+        b.set_allow_images(true);
         let n = notices_after(|| b.apply_clip(Clip::Failed("bad size".into())));
         assert_eq!(b.value(), "");
         assert!(
@@ -1104,8 +1119,48 @@ mod tests {
     }
 
     #[test]
+    fn images_are_off_by_default() {
+        let b = InputBox::new();
+        assert!(!b.allow_images);
+    }
+
+    #[test]
+    fn clip_image_before_the_session_inserts_nothing_and_notices() {
+        let mut b = InputBox::new();
+        let n = notices_after(|| b.apply_clip(Clip::Image(pasted(1))));
+        assert_eq!(b.value(), "");
+        assert!(
+            n.iter()
+                .any(|m| m == "images can be attached once the session has started"),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn dropped_path_before_the_session_stays_text() {
+        let dir = std::env::temp_dir().join(format!("usta editor off {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("ok.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]))
+            .save(&p)
+            .unwrap();
+        let mut b = InputBox::new();
+        b.paste(p.to_str().unwrap());
+        assert_eq!(b.value(), p.to_str().unwrap());
+    }
+
+    #[test]
+    fn run_enables_images_before_the_main_loop() {
+        let src = include_str!("run.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        let before_loop = production.split("\n    loop {").next().unwrap();
+        assert!(before_loop.contains("editor.set_allow_images(true);"));
+    }
+
+    #[test]
     fn clipboard_image_text_and_empty_are_applied() {
         let mut b = InputBox::new();
+        b.set_allow_images(true);
         b.apply_clip(Clip::Image(pasted(5)));
         b.apply_clip(Clip::Text(" and text".into()));
         b.apply_clip(Clip::Empty);

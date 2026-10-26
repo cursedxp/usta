@@ -429,6 +429,7 @@ pub async fn run(
     let approach = crate::tui::polite::approach_text(project_root, global, &topic);
     let mut live = crate::tui::polite::live_from_approach(&approach);
     let mut pending = crate::tui::polite::PendingChanges::new();
+    editor.set_allow_images(true);
     loop {
         crate::tui::page::draw(
             &mut tui,
