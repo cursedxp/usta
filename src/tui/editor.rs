@@ -1,14 +1,13 @@
-//! Live input box: tui-input editor state + Vec-based up/down
+//! Live input box: ratatui-textarea editing engine + Vec-based up/down
 //! history. The TUI-path counterpart of Rustyline. Spec §6.
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
-use tui_input::backend::crossterm::to_input_request;
-use tui_input::Input;
+use ratatui_textarea::{CursorMove, TextArea};
 
 use crate::tui::theme;
 
@@ -23,63 +22,79 @@ pub enum Action {
 }
 
 pub struct InputBox {
-    input: Input,
+    ta: TextArea<'static>,
     history: Vec<String>,
-    /// None = fresh line; Some(i) = history[i] is being shown.
+    /// None = fresh text; Some(i) = history[i] is being shown.
     cursor: Option<usize>,
     /// Fresh text from before entering history — comes back with Down.
     stash: String,
 }
 
+/// TextArea holding `s`, cursor at the very end (recall / reset).
+fn area_with(s: &str) -> TextArea<'static> {
+    let mut ta = TextArea::new(s.split('\n').map(str::to_string).collect());
+    ta.move_cursor(CursorMove::Bottom);
+    ta.move_cursor(CursorMove::End);
+    ta
+}
+
 impl InputBox {
     pub fn new() -> Self {
         Self {
-            input: Input::default(),
+            ta: TextArea::default(),
             history: Vec::new(),
             cursor: None,
             stash: String::new(),
         }
     }
 
-    // Editor's public API — the loop gets the line from Action::Submit, and the
-    // editor draws the cursor itself, so these aren't called right now (value() is used in tests).
-    pub fn value(&self) -> &str {
-        self.input.value()
+    pub fn value(&self) -> String {
+        self.ta.lines().join("\n")
     }
-    #[allow(dead_code)]
-    pub fn visual_cursor(&self) -> usize {
-        self.input.visual_cursor()
+    pub fn lines(&self) -> &[String] {
+        self.ta.lines()
+    }
+    /// (data row, char column) of the cursor.
+    pub fn cursor_rc(&self) -> (usize, usize) {
+        let c = self.ta.cursor();
+        (c.0, c.1)
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
-        {
+        let m = key.modifiers;
+        let ctrl = m.contains(KeyModifiers::CONTROL);
+        if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
             return Action::Exit;
         }
-        // Newline insert (multi-line input): Shift+Enter / Alt+Enter (modern terminals via
-        // kitty keyboard protocol) or Ctrl+J (LF — universal fallback, works everywhere).
-        // Bare Enter still submits.
-        let newline = (matches!(key.code, KeyCode::Enter)
-            && key
-                .modifiers
-                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT))
-            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('j'));
+        // Newline: Shift/Ctrl/Alt+Enter (kitty protocol) or Ctrl+J (universal). Bare Enter submits.
+        let newline = (key.code == KeyCode::Enter
+            && m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL))
+            || (ctrl && key.code == KeyCode::Char('j'));
         if newline {
-            self.cursor = None;
-            self.input.handle(tui_input::InputRequest::InsertChar('\n'));
+            self.ta.insert_newline();
             return Action::None;
         }
+        let (row, _) = self.cursor_rc();
+        let last_row = self.ta.lines().len() - 1;
+        let shift = m.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Enter => {
-                let line = self.input.value().trim().to_string();
+                let line = self.value().trim().to_string();
                 if line.is_empty() {
                     return Action::None;
                 }
                 self.history.push(line.clone());
-                self.input.reset();
-                self.cursor = None;
+                self.clear();
                 Action::Submit(line)
+            }
+            // opencode: Up/Down move the cursor inside multiline text; history only from the edge row.
+            KeyCode::Up if shift || row > 0 => {
+                self.move_to(CursorMove::Up, shift);
+                Action::None
+            }
+            KeyCode::Down if shift || row < last_row => {
+                self.move_to(CursorMove::Down, shift);
+                Action::None
             }
             KeyCode::Up => {
                 self.recall_prev();
@@ -89,59 +104,139 @@ impl InputBox {
                 self.recall_next();
                 Action::None
             }
+            // Edits keep `self.cursor`: `edited_recall()` compares the text instead.
             _ => {
-                self.cursor = None;
-                if let Some(req) = to_input_request(&Event::Key(key)) {
-                    self.input.handle(req);
-                }
+                self.edit(key);
                 Action::None
             }
         }
     }
 
-    /// Insert pasted text at the cursor position (bracketed paste). Line breaks
-    /// are PRESERVED — so the model can see list/log structure; since the box is
-    /// single-line, they're shown as ⏎ in the render. CRLF → LF is normalized.
-    /// Drop any half-typed text (confirm cancelled — don't leak it into the next prompt).
-    pub fn clear(&mut self) {
-        self.input.reset();
-        self.cursor = None;
+    fn move_to(&mut self, mv: CursorMove, select: bool) {
+        if select {
+            if !self.ta.is_selecting() {
+                self.ta.start_selection();
+            }
+        } else {
+            self.ta.cancel_selection();
+        }
+        self.ta.move_cursor(mv);
     }
 
-    pub fn insert_str(&mut self, s: &str) {
-        self.cursor = None;
-        let cleaned = s.replace("\r\n", "\n").replace('\r', "\n");
-        for ch in cleaned.chars() {
-            self.input.handle(tui_input::InputRequest::InsertChar(ch));
+    /// opencode 2.1.4 default input keybinds (Ctrl+C/D handled by the caller).
+    fn edit(&mut self, key: KeyEvent) {
+        let m = key.modifiers;
+        let ctrl = m.contains(KeyModifiers::CONTROL);
+        let alt = m.contains(KeyModifiers::ALT);
+        let shift = m.contains(KeyModifiers::SHIFT);
+        let mv = match key.code {
+            KeyCode::Left if ctrl || alt => Some(CursorMove::WordBack),
+            KeyCode::Right if ctrl || alt => Some(CursorMove::WordForward),
+            KeyCode::Char('b' | 'B') if alt => Some(CursorMove::WordBack),
+            KeyCode::Char('f' | 'F') if alt => Some(CursorMove::WordForward),
+            KeyCode::Left => Some(CursorMove::Back),
+            KeyCode::Right => Some(CursorMove::Forward),
+            KeyCode::Char('b') if ctrl => Some(CursorMove::Back),
+            KeyCode::Char('f') if ctrl => Some(CursorMove::Forward),
+            KeyCode::Char('a' | 'A') if ctrl => Some(CursorMove::Head),
+            KeyCode::Char('e' | 'E') if ctrl => Some(CursorMove::End),
+            KeyCode::Home if shift => Some(CursorMove::Top),
+            KeyCode::End if shift => Some(CursorMove::Bottom),
+            KeyCode::Home => Some(CursorMove::Head),
+            KeyCode::End => Some(CursorMove::End),
+            _ => None,
+        };
+        if let Some(mv) = mv {
+            // Shift+Home/End = select to buffer start/end; Ctrl+Shift+A/E = select to line edge.
+            let select = shift && !matches!(key.code, KeyCode::Char('B' | 'F'));
+            self.move_to(mv, select);
+            return;
+        }
+        let ta = &mut self.ta;
+        match key.code {
+            KeyCode::Backspace if ctrl || alt => {
+                ta.delete_word();
+            }
+            KeyCode::Backspace => {
+                ta.delete_char();
+            }
+            KeyCode::Delete if ctrl => {
+                ta.delete_next_word();
+            }
+            KeyCode::Delete => {
+                ta.delete_next_char();
+            }
+            KeyCode::Char('d') if alt => {
+                ta.delete_next_word();
+            }
+            KeyCode::Char('w') if ctrl => {
+                ta.delete_word();
+            }
+            KeyCode::Char('k') if ctrl => {
+                ta.delete_line_by_end();
+            }
+            KeyCode::Char('u') if ctrl => {
+                ta.delete_line_by_head();
+            }
+            KeyCode::Char('-') if ctrl => {
+                ta.undo();
+            }
+            KeyCode::Char('.') if ctrl => {
+                ta.redo();
+            }
+            KeyCode::Esc => ta.cancel_selection(),
+            KeyCode::Char(c) if !ctrl && !alt => ta.insert_char(c),
+            _ => {}
         }
     }
 
+    /// Drop any half-typed text (confirm cancelled — don't leak it into the next prompt).
+    pub fn clear(&mut self) {
+        self.ta = TextArea::default();
+        self.cursor = None;
+    }
+
+    /// Insert pasted text at the cursor (bracketed paste). Line breaks are PRESERVED as
+    /// real lines; CRLF / CR → LF.
+    pub fn insert_str(&mut self, s: &str) {
+        let cleaned = s.replace("\r\n", "\n").replace('\r', "\n");
+        self.ta.insert_str(cleaned);
+    }
+
+    /// True when the shown text was edited after a recall — opencode won't overwrite it.
+    fn edited_recall(&self) -> bool {
+        matches!(self.cursor, Some(i) if self.history[i] != self.value())
+    }
+
     fn recall_prev(&mut self) {
-        if self.history.is_empty() {
+        if self.history.is_empty() || self.edited_recall() {
             return;
         }
         let next = match self.cursor {
             None => {
-                self.stash = self.input.value().to_string();
+                self.stash = self.value();
                 self.history.len() - 1
             }
             Some(0) => 0,
             Some(i) => i - 1,
         };
         self.cursor = Some(next);
-        self.input = Input::new(self.history[next].clone());
+        self.ta = area_with(&self.history[next]);
     }
 
     fn recall_next(&mut self) {
+        if self.edited_recall() {
+            return;
+        }
         match self.cursor {
             None => {}
             Some(i) if i + 1 < self.history.len() => {
                 self.cursor = Some(i + 1);
-                self.input = Input::new(self.history[i + 1].clone());
+                self.ta = area_with(&self.history[i + 1]);
             }
             Some(_) => {
                 self.cursor = None;
-                self.input = Input::new(std::mem::take(&mut self.stash));
+                self.ta = area_with(&std::mem::take(&mut self.stash));
             }
         }
     }
@@ -153,8 +248,14 @@ impl InputBox {
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let inner_w = area.width.saturating_sub(2) as usize; // "> " prefix
         let visible = area.height.saturating_sub(1).max(1) as usize; // lines under the rule
-        let (rows, cur_row, cur_col) =
-            wrap_visual(self.input.value(), inner_w, self.input.visual_cursor());
+        let value = self.value();
+        let (r, c) = self.cursor_rc();
+        let idx = self.lines()[..r]
+            .iter()
+            .map(|l| l.chars().count() + 1)
+            .sum::<usize>()
+            + c;
+        let (rows, cur_row, cur_col) = wrap_visual(&value, inner_w, idx);
         // Vertical window: last `visible` lines so the cursor stays visible.
         let start = (cur_row + 1).saturating_sub(visible);
         let lines: Vec<Line> = rows
@@ -453,5 +554,83 @@ mod tests {
         assert_eq!(rows[3], format!("  {}", "a".repeat(18)));
         assert_eq!(rows[4], format!("  a{}", " ".repeat(17)));
         assert_eq!(cur, (3, 4), "cursor after the last char on row 4");
+    }
+
+    fn mods(k: KeyCode, m: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(k, m)
+    }
+
+    #[test]
+    fn shift_enter_and_ctrl_j_insert_real_lines() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "bir");
+        b.handle_key(mods(KeyCode::Enter, KeyModifiers::SHIFT));
+        type_str(&mut b, "iki");
+        b.handle_key(mods(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        type_str(&mut b, "üç");
+        assert_eq!(b.value(), "bir\niki\nüç");
+        assert_eq!(b.lines().len(), 3);
+        assert_eq!(b.cursor_rc(), (2, 2));
+    }
+
+    #[test]
+    fn up_moves_cursor_between_lines_before_history() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "eski");
+        b.handle_key(code(KeyCode::Enter));
+        type_str(&mut b, "a");
+        b.handle_key(mods(KeyCode::Enter, KeyModifiers::SHIFT));
+        type_str(&mut b, "b");
+        b.handle_key(code(KeyCode::Up)); // row 1 -> row 0, no history
+        assert_eq!(b.value(), "a\nb");
+        assert_eq!(b.cursor_rc().0, 0);
+        b.handle_key(code(KeyCode::Up)); // row 0 -> history
+        assert_eq!(b.value(), "eski");
+        b.handle_key(code(KeyCode::Down)); // single line = last row -> back to stash
+        assert_eq!(b.value(), "a\nb");
+    }
+
+    #[test]
+    fn edited_recall_is_not_overwritten_by_up() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "bir");
+        b.handle_key(code(KeyCode::Enter));
+        type_str(&mut b, "iki");
+        b.handle_key(code(KeyCode::Enter));
+        b.handle_key(code(KeyCode::Up));
+        assert_eq!(b.value(), "iki");
+        type_str(&mut b, "X");
+        b.handle_key(code(KeyCode::Up));
+        assert_eq!(b.value(), "ikiX");
+    }
+
+    #[test]
+    fn emacs_line_and_word_keys() {
+        let ctrl = KeyModifiers::CONTROL;
+        let alt = KeyModifiers::ALT;
+        let mut b = InputBox::new();
+        type_str(&mut b, "merhaba güzel dünya");
+        b.handle_key(mods(KeyCode::Char('w'), ctrl));
+        assert_eq!(b.value(), "merhaba güzel ");
+        b.handle_key(mods(KeyCode::Char('a'), ctrl));
+        assert_eq!(b.cursor_rc(), (0, 0));
+        b.handle_key(mods(KeyCode::Char('f'), alt));
+        b.handle_key(mods(KeyCode::Char('k'), ctrl));
+        assert_eq!(b.value(), "merhaba ");
+        b.handle_key(mods(KeyCode::Char('e'), ctrl));
+        b.handle_key(mods(KeyCode::Char('u'), ctrl));
+        assert_eq!(b.value(), "");
+        b.handle_key(mods(KeyCode::Char('-'), ctrl)); // undo
+        assert_eq!(b.value(), "merhaba ");
+        b.handle_key(mods(KeyCode::Char('.'), ctrl)); // redo
+        assert_eq!(b.value(), "");
+    }
+
+    #[test]
+    fn paste_keeps_lines_and_normalizes_crlf() {
+        let mut b = InputBox::new();
+        b.insert_str("a\r\nb\rc");
+        assert_eq!(b.value(), "a\nb\nc");
+        assert_eq!(b.cursor_rc(), (2, 1));
     }
 }
