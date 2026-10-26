@@ -82,6 +82,13 @@ impl Tui {
     /// growing near the bottom scrolls the screen up (ratatui's own inline placement),
     /// shrinking leaves the region top-anchored. No CPR query: the seed is known.
     pub fn set_height(&mut self, h: u16) -> Result<()> {
+        // A size change whose Resize event isn't handled yet must re-anchor through
+        // ratatui's resize() first; otherwise the rebuild records the new size and
+        // the resize (with its horizontal-shrink clear) never runs.
+        self.terminal.autoresize()?;
+        // ratatui caps an inline viewport at the screen height; compare in those
+        // terms so a too-short terminal doesn't rebuild on every frame.
+        let h = h.min(self.terminal.size()?.height);
         if h == self.height {
             return Ok(());
         }
@@ -94,7 +101,7 @@ impl Tui {
         self.terminal
             .set_cursor_position(Position { x: 0, y: top })?;
         self.terminal = inline_terminal(Position { x: 0, y: top }, h)?;
-        self.height = h;
+        self.height = self.terminal.get_frame().area().height;
         Ok(())
     }
 }
@@ -134,6 +141,21 @@ mod tests {
         let park = body.find("set_cursor_position(").expect("cursor parked");
         let rebuild = body.find("inline_terminal(").expect("rebuild");
         assert!(park < rebuild);
+    }
+
+    /// Source pin: an unhandled size change must go through ratatui's resize
+    /// (re-anchor + horizontal-shrink clear) BEFORE the rebuild reads the anchor,
+    /// or the rebuild records the new size and the resize never runs.
+    #[test]
+    fn set_height_autoresizes_before_reading_the_anchor() {
+        let src = include_str!("term.rs");
+        let body = src.split("pub fn set_height(").nth(1).expect("set_height");
+        let resize = body
+            .find("autoresize(")
+            .expect("set_height autoresize çağırmalı");
+        let anchor = body.find("get_frame(").expect("anchor read");
+        let early = body.find("return Ok(())").expect("early return");
+        assert!(resize < anchor && resize < early);
     }
 
     /// Source pin: the ONLY real CPR happens in setup(), before any

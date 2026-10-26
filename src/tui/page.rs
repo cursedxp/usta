@@ -98,7 +98,7 @@ pub(crate) fn draw(
 ) -> Result<()> {
     let width = current_width(tui);
     tui.set_height(viewport_height(editor.desired_rows(width)))?;
-    let box_h = tui.height() - 1;
+    let box_h = tui.height().saturating_sub(1);
     tui.terminal.draw(|f| {
         let [box_area, status_area] =
             Layout::vertical([Constraint::Length(box_h), Constraint::Length(1)]).areas(f.area());
