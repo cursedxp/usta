@@ -263,7 +263,10 @@ mod tests {
         // Crude source pin, same class as run_rs_wiring_call_sites_are_pinned:
         // removing a gate arm produces no warning and no test failure
         // anywhere else.
-        for src in [include_str!("tui/run.rs"), include_str!("tui/intro.rs")] {
+        for src in [
+            include_str!("tui/topic_flow.rs"),
+            include_str!("tui/intro.rs"),
+        ] {
             assert!(
                 src.contains("crate::slash::is_context_command(&raw)"),
                 "a pre-session gate lost its /context arm"

@@ -426,12 +426,20 @@ mod tests {
     /// relocated elsewhere) breaks the match.
     #[test]
     fn run_wires_intro_flow() {
-        let src = include_str!("run.rs");
+        let flow = include_str!("topic_flow.rs");
         for needle in [
             "intro_needed",
             "run_first_run",
             "run_suggest",
             "IntroOutcome",
+        ] {
+            assert!(
+                flow.contains(needle),
+                "topic_flow.rs lost its intro wiring: {needle}"
+            );
+        }
+        let src = include_str!("run.rs");
+        for needle in [
             // Pins the STITCH-PATH reset specifically (Fix 3): "reset_session()"
             // alone occurs 4 times in run.rs, 3 of them pre-existing and
             // unrelated — a needle that only matches the substring would stay
@@ -449,9 +457,11 @@ mod tests {
                 "run.rs lost its intro wiring: {needle}"
             );
         }
-        // The one-shot suggestion must be GONE from run.rs.
-        assert!(!src.contains("start_suggest_system"));
-        assert!(!src.contains("parse_start_suggestion"));
+        // The one-shot suggestion must be GONE from run.rs and topic_flow.rs.
+        for s in [src, flow] {
+            assert!(!s.contains("start_suggest_system"));
+            assert!(!s.contains("parse_start_suggestion"));
+        }
     }
 
     #[test]
