@@ -62,6 +62,20 @@ pub(crate) fn user_echo_text(line: &str, width: u16) -> Text<'static> {
     Text::from(lines)
 }
 
+/// Assistant reply block: orange `●` line + termimad markdown + blank line,
+/// rendered for `width`. Pure — `ChatBuffer` re-runs it on every width change.
+#[allow(dead_code)] // used by ChatBuffer; wired in Task 2
+pub(crate) fn reply_text(reply: &str, width: u16) -> Text<'static> {
+    let ansi = crate::ui::render_markdown(reply, width as usize);
+    let mut t = ansi_to_text(&format!(
+        "\x1b[38;5;{}m{}\x1b[0m\n{ansi}\n",
+        theme::BRAND_IDX,
+        theme::G_BRAND
+    ));
+    t.lines.push(Line::raw(""));
+    t
+}
+
 /// Split text to CELL width (unicode-width) — character-based, not word-based,
 /// consistent with the input box's `wrap_visual`. Empty input → single blank line.
 fn wrap_cells(s: &str, width: usize) -> Vec<String> {
@@ -233,5 +247,24 @@ mod tests {
             classify_locked_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
             LockedKey::Edit
         ));
+    }
+
+    #[test]
+    fn reply_text_starts_with_the_brand_glyph_and_ends_blank() {
+        let t = reply_text("**hi**", 60);
+        let first: String = t.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(first.contains(theme::G_BRAND));
+        assert!(t
+            .lines
+            .last()
+            .unwrap()
+            .spans
+            .iter()
+            .all(|s| s.content.is_empty()));
+        assert!(t.lines.len() >= 3);
     }
 }

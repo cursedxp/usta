@@ -3,6 +3,8 @@
 
 pub mod ask;
 pub(crate) mod backend_wrap;
+#[allow(dead_code)] // wired into Tui in Task 2
+pub mod chat;
 pub mod convert;
 pub mod editor;
 pub mod entry;
