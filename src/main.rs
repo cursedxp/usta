@@ -15,6 +15,7 @@ mod file_feedback;
 mod help;
 mod history;
 mod image_attach;
+mod image_paste;
 mod index;
 mod input;
 mod lifecycle;
