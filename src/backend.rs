@@ -177,10 +177,7 @@ fn last_user_text(history: &[Message]) -> String {
         .iter()
         .rev()
         .find(|m| m.role == "user")
-        .map(|m| match &m.content {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        })
+        .map(Message::text)
         .unwrap_or_default()
 }
 
@@ -212,11 +209,7 @@ fn render_transcript(history: &[Message]) -> String {
         } else {
             "[SEN]"
         };
-        // Stored turns are Value::String; otherwise fall back to raw JSON.
-        let body = match &msg.content {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
+        let body = msg.text();
         out.push_str(label);
         out.push('\n');
         out.push_str(&body);

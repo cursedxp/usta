@@ -6,6 +6,8 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::image_attach::PastedImage;
+
 pub const DEFAULT_MODEL: &str = "claude-opus-4-8";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -21,6 +23,46 @@ pub struct Message {
 }
 
 impl Message {
+    // TEMP(image-paste): consumed from Task 4-6; remove this allow then.
+    #[allow(dead_code)]
+    /// A user turn with images: image blocks first (the docs' recommended order), then
+    /// one text block. No images => the usual plain-string message.
+    pub fn user_with_images(text: impl Into<String>, images: &[PastedImage]) -> Self {
+        if images.is_empty() {
+            return Self::user(text);
+        }
+        let mut blocks: Vec<Value> = images.iter().map(PastedImage::to_block).collect();
+        blocks.push(json!({"type": "text", "text": text.into()}));
+        Message {
+            role: "user".into(),
+            content: Value::Array(blocks),
+        }
+    }
+
+    /// Plain text of the message: a string as is; a block array = its text blocks joined
+    /// (image blocks contribute nothing, so base64 never leaks into transcripts or reports).
+    pub fn text(&self) -> String {
+        match &self.content {
+            Value::String(s) => s.clone(),
+            Value::Array(blocks) => extract_text(blocks),
+            other => other.to_string(),
+        }
+    }
+
+    // TEMP(image-paste): consumed from Task 4-6; remove this allow then.
+    #[allow(dead_code)]
+    /// The `image` blocks of an array message (empty for string content).
+    pub fn image_blocks(&self) -> Vec<Value> {
+        self.content
+            .as_array()
+            .map(|bs| {
+                bs.iter()
+                    .filter(|b| b.get("type").and_then(Value::as_str) == Some("image"))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
     pub fn user(text: impl Into<String>) -> Self {
         Message {
             role: "user".into(),
@@ -193,6 +235,60 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn img(bytes: Vec<u8>) -> PastedImage {
+        PastedImage {
+            media_type: "image/png",
+            data: bytes,
+            width: 2,
+            height: 3,
+        }
+    }
+
+    #[test]
+    fn user_with_no_images_is_a_plain_string_message() {
+        let m = Message::user_with_images("hello", &[]);
+        assert_eq!(m.content, Value::String("hello".into()));
+    }
+
+    #[test]
+    fn user_with_images_puts_image_blocks_before_the_text_block() {
+        let m = Message::user_with_images("what is this? [Image #1]", &[img(vec![1, 2, 3])]);
+        assert_eq!(m.role, "user");
+        let blocks = m.content.as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "image");
+        assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[0]["source"]["data"], "AQID");
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["text"], "what is this? [Image #1]");
+    }
+
+    #[test]
+    fn request_serializes_an_image_message_as_a_content_array() {
+        let req = MessageRequest::new(
+            DEFAULT_MODEL.into(),
+            "sistem".into(),
+            vec![Message::user_with_images("hi", &[img(vec![9])])],
+        );
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["messages"][0]["content"][0]["type"], "image");
+        assert_eq!(v["messages"][0]["content"][1]["text"], "hi");
+    }
+
+    #[test]
+    fn text_flattens_blocks_and_ignores_base64() {
+        let m = Message::user_with_images("only words", &[img(vec![7; 1000])]);
+        assert_eq!(m.text(), "only words");
+        assert_eq!(Message::user("plain").text(), "plain");
+    }
+
+    #[test]
+    fn image_blocks_returns_only_image_blocks() {
+        let m = Message::user_with_images("t", &[img(vec![1]), img(vec![2])]);
+        assert_eq!(m.image_blocks().len(), 2);
+        assert!(Message::user("t").image_blocks().is_empty());
+    }
 
     #[test]
     fn request_serializes_expected_shape() {

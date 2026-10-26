@@ -32,10 +32,7 @@ fn pluralize_turns(n: usize) -> String {
 const SYSTEM_PROMPT_OVERHEAD_LABEL: &str = "(framing: dividers + blank-line separators)";
 
 fn message_text(m: &Message) -> String {
-    match &m.content {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
+    m.text()
 }
 
 /// Build the full report — pure string work over the live session state.
