@@ -1,9 +1,8 @@
-//! Claude Code-style TUI: inline viewport + insert_before flow.
+//! Claude Code-style TUI: fullscreen alternate screen + scrollable chat pane.
 //! In plain mode (ui::is_plain) this module is never used.
 
 pub mod ask;
-pub(crate) mod backend_wrap;
-#[allow(dead_code)] // scroll/unread API wired in Task 3
+#[allow(dead_code)] // scroll/unread API wired in Task 4
 pub mod chat;
 pub mod convert;
 pub mod editor;

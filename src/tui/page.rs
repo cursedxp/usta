@@ -1,5 +1,5 @@
 //! The TUI session loop's paging layer: pushing persistent content into
-//! scrollback and redrawing the live bottom region — extracted from `run.rs`
+//! the chat pane and redrawing the whole screen — extracted from `run.rs`
 //! (cleanup round, Task 4).
 
 use anyhow::Result;
@@ -71,25 +71,17 @@ pub(crate) fn current_width(tui: &Tui) -> u16 {
     tui.terminal.size().map(|s| s.width).unwrap_or(80)
 }
 
-/// Refresh the inline viewport after a terminal resize. Without this the
-/// viewport keeps drawing at its stale pre-resize area and the bottom region
-/// garbles (duplicated/shifted lines); the caller's loop redraws on its next
-/// iteration. A `Resize` event reporting an unchanged size is now a no-op:
-/// `autoresize()` only calls `resize()` when the area differs from before.
+/// Refresh ratatui's idea of the screen size after a terminal resize. The next
+/// `draw()` (the caller's loop redraws every iteration) repaints the whole
+/// screen and `ChatBuffer` re-wraps from source at the new width. An unchanged
+/// size is a no-op (`autoresize()` only resizes when the area differs).
 pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
-    // ratatui 0.30's `resize()` (invoked by `autoresize()` on every size change) already
-    // clears the viewport unconditionally and full-clears on horizontal shrink, so a
-    // manual `clear()` here is redundant. It is also an avoidable second cursor-position
-    // (CPR) query: 0.30's public `clear()` added its own CPR read that 0.29's `clear()`
-    // never made — CPR itself was never removed from the resize path, it has always been
-    // queried unconditionally by the inline-viewport resize computation.
     tui.terminal.autoresize()?;
     Ok(())
 }
 
 /// One frame: chat pane (fills the rest) / editor (rule + 1..=8 rows) / status bar.
 /// Pure over its inputs so it can be driven by a `TestBackend`.
-#[allow(dead_code)] // called by the fullscreen loop in Task 3
 pub(crate) fn render_screen(
     f: &mut Frame,
     chat: &mut ChatBuffer,
@@ -110,7 +102,7 @@ pub(crate) fn render_screen(
     f.render_widget(status, status_area);
 }
 
-/// Draw the bottom region: input box (top) + status line (bottom).
+/// Paint the whole screen: chat pane + input box + status line.
 pub(crate) fn draw(
     tui: &mut Tui,
     editor: &InputBox,
@@ -120,18 +112,10 @@ pub(crate) fn draw(
     watch: Option<(bool, bool, usize)>,
     verify_failing: bool,
 ) -> Result<()> {
-    let width = current_width(tui);
-    tui.set_height(viewport_height(editor.desired_rows(width)))?;
-    let box_h = tui.height().saturating_sub(1);
-    tui.terminal.draw(|f| {
-        let [box_area, status_area] =
-            Layout::vertical([Constraint::Length(box_h), Constraint::Length(1)]).areas(f.area());
-        editor.render(f, box_area);
-        f.render_widget(
-            render_status(status, tokens, window, watch, verify_failing),
-            status_area,
-        );
-    })?;
+    let line = render_status(status, tokens, window, watch, verify_failing);
+    let chat = &mut tui.chat;
+    tui.terminal
+        .draw(|f| render_screen(f, chat, editor, line))?;
     Ok(())
 }
 
@@ -232,13 +216,17 @@ mod tests {
     }
 
     #[test]
-    fn draw_resizes_the_viewport_before_painting() {
+    fn draw_paints_through_render_screen() {
         let src = include_str!("page.rs");
         let draw = src.split("pub(crate) fn draw(").nth(1).expect("draw var");
-        let set = draw.find("set_height(").expect("draw set_height çağırmalı");
-        let paint = draw
-            .find("terminal.draw(")
-            .expect("draw terminal.draw çağırmalı");
-        assert!(set < paint, "yükseklik çizimden önce ayarlanmalı");
+        let draw = draw.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            draw.contains("render_screen("),
+            "draw must use render_screen"
+        );
+        assert!(
+            !draw.contains("set_height("),
+            "no viewport rebuild in fullscreen"
+        );
     }
 }

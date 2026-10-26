@@ -1,6 +1,6 @@
 //! TUI session loop: keys + watcher + LLM all in one select!. Persistent content
-//! flows into scrollback via `tui/page.rs`'s `insert_before` wrapper; the bottom
-//! region is redrawn live. Spec §3. Delegates to four sibling modules split out
+//! flows into the chat pane via `tui/page.rs`'s `page*` wrappers; the whole
+//! screen is redrawn live. Spec §3. Delegates to four sibling modules split out
 //! of this one in the cleanup round: `paint` (pure text/style builders), `page`
 //! (the paging layer), `ask` (question-asking), and `entry` (topic entry +
 //! visual-generation trigger).
