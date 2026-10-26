@@ -44,7 +44,8 @@ fn media_type(f: ImageFormat) -> Option<&'static str> {
 
 /// File bytes -> `PastedImage`. The format is sniffed from the bytes (never the file
 /// extension). A valid image within both caps is passed through byte-for-byte; anything
-/// larger is decoded, downscaled and re-encoded (PNG, JPEG if the PNG is still too big).
+/// larger is decoded, downscaled and re-encoded: JPEG stays JPEG, others PNG (JPEG if the
+/// PNG is still too big).
 pub fn prepare(bytes: Vec<u8>) -> Result<PastedImage> {
     let reader = ImageReader::new(Cursor::new(&bytes))
         .with_guessed_format()
@@ -63,18 +64,28 @@ pub fn prepare(bytes: Vec<u8>) -> Result<PastedImage> {
         });
     }
     let img = image::load_from_memory_with_format(&bytes, format).context("cannot decode image")?;
-    shrink(img)
+    shrink(img, format)
 }
 
 /// Clipboard pixels (RGBA8, row-major) -> `PastedImage`.
 pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<PastedImage> {
     let buf = image::RgbaImage::from_raw(width, height, rgba)
         .context("clipboard image has an inconsistent size")?;
-    shrink(DynamicImage::ImageRgba8(buf))
+    shrink(DynamicImage::ImageRgba8(buf), ImageFormat::Png)
 }
 
-/// Downscale to `MAX_EDGE` and encode: PNG, or JPEG when the PNG still exceeds `MAX_RAW_BYTES`.
-fn shrink(img: DynamicImage) -> Result<PastedImage> {
+/// JPEG at quality 85 (RGB; alpha dropped).
+fn encode_jpeg(img: &DynamicImage) -> Result<Vec<u8>> {
+    let mut jpg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 85)
+        .encode_image(&DynamicImage::ImageRgb8(img.to_rgb8()))
+        .context("cannot encode image")?;
+    Ok(jpg)
+}
+
+/// Downscale to `MAX_EDGE` and encode. A JPEG source stays JPEG (q85); anything else
+/// becomes PNG, or JPEG q85 when the PNG still exceeds `MAX_RAW_BYTES`.
+fn shrink(img: DynamicImage, src: ImageFormat) -> Result<PastedImage> {
     let (w, h) = (img.width(), img.height());
     let (nw, nh) = downscale_dims(w, h, MAX_EDGE);
     let img = if (nw, nh) == (w, h) {
@@ -82,30 +93,25 @@ fn shrink(img: DynamicImage) -> Result<PastedImage> {
     } else {
         img.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
     };
-    let mut png = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
-        .context("cannot encode image")?;
-    if png.len() <= MAX_RAW_BYTES {
-        return Ok(PastedImage {
-            media_type: "image/png",
-            data: png,
-            width: nw,
-            height: nh,
-        });
+    let done = |media_type, data| PastedImage {
+        media_type,
+        data,
+        width: nw,
+        height: nh,
+    };
+    if src != ImageFormat::Jpeg {
+        let mut png = Vec::new();
+        img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .context("cannot encode image")?;
+        if png.len() <= MAX_RAW_BYTES {
+            return Ok(done("image/png", png));
+        }
     }
-    let mut jpg = Vec::new();
-    DynamicImage::ImageRgb8(img.to_rgb8())
-        .write_to(&mut Cursor::new(&mut jpg), ImageFormat::Jpeg)
-        .context("cannot encode image")?;
+    let jpg = encode_jpeg(&img)?;
     if jpg.len() > MAX_RAW_BYTES {
         bail!("image is too large even after downscaling");
     }
-    Ok(PastedImage {
-        media_type: "image/jpeg",
-        data: jpg,
-        width: nw,
-        height: nh,
-    })
+    Ok(done("image/jpeg", jpg))
 }
 
 impl PastedImage {
@@ -139,6 +145,39 @@ mod tests {
             .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
             .unwrap();
         out
+    }
+
+    /// Deterministic noisy RGB image (compresses badly, like a photo).
+    fn noise(w: u32, h: u32) -> DynamicImage {
+        let mut s: u32 = 12345;
+        let img = image::RgbImage::from_fn(w, h, |_, _| {
+            s = s.wrapping_mul(1103515245).wrapping_add(12345);
+            let v = (s >> 16) as u8;
+            image::Rgb([v, v.wrapping_mul(3), v.wrapping_add(90)])
+        });
+        DynamicImage::ImageRgb8(img)
+    }
+
+    fn encode(img: &DynamicImage, f: ImageFormat) -> Vec<u8> {
+        let mut out = Vec::new();
+        img.write_to(&mut Cursor::new(&mut out), f).unwrap();
+        out
+    }
+
+    #[test]
+    fn prepare_keeps_an_oversized_jpeg_as_jpeg() {
+        let src = noise(3000, 2000);
+        let img = prepare(encode(&src, ImageFormat::Jpeg)).unwrap();
+        assert_eq!(img.media_type, "image/jpeg");
+        assert_eq!((img.width, img.height), (1568, 1045));
+        let resized = src.resize_exact(1568, 1045, image::imageops::FilterType::Triangle);
+        assert!(img.data.len() < encode(&resized, ImageFormat::Png).len());
+    }
+
+    #[test]
+    fn q85_noise_jpeg_at_max_edge_fits_the_raw_cap() {
+        let jpg = encode_jpeg(&noise(MAX_EDGE, MAX_EDGE)).unwrap();
+        assert!(jpg.len() <= MAX_RAW_BYTES);
     }
 
     #[test]
