@@ -10,23 +10,17 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::image_attach::PastedImage;
-use crate::tui::chat::{ChatBuffer, Source};
+use crate::tui::chat::ChatBuffer;
 use crate::tui::editor::InputBox;
 use crate::tui::status::{render_status, Status};
 use crate::tui::term::{viewport_height, Tui};
 use crate::tui::theme;
 use crate::ui;
 
-/// Push persistent content into the chat pane (soft-wrapped on resize).
-pub(crate) fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
-    tui.chat.push(Source::Text(text));
-    Ok(())
-}
-
-/// Like `page`, but a pre-sized panel (welcome box): `f` builds it for the current
+/// A pre-sized panel (welcome box): `f` builds it for the current
 /// width on every render, so a resize re-lays it out; narrower than its minimum it is clipped.
 pub(crate) fn page_fixed(tui: &mut Tui, f: impl Fn(u16) -> Text<'static> + 'static) -> Result<()> {
-    tui.chat.push(Source::Panel(Box::new(f)));
+    tui.chat.panel(f);
     Ok(())
 }
 
@@ -34,45 +28,39 @@ pub(crate) fn page_fixed(tui: &mut Tui, f: impl Fn(u16) -> Text<'static> + 'stat
 /// rendered by the chat pane for the CURRENT width, so `_width` is unused
 /// (kept so callers stay unchanged).
 pub(crate) fn page_reply(tui: &mut Tui, reply: &str, _width: u16) -> Result<()> {
-    tui.chat.push(Source::Reply(reply.to_string()));
+    tui.chat.reply(reply);
     Ok(())
 }
 
 pub(crate) fn page_notice(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, crate::tui::paint::notice_line(msg))
+    tui.chat.notice(msg);
+    Ok(())
 }
 pub(crate) fn page_warn(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, crate::tui::paint::warn_line(msg))
+    tui.chat.warn(msg);
+    Ok(())
 }
 pub(crate) fn page_error(tui: &mut Tui, msg: &str) -> Result<()> {
-    page(tui, crate::tui::paint::error_line(msg))
+    tui.chat.error(msg);
+    Ok(())
 }
 
-/// Flush the notices buffered by ui::notice/ui::warn while the TUI was live,
-/// routing each to the right scan-level: a leading `⚠ ` (from ui::warn) renders
-/// as the amber warning layer; everything else is a dim `·` info line.
+/// Flush the notices buffered by ui::notice/ui::warn while the TUI was live
+/// (see `ChatBuffer::flush_notices` for the routing).
 pub(crate) fn flush_notices(tui: &mut Tui) -> Result<()> {
-    for m in ui::drain_tui_notices() {
-        match m.strip_prefix(&format!("{} ", theme::G_WARN)) {
-            Some(rest) => page_warn(tui, rest)?,
-            None => page_notice(tui, &m)?,
-        }
-    }
+    tui.chat.flush_notices(ui::drain_tui_notices());
     Ok(())
 }
 
 /// Push the user's submitted line to the chat pane (wrapped at render time).
 pub(crate) fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
-    tui.chat.jump_bottom();
-    tui.chat.push(Source::Echo(line.to_string()));
+    tui.chat.user_echo(line);
     Ok(())
 }
 
 /// One `image N (W×H)` line per attached image, right under the user's echo.
 pub(crate) fn page_image_echo(tui: &mut Tui, images: &[PastedImage]) -> Result<()> {
-    for (i, img) in images.iter().enumerate() {
-        page_notice(tui, &img.echo_label(i + 1))?;
-    }
+    tui.chat.image_echo(images);
     Ok(())
 }
 
@@ -186,6 +174,7 @@ pub(crate) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::chat::Source;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -248,9 +237,13 @@ mod tests {
             !prod.contains("insert_before"),
             "page.rs must not use insert_before"
         );
-        assert!(prod.contains("Source::Reply"));
-        assert!(prod.contains("Source::Echo"));
-        assert!(prod.contains("Source::Panel"));
+        let chat = include_str!("chat.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        assert!(chat.contains("Source::Reply"));
+        assert!(chat.contains("Source::Echo"));
+        assert!(chat.contains("Source::Panel"));
     }
 
     #[test]

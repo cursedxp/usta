@@ -6,7 +6,9 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthChar;
 
-use crate::tui::paint::{reply_text, user_echo_text};
+use crate::image_attach::PastedImage;
+use crate::tui::paint::{error_line, notice_line, reply_text, user_echo_text, warn_line};
+use crate::tui::theme;
 
 /// What was pushed, kept in a form that can be re-rendered at any width.
 pub enum Source {
@@ -261,6 +263,57 @@ impl ChatBuffer {
 
     pub fn unread(&self) -> bool {
         self.unread
+    }
+
+    /// Persistent content, soft-wrapped on resize.
+    pub fn text(&mut self, t: Text<'static>) {
+        self.push(Source::Text(t));
+    }
+
+    pub fn notice(&mut self, msg: &str) {
+        self.text(notice_line(msg));
+    }
+
+    pub fn warn(&mut self, msg: &str) {
+        self.text(warn_line(msg));
+    }
+
+    pub fn error(&mut self, msg: &str) {
+        self.text(error_line(msg));
+    }
+
+    /// The user's submitted line (wrapped at render time); jumps to the bottom.
+    pub fn user_echo(&mut self, line: &str) {
+        self.jump_bottom();
+        self.push(Source::Echo(line.to_string()));
+    }
+
+    /// One `image N (W×H)` line per attached image, right under the user's echo.
+    pub fn image_echo(&mut self, images: &[PastedImage]) {
+        for (i, img) in images.iter().enumerate() {
+            self.notice(&img.echo_label(i + 1));
+        }
+    }
+
+    /// Usta's reply; the markdown is rendered for the CURRENT width at draw time.
+    pub fn reply(&mut self, md: &str) {
+        self.push(Source::Reply(md.to_string()));
+    }
+
+    /// A pre-sized panel: `f` builds it for the current width on every render.
+    pub fn panel(&mut self, f: impl Fn(u16) -> Text<'static> + 'static) {
+        self.push(Source::Panel(Box::new(f)));
+    }
+
+    /// Route buffered ui notices: a leading `⚠ ` renders as the amber warning
+    /// layer; everything else is a dim info line.
+    pub fn flush_notices(&mut self, msgs: Vec<String>) {
+        for m in msgs {
+            match m.strip_prefix(&format!("{} ", theme::G_WARN)) {
+                Some(rest) => self.warn(rest),
+                None => self.notice(&m),
+            }
+        }
     }
 
     #[cfg(test)]
@@ -533,5 +586,65 @@ mod tests {
             before,
             "scrolled view keeps its text"
         );
+    }
+
+    fn styles(c: &mut ChatBuffer) -> Vec<Vec<Style>> {
+        c.visible(80, 50)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.style).collect())
+            .collect()
+    }
+
+    #[test]
+    fn user_echo_jumps_to_the_bottom() {
+        let mut c = filled(20);
+        c.visible(80, 5);
+        c.scroll_up(5);
+        c.user_echo("hello");
+        assert!(c.is_following());
+        assert!(plain(&c.visible(80, 5)).iter().any(|r| r.contains("hello")));
+    }
+
+    #[test]
+    fn image_echo_adds_one_labelled_line_per_image() {
+        let img = |w, h| crate::image_attach::PastedImage {
+            media_type: "image/png",
+            data: vec![],
+            width: w,
+            height: h,
+        };
+        let mut c = ChatBuffer::default();
+        c.image_echo(&[img(4, 3), img(10, 20)]);
+        let rows = plain(&c.visible(80, 10));
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].contains("image 1 (4×3)") && rows[1].contains("image 2 (10×20)"));
+    }
+
+    #[test]
+    fn flush_routes_warn_prefixed_messages_to_the_warn_layer() {
+        let mut c = ChatBuffer::default();
+        c.flush_notices(vec![
+            format!("{} careful", crate::tui::theme::G_WARN),
+            "fyi".into(),
+        ]);
+        let mut w = ChatBuffer::default();
+        w.warn("careful");
+        let mut n = ChatBuffer::default();
+        n.notice("fyi");
+        let s = styles(&mut c);
+        assert_eq!(s[0], styles(&mut w)[0]);
+        assert_eq!(s[1], styles(&mut n)[0]);
+    }
+
+    #[test]
+    fn error_line_uses_the_error_style() {
+        let mut c = ChatBuffer::default();
+        c.error("boom");
+        let expect: Vec<Style> = crate::tui::paint::error_line("boom").lines[0]
+            .spans
+            .iter()
+            .map(|s| s.style)
+            .collect();
+        assert_eq!(styles(&mut c)[0], expect);
     }
 }
