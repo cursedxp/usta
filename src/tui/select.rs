@@ -97,8 +97,9 @@ pub fn highlight(buf: &mut Buffer, area: Rect, top: usize, sel: &Sel) {
             if dx >= area.width {
                 break;
             }
-            let cell = &mut buf[(area.x + dx, area.y + dy)];
-            cell.modifier.insert(Modifier::REVERSED);
+            if let Some(cell) = buf.cell_mut((area.x + dx, area.y + dy)) {
+                cell.modifier.insert(Modifier::REVERSED);
+            }
         }
     }
 }

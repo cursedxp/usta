@@ -281,8 +281,14 @@ impl ChatBuffer {
             return;
         }
         // Auto-scroll: terminals repeat drag events while the mouse moves.
+        // Only once the anchor is below the top row: a horizontal drag along
+        // row 0 must not turn into a multi-line jump.
+        let top = self.view_top();
+        let anchor_below_top = self.sel.is_some_and(|s| s.anchor.0 > top);
         if y <= self.area.y {
-            self.scroll_up(1);
+            if anchor_below_top {
+                self.scroll_up(1);
+            }
         } else if y >= self.area.y + self.area.height {
             self.scroll_down(1);
         }
@@ -298,8 +304,9 @@ impl ChatBuffer {
     }
 
     /// Finish the drag: `Some(text)` when something was selected (flash set to "copied").
-    pub fn mouse_up(&mut self, x: u16, y: u16) -> Option<String> {
-        self.set_head(x, y); // no auto-scroll on release
+    /// The terminal already sent a Drag for the final cell, so the head is
+    /// not recomputed here (content may have moved since).
+    pub fn mouse_up(&mut self) -> Option<String> {
         let sel = self.sel.take()?;
         if sel.anchor == sel.head {
             return None; // a plain click selects nothing
@@ -807,7 +814,7 @@ five six seven",
         c.mouse_down(0, 1);
         c.mouse_drag(2, 2);
         assert_eq!(c.selection().unwrap().head, (17, 2));
-        assert_eq!(c.mouse_up(2, 2).as_deref(), Some("l16\nl17"));
+        assert_eq!(c.mouse_up().as_deref(), Some("l16\nl17"));
         assert!(c.selection().is_none());
         assert_eq!(c.flash(), Some(COPIED));
     }
@@ -817,7 +824,7 @@ five six seven",
         let mut c = filled(20);
         pane(&mut c);
         c.mouse_down(10, 0); // past the end of "l15"
-        assert_eq!(c.mouse_up(10, 0), None);
+        assert_eq!(c.mouse_up(), None);
         assert!(c.selection().is_none() && c.flash().is_none());
     }
 
@@ -827,7 +834,7 @@ five six seven",
         pane(&mut c);
         c.mouse_down(0, 0);
         c.mouse_drag(2, 0);
-        c.mouse_up(2, 0);
+        c.mouse_up();
         assert!(c.flash().is_some());
         c.mouse_down(0, 9); // below the pane
         assert!(c.selection().is_none() && c.flash().is_none());
@@ -864,11 +871,22 @@ five six seven",
     }
 
     #[test]
+    fn dragging_along_the_top_row_from_the_top_row_does_not_scroll() {
+        let mut c = filled(40);
+        pane(&mut c);
+        let off = c.offset;
+        c.mouse_down(0, 0);
+        c.mouse_drag(5, 0);
+        assert_eq!(c.offset, off, "anchor on the top row: no auto-scroll");
+        assert_eq!(c.mouse_up().as_deref(), Some("l35"));
+    }
+
+    #[test]
     fn a_click_on_a_character_copies_nothing() {
         let mut c = filled(20);
         pane(&mut c);
         c.mouse_down(0, 0);
-        assert_eq!(c.mouse_up(0, 0), None);
+        assert_eq!(c.mouse_up(), None);
         assert!(c.flash().is_none());
     }
 

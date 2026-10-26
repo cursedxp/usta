@@ -109,7 +109,7 @@ Both are plain markdown, meant to be read and hand-edited — Usta never overwri
 
 ## Interface
 
-In an interactive terminal Usta opens a **fullscreen ratatui TUI** on the alternate screen: the conversation fills a scrollable pane, with the input box and status line pinned below it. Scroll with the mouse wheel or PageUp/PageDown; drag with the mouse to select chat text — it is copied when you release (over SSH via OSC 52); Shift+drag still selects natively. Leaving usta restores your previous terminal content — the conversation is not printed to scrollback, it lives in usta's own history.
+In an interactive terminal Usta opens a **fullscreen ratatui TUI** on the alternate screen: the conversation fills a scrollable pane, with the input box and status line pinned below it. Scroll with the mouse wheel or PageUp/PageDown; drag with the mouse to select chat text — it is copied when you release (over SSH via OSC 52, if the terminal allows clipboard access — iTerm2 setting, tmux `set-clipboard on`); Shift+drag still selects natively (iTerm2/Ghostty/WezTerm). Leaving usta restores your previous terminal content — the conversation is not printed to scrollback, it lives in usta's own history.
 
 A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (logo + your saved topics), and the input box below asks for the topic — type a word, or describe it in a sentence (the model reduces sentences to a short slug). With a filled `PROJECT.md` you can also just press Enter and Usta will start a conversational suggestion. `usta start <topic>` shows the **full-mode welcome** (learning status: level, map %, what's next) and starts directly.
 

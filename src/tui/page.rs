@@ -94,13 +94,17 @@ fn nav(chat: &mut ChatBuffer, ev: &Event, copy: &mut dyn FnMut(&str)) -> bool {
                 MouseEventKind::Down(MouseButton::Left) => chat.mouse_down(m.column, m.row),
                 MouseEventKind::Drag(MouseButton::Left) => chat.mouse_drag(m.column, m.row),
                 MouseEventKind::Up(MouseButton::Left) => {
-                    if let Some(text) = chat.mouse_up(m.column, m.row) {
+                    if let Some(text) = chat.mouse_up() {
                         copy(&text);
                     }
                 }
                 _ => {}
             }
             true
+        }
+        Event::Paste(_) => {
+            chat.clear_flash();
+            false
         }
         Event::Key(k) => {
             chat.clear_flash();
@@ -367,7 +371,13 @@ mod tests {
         assert!(nav(&mut c, &key(KeyCode::PageDown), &mut |_| {}));
         assert!(c.is_following());
         assert!(!nav(&mut c, &key(KeyCode::Char('a')), &mut |_| {}));
+        c.visible_in(Rect::new(0, 0, 80, 5));
+        c.mouse_down(0, 1);
+        c.mouse_drag(2, 2);
+        c.mouse_up();
+        assert!(c.flash().is_some());
         assert!(!nav(&mut c, &Event::Paste("x".into()), &mut |_| {}));
+        assert!(c.flash().is_none(), "paste clears the flash");
     }
 
     #[test]
@@ -435,7 +445,7 @@ mod tests {
         assert!(b[(0, 19)].modifier.contains(Modifier::REVERSED));
         assert!(b[(2, 20)].modifier.contains(Modifier::REVERSED));
         assert!(!b[(3, 20)].modifier.contains(Modifier::REVERSED));
-        chat.mouse_up(2, 20);
+        chat.mouse_up();
         chat.scroll_up(3);
         chat.push(Source::Text(Text::raw("fresh"))); // unread too: flash wins the slot
         let rows = screen_rows(80, 24, &mut chat, &editor);
