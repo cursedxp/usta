@@ -1,4 +1,4 @@
-//! Convert termimad ANSI output to ratatui Text — insert_before bridge.
+//! Convert termimad ANSI output to ratatui Text (the chat pane renders it).
 
 use ratatui::text::Text;
 

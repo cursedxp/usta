@@ -170,20 +170,34 @@ pub fn convert_pdfs(project_root: &Path) -> Vec<String> {
             ));
             continue;
         }
-        let ok = std::process::Command::new("pdftotext")
+        let out = std::process::Command::new("pdftotext")
             .arg("-layout")
             .arg(pdf)
             .arg(&txt)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        notes.push(if ok {
-            format!("converted: {} → {}", pdf.display(), txt.display())
-        } else {
-            format!(
-                "pdftotext failed on {} — convert it to text yourself",
-                pdf.display()
-            )
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        notes.push(match out {
+            Ok(o) if o.status.success() => {
+                format!("converted: {} → {}", pdf.display(), txt.display())
+            }
+            other => {
+                let why = other
+                    .ok()
+                    .and_then(|o| {
+                        String::from_utf8_lossy(&o.stderr)
+                            .lines()
+                            .next()
+                            .map(str::to_string)
+                    })
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| format!(" ({})", l.trim()))
+                    .unwrap_or_default();
+                format!(
+                    "pdftotext failed on {}{why} — convert it to text yourself",
+                    pdf.display()
+                )
+            }
         });
     }
     notes
@@ -192,6 +206,21 @@ pub fn convert_pdfs(project_root: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn convert_pdfs_captures_pdftotext_output() {
+        let src = include_str!("materials.rs");
+        let prod = src.split("#[cfg(test)]").next().unwrap();
+        let body = prod
+            .split("pub fn convert_pdfs(")
+            .nth(1)
+            .expect("convert_pdfs");
+        assert!(
+            !body.contains(".status()"),
+            "pdftotext must not inherit the TUI's stdout/stderr"
+        );
+        assert!(body.contains("Stdio::null()") && body.contains("Stdio::piped()"));
+    }
 
     #[test]
     fn digest_md_lists_headings_with_excerpts() {
