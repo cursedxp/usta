@@ -31,8 +31,20 @@ fn pluralize_turns(n: usize) -> String {
 /// unexplained, the way the history breakdown below already reconciles.
 const SYSTEM_PROMPT_OVERHEAD_LABEL: &str = "(framing: dividers + blank-line separators)";
 
+/// Strings as-is; arrays serialized (tool results etc. count) minus `image` blocks,
+/// so base64 never enters the report.
 fn message_text(m: &Message) -> String {
-    m.text()
+    match &m.content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(bs) => {
+            let kept: Vec<_> = bs
+                .iter()
+                .filter(|b| b.get("type").and_then(|t| t.as_str()) != Some("image"))
+                .collect();
+            serde_json::to_string(&kept).unwrap_or_default()
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Build the full report — pure string work over the live session state.
@@ -128,6 +140,25 @@ mod tests {
 
     fn sys() -> String {
         "===== TODAY =====\n2026-08-29\n\n===== SOUL.md =====\nCORE RULE".to_string()
+    }
+
+    #[test]
+    fn message_text_drops_image_blocks_but_keeps_other_arrays_verbatim() {
+        let with_img = Message {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type":"image","source":{"type":"base64","data":"QUJDREVGRw=="}},
+                {"type":"text","text":"hello"}
+            ]),
+        };
+        let t = message_text(&with_img);
+        assert!(!t.contains("QUJDREVGRw"), "{t}");
+        assert!(t.contains("hello"));
+        let plain = Message {
+            role: "assistant".into(),
+            content: serde_json::json!([{"type":"tool_use","id":"x","name":"n","input":{}}]),
+        };
+        assert_eq!(message_text(&plain), plain.content.to_string());
     }
 
     #[test]

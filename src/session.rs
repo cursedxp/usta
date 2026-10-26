@@ -1,5 +1,5 @@
 //! Session state: topic + system prompt + conversation history.
-//! History is kept as plain-text `Message`s (role + Value::String content).
+//! History is `Message`s (role + content): a plain string, or an array of image blocks + one text block for turns with pasted images.
 //! The model lives in the backend — not kept here (varies by backend).
 
 use crate::anthropic::Message;

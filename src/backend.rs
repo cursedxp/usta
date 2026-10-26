@@ -244,6 +244,18 @@ pub fn parse_stream_output(stdout: &str) -> Result<(String, Option<String>, Opti
     Ok(parse_cli_output(&v.to_string()))
 }
 
+/// On a non-zero exit in stream mode the useful message is the `is_error` result line on
+/// stdout (stderr is empty). `None` -> fall back to the stderr-based exit-status error.
+fn stream_failure(stream: bool, stdout: &str) -> Option<String> {
+    if !stream {
+        return None;
+    }
+    parse_stream_output(stdout)
+        .err()
+        .map(|e| e.to_string())
+        .filter(|m| m.starts_with("claude CLI error:"))
+}
+
 /// Convert the conversation history into a plain-text transcript to be
 /// written to the `claude` CLI's stdin. User = `[SEN]`, assistant = `[USTA]`.
 fn render_transcript(history: &[Message]) -> String {
@@ -364,6 +376,9 @@ async fn run_claude_cli(
         .context("error waiting for claude CLI output")?;
 
     if !output.status.success() {
+        if let Some(msg) = stream_failure(stream, &String::from_utf8_lossy(&output.stdout)) {
+            bail!("{msg}");
+        }
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
             "claude CLI returned an error ({}): {}",
@@ -705,6 +720,17 @@ mod tests {
         let out = "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"session_id\":\"x\"}\n";
         let err = parse_stream_output(out).unwrap_err().to_string();
         assert!(err.contains("error_during_execution"), "{err}");
+    }
+
+    #[test]
+    fn stream_failure_surfaces_the_result_line_error() {
+        let out = "{\"type\":\"system\"}\n{\"type\":\"result\",\"is_error\":true,\"subtype\":\"error_during_execution\"}\n";
+        let msg = stream_failure(true, out).unwrap();
+        assert!(msg.contains("error_during_execution"), "{msg}");
+        // Non-stream mode and stdout without a result line keep the stderr bail.
+        assert!(stream_failure(false, out).is_none());
+        assert!(stream_failure(true, "").is_none());
+        assert!(stream_failure(true, "{\"type\":\"system\"}\n").is_none());
     }
 
     #[test]

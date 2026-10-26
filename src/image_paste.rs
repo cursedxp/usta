@@ -31,11 +31,17 @@ pub fn parse_dropped_path(raw: &str) -> Option<PathBuf> {
     }
     let quoted = t.len() >= 2
         && ((t.starts_with('\'') && t.ends_with('\'')) || (t.starts_with('"') && t.ends_with('"')));
-    let path = PathBuf::from(if quoted {
-        t[1..t.len() - 1].to_string()
+    let path = if quoted {
+        PathBuf::from(&t[1..t.len() - 1])
     } else {
-        unescape(t)
-    });
+        // Raw first: a Windows path (`C:\Users\me\shot.png`) must not be unescaped.
+        let raw = PathBuf::from(t);
+        if raw.is_file() {
+            raw
+        } else {
+            PathBuf::from(unescape(t))
+        }
+    };
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     (IMAGE_EXTS.contains(&ext.as_str()) && path.is_file()).then_some(path)
 }
@@ -94,6 +100,15 @@ mod tests {
     fn plain_path_to_an_existing_png() {
         let d = scratch("plain");
         let p = d.join("shot.png");
+        write_png(&p);
+        assert_eq!(parse_dropped_path(p.to_str().unwrap()), Some(p));
+    }
+
+    #[test]
+    fn existing_raw_path_wins_over_unescaping() {
+        // A literal backslash in the file name (a Windows-style path on Unix).
+        let d = scratch("raw");
+        let p = d.join("a\\b.png");
         write_png(&p);
         assert_eq!(parse_dropped_path(p.to_str().unwrap()), Some(p));
     }

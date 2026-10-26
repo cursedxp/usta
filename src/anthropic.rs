@@ -59,6 +59,7 @@ impl Message {
             })
             .unwrap_or_default()
     }
+
     pub fn user(text: impl Into<String>) -> Self {
         Message {
             role: "user".into(),
