@@ -2,6 +2,7 @@
 //! un-wrapped source so every width change re-wraps from scratch; the scroll
 //! position is `offset` = lines hidden BELOW the pane (0 = at the bottom).
 
+use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthChar;
 
@@ -9,7 +10,7 @@ use crate::tui::paint::{reply_text, user_echo_text};
 
 /// What was pushed, kept in a form that can be re-rendered at any width.
 pub enum Source {
-    /// Soft-wrapped (char-split) on width change — notices, warnings, errors.
+    /// Word-wrapped on width change — notices, warnings, errors.
     Text(Text<'static>),
     /// Clipped, never re-wrapped — welcome panels (box borders break if wrapped).
     Fixed(Text<'static>),
@@ -28,7 +29,7 @@ pub struct ChatBuffer {
     /// Width / pane height seen by the last `visible()` call (used by scroll math).
     width: u16,
     pane_h: u16,
-    cache: Option<(u16, Vec<Line<'static>>)>,
+    cache: Option<(u16, Vec<Line<'static>>, Vec<bool>)>,
 }
 
 impl Default for ChatBuffer {
@@ -45,50 +46,83 @@ impl Default for ChatBuffer {
     }
 }
 
-/// Greedy char-split of one line at `w` display columns, keeping span styles.
-fn wrap_line(line: &Line<'static>, w: usize) -> Vec<Line<'static>> {
+/// Word-aware wrap of one line at `w` display columns, keeping span styles.
+/// Returns the rows and, per row, whether it continues the previous one (soft).
+fn wrap_line(line: &Line<'static>, w: usize) -> (Vec<Line<'static>>, Vec<bool>) {
     let w = w.max(1);
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let mut cur: Vec<Span<'static>> = Vec::new();
+    let width = |r: &[(char, Style)]| r.iter().map(|(c, _)| c.width().unwrap_or(0)).sum::<usize>();
+    let mut rows: Vec<Vec<(char, Style)>> = Vec::new();
+    let mut cur: Vec<(char, Style)> = Vec::new();
     let mut used = 0usize;
-    for span in &line.spans {
-        let mut buf = String::new();
-        for ch in span.content.chars() {
-            let cw = ch.width().unwrap_or(0);
-            if used + cw > w && used > 0 {
-                if !buf.is_empty() {
-                    cur.push(Span::styled(std::mem::take(&mut buf), span.style));
-                }
-                out.push(Line::from(std::mem::take(&mut cur)).style(line.style));
+    let cells = line
+        .spans
+        .iter()
+        .flat_map(|s| s.content.chars().map(move |c| (c, s.style)));
+    for (ch, st) in cells {
+        let cw = ch.width().unwrap_or(0);
+        if used + cw > w && used > 0 {
+            if ch == ' ' {
+                cur.push((ch, st));
+                rows.push(std::mem::take(&mut cur));
                 used = 0;
+                continue;
             }
-            buf.push(ch);
-            used += cw;
+            match cur.iter().rposition(|(c, _)| *c == ' ') {
+                Some(i) if i + 1 < cur.len() => {
+                    let rest = cur.split_off(i + 1);
+                    rows.push(std::mem::replace(&mut cur, rest));
+                    used = width(&cur);
+                }
+                _ => {
+                    rows.push(std::mem::take(&mut cur));
+                    used = 0;
+                }
+            }
         }
-        if !buf.is_empty() {
-            cur.push(Span::styled(buf, span.style));
+        cur.push((ch, st));
+        used += cw;
+    }
+    rows.push(cur);
+    let soft = (0..rows.len()).map(|i| i > 0).collect();
+    let lines = rows.into_iter().map(|r| to_line(r, line.style)).collect();
+    (lines, soft)
+}
+
+/// Regroup (char, style) cells into spans of equal style.
+fn to_line(cells: Vec<(char, Style)>, style: Style) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (c, st) in cells {
+        match spans.last_mut() {
+            Some(s) if s.style == st => s.content.to_mut().push(c),
+            _ => spans.push(Span::styled(c.to_string(), st)),
         }
     }
-    out.push(Line::from(cur).style(line.style));
-    out
+    Line::from(spans).style(style)
 }
 
 /// First visual row of `wrap_line` — a line cut at the pane edge.
 fn clip_line(line: &Line<'static>, w: usize) -> Line<'static> {
-    wrap_line(line, w).swap_remove(0)
+    wrap_line(line, w).0.swap_remove(0)
 }
 
-fn wrap_text(t: &Text<'static>, w: u16) -> Vec<Line<'static>> {
-    t.lines
-        .iter()
-        .flat_map(|l| wrap_line(l, w as usize))
-        .collect()
+fn wrap_text(t: &Text<'static>, w: u16) -> (Vec<Line<'static>>, Vec<bool>) {
+    let (mut lines, mut soft) = (Vec::new(), Vec::new());
+    for l in &t.lines {
+        let (rows, flags) = wrap_line(l, w as usize);
+        lines.extend(rows);
+        soft.extend(flags);
+    }
+    (lines, soft)
 }
 
-fn render(src: &Source, w: u16) -> Vec<Line<'static>> {
+fn render(src: &Source, w: u16) -> (Vec<Line<'static>>, Vec<bool>) {
     match src {
         Source::Text(t) => wrap_text(t, w),
-        Source::Fixed(t) => t.lines.iter().map(|l| clip_line(l, w as usize)).collect(),
+        Source::Fixed(t) => {
+            let lines: Vec<_> = t.lines.iter().map(|l| clip_line(l, w as usize)).collect();
+            let soft = vec![false; lines.len()];
+            (lines, soft)
+        }
         Source::Reply(s) => wrap_text(&reply_text(s, w), w),
         Source::Echo(s) => wrap_text(&user_echo_text(s, w), w),
     }
@@ -97,8 +131,12 @@ fn render(src: &Source, w: u16) -> Vec<Line<'static>> {
 impl ChatBuffer {
     fn flat(&mut self, width: u16) -> &[Line<'static>] {
         if self.cache.as_ref().map(|c| c.0) != Some(width) {
-            let lines = self.entries.iter().flat_map(|e| render(e, width)).collect();
-            self.cache = Some((width, lines));
+            let (mut lines, mut soft) = (Vec::new(), Vec::new());
+            for (l, f) in self.entries.iter().map(|e| render(e, width)) {
+                lines.extend(l);
+                soft.extend(f);
+            }
+            self.cache = Some((width, lines, soft));
         }
         &self.cache.as_ref().expect("cache just filled").1
     }
@@ -194,7 +232,7 @@ impl ChatBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::Color;
 
     fn plain(lines: &[Line]) -> Vec<String> {
         lines
@@ -212,18 +250,51 @@ mod tests {
         c
     }
 
+    fn rows(l: &Line<'static>, w: usize) -> (Vec<String>, Vec<bool>) {
+        let (lines, soft) = wrap_line(l, w);
+        (plain(&lines), soft)
+    }
+
     #[test]
-    fn wrap_line_splits_by_display_width_and_keeps_style() {
+    fn wrap_line_char_splits_a_word_wider_than_the_row() {
         let red = Style::default().fg(Color::Red);
-        let l = Line::from(Span::styled("abcdef", red));
-        let w = wrap_line(&l, 3);
-        assert_eq!(plain(&w), vec!["abc", "def"]);
-        assert!(w.iter().all(|r| r.spans[0].style == red));
-        // wide (2-column) chars are never split in half
-        let w = wrap_line(&Line::raw("日本語"), 4);
-        assert_eq!(plain(&w), vec!["日本", "語"]);
-        // empty line stays one empty row
-        assert_eq!(wrap_line(&Line::raw(""), 10).len(), 1);
+        let (lines, soft) = wrap_line(&Line::from(Span::styled("abcdef", red)), 3);
+        assert_eq!(plain(&lines), vec!["abc", "def"]);
+        assert_eq!(soft, vec![false, true]);
+        assert!(lines.iter().all(|r| r.spans.iter().all(|s| s.style == red)));
+    }
+
+    #[test]
+    fn wrap_line_breaks_after_the_last_space() {
+        let (r, soft) = rows(&Line::raw("the quick brown fox"), 10);
+        assert_eq!(r, vec!["the quick ", "brown fox"]);
+        assert_eq!(soft, vec![false, true]);
+    }
+
+    #[test]
+    fn wrap_line_hangs_an_overflowing_space_on_the_upper_row() {
+        let (r, _) = rows(&Line::raw("abc def"), 3);
+        assert_eq!(r, vec!["abc ", "def"]);
+    }
+
+    #[test]
+    fn wrap_line_keeps_wide_chars_whole_and_styles_across_breaks() {
+        assert_eq!(rows(&Line::raw("日本語"), 4).0, vec!["日本", "語"]);
+        let b = Style::default().fg(Color::Blue);
+        let l = Line::from(vec![Span::raw("aa "), Span::styled("bbbb", b)]);
+        let (lines, _) = wrap_line(&l, 5);
+        assert_eq!(plain(&lines), vec!["aa ", "bbbb"]);
+        assert_eq!(lines[1].spans[0].style, b);
+        assert_eq!(wrap_line(&Line::raw(""), 10).0.len(), 1);
+    }
+
+    #[test]
+    fn multi_line_text_marks_only_continuations_soft() {
+        let mut c = ChatBuffer::default();
+        c.push(Source::Text(Text::raw("one two three\nfour")));
+        c.visible(8, 10);
+        let (_, _, soft) = c.cache.as_ref().unwrap();
+        assert_eq!(soft, &vec![false, true, false]);
     }
 
     #[test]
