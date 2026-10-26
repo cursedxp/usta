@@ -451,6 +451,26 @@ fn write_atomic_backs_up_previous_version() {
 }
 
 #[test]
+fn write_atomic_keeps_the_pre_session_backup() {
+    // Compaction checkpoints + the closing flush write the same file several
+    // times per session: two bad writes must not destroy the last good copy.
+    let base = std::env::temp_dir().join(format!("usta_progress_bak_once_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let target = base.join("rust.md");
+    std::fs::write(&target, "önceki oturum").unwrap();
+    write_atomic(&target, "A").unwrap();
+    write_atomic(&target, "B").unwrap();
+    write_atomic(&target, "C").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(target.with_extension("md.bak")).unwrap(),
+        "önceki oturum"
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "C");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn introduction_prompt_carries_rules_marker_and_role() {
     let p = introduction_prompt(false, None);
     assert!(p.contains("[FIRST RUN — INTRODUCTION]"));

@@ -3,7 +3,9 @@
 //! The next session loads this file into the system prompt (brain.rs) → Usta
 //! doesn't re-explain what it already knows, it targets the gaps. Implements SPEC §9.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 
@@ -518,16 +520,23 @@ pub fn clean_markdown_reply(reply: &str) -> String {
     t.to_string()
 }
 
+/// Paths already backed up by this process — `.bak` holds the file as the previous
+/// session left it, never an earlier write of this session (review P1-3).
+static BACKED_UP: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
 /// Atomic write: write to tmp, then move it over the target — never leaves a half-written file.
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory: {}", parent.display()))?;
     }
-    // Back up the previous version — a bad model output can be restored from the single copy.
+    // Back up once per process: later writes in this session (compaction checkpoints,
+    // the closing flush) never overwrite it, so a bad write can always be undone.
     if path.exists() {
-        let bak = path.with_extension("md.bak");
-        let _ = std::fs::copy(path, &bak);
+        let mut done = BACKED_UP.lock().unwrap_or_else(|e| e.into_inner());
+        if !done.contains(path) && std::fs::copy(path, path.with_extension("md.bak")).is_ok() {
+            done.insert(path.to_path_buf());
+        }
     }
     let tmp = path.with_extension("md.tmp");
     std::fs::write(&tmp, content).with_context(|| format!("failed to write: {}", tmp.display()))?;
