@@ -129,7 +129,7 @@ A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (
 | Ctrl+V | paste a screenshot from the clipboard (text on the clipboard is pasted as text) |
 | Ctrl+C / Ctrl+D | exit |
 
-**Images:** Ctrl+V pastes a screenshot from the clipboard; dragging an image file into the terminal attaches it. Each image shows up as an `[Image #N]` token in the input - delete the token to drop the image. Works with both the API and the `claude` CLI backend.
+**Images:** Ctrl+V pastes a screenshot from the clipboard; dragging an image file into the terminal attaches it. Each image shows up as an `[Image #N]` token in the input - delete the token to drop the image. Works with both the API and the `claude` CLI backend. Images can be attached once the session has started (not during the intro). Up-arrow recall brings a line's images back with it. Only the 20 newest images (20 MB) stay in the conversation; older ones are dropped with a notice.
 
 No TTY or `NO_COLOR=1` → the TUI never opens — it falls back to the plain line mode (pipe/CI/script safe).
 
