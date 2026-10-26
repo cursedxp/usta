@@ -20,6 +20,10 @@ pub enum Source {
     Echo(String),
 }
 
+/// Bound on kept entries; past it the oldest `TRIM_ENTRIES` are dropped.
+pub const MAX_ENTRIES: usize = 1000;
+const TRIM_ENTRIES: usize = 100;
+
 pub struct ChatBuffer {
     entries: Vec<Source>,
     /// Lines hidden below the pane. 0 = showing the newest line.
@@ -30,6 +34,9 @@ pub struct ChatBuffer {
     width: u16,
     pane_h: u16,
     cache: Option<(u16, Vec<Line<'static>>, Vec<bool>)>,
+    /// Count of per-entry `render` calls (tests assert on incremental work).
+    #[cfg(test)]
+    renders: usize,
 }
 
 impl Default for ChatBuffer {
@@ -42,6 +49,8 @@ impl Default for ChatBuffer {
             width: 80,
             pane_h: 1,
             cache: None,
+            #[cfg(test)]
+            renders: 0,
         }
     }
 }
@@ -140,6 +149,10 @@ impl ChatBuffer {
                 lines.extend(l);
                 soft.extend(f);
             }
+            #[cfg(test)]
+            {
+                self.renders += self.entries.len();
+            }
             self.cache = Some((width, lines, soft));
         }
         &self.cache.as_ref().expect("cache just filled").1
@@ -152,19 +165,37 @@ impl ChatBuffer {
     }
 
     pub fn push(&mut self, s: Source) {
-        if self.follow {
-            self.entries.push(s);
-            self.cache = None;
-            return;
+        if !self.follow {
+            let w = self.width;
+            self.flat(w); // cache at the current width, so the new rows can be counted
         }
-        // Scrolled up: keep the user's view still and flag the new content.
-        let w = self.width;
-        let before = self.flat(w).len();
+        let mut added = 0;
+        if let Some((w, lines, soft)) = self.cache.as_mut() {
+            let (l, f) = render(&s, *w);
+            added = l.len();
+            lines.extend(l);
+            soft.extend(f);
+            #[cfg(test)]
+            {
+                self.renders += 1;
+            }
+        }
         self.entries.push(s);
-        self.cache = None;
-        let after = self.flat(w).len();
-        self.offset += after.saturating_sub(before);
-        self.unread = true;
+        if !self.follow {
+            // Scrolled up: keep the user's view still and flag the new content.
+            self.offset += added;
+            self.unread = true;
+        }
+        self.trim();
+    }
+
+    /// Bound memory: past `MAX_ENTRIES`, drop the oldest `TRIM_ENTRIES` (amortized).
+    /// `offset` counts from the bottom, so the view does not jump.
+    fn trim(&mut self) {
+        if self.entries.len() > MAX_ENTRIES {
+            self.entries.drain(..TRIM_ENTRIES);
+            self.cache = None;
+        }
     }
 
     /// The lines to paint into a `width` x `height` pane (top-anchored when short).
@@ -445,5 +476,45 @@ mod tests {
         let mut c = filled(3);
         assert!(c.visible(0, 5).is_empty());
         assert!(c.visible(80, 0).is_empty());
+    }
+
+    #[test]
+    fn push_while_scrolled_renders_only_the_new_entry() {
+        let mut c = filled(20);
+        c.visible(80, 5);
+        c.scroll_up(3);
+        let before = c.renders;
+        let offset = c.offset;
+        c.push(Source::Text(Text::raw("a\nb")));
+        assert_eq!(c.renders - before, 1);
+        assert_eq!(c.offset, offset + 2);
+    }
+
+    #[test]
+    fn push_while_following_extends_the_cache() {
+        let mut c = filled(5);
+        c.visible(80, 5);
+        let before = c.renders;
+        c.push(Source::Text(Text::raw("x")));
+        c.visible(80, 5);
+        assert_eq!(c.renders - before, 1, "no full re-render after a push");
+    }
+
+    #[test]
+    fn entries_are_capped_and_the_view_survives() {
+        let mut c = filled(1100);
+        assert!(c.entries.len() <= MAX_ENTRIES);
+        assert_eq!(plain(&c.visible(80, 3)).last().unwrap(), "l1099");
+        c.scroll_up(10);
+        let before = plain(&c.visible(80, 3));
+        for i in 0..150 {
+            c.push(Source::Text(Text::raw(format!("n{i}"))));
+        }
+        assert!(c.entries.len() <= MAX_ENTRIES);
+        assert_eq!(
+            plain(&c.visible(80, 3)),
+            before,
+            "scrolled view keeps its text"
+        );
     }
 }
