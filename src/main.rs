@@ -198,6 +198,7 @@ async fn main() -> Result<()> {
         )
         .await;
         ui::set_tui_active(false);
+        ui::flush_tui_notices(); // shutdown messages buffered while the TUI was up
         match r? {
             Some(artifacts) => artifacts,
             None => {

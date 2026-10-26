@@ -104,7 +104,7 @@ impl ChatBuffer {
     }
 
     /// Total wrapped lines at `width`.
-    #[allow(dead_code)] // test-only observer
+    #[cfg(test)]
     pub fn line_count(&mut self, width: u16) -> usize {
         self.flat(width).len()
     }
@@ -185,11 +185,12 @@ impl ChatBuffer {
         self.unread
     }
 
-    #[allow(dead_code)] // test-only observer
+    #[cfg(test)]
     pub fn is_following(&self) -> bool {
         self.follow
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

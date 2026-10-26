@@ -296,7 +296,7 @@ pub async fn run(
         )
         .await?
     {
-        crate::tui::page::page_notice(&mut tui, "cancelled")?;
+        crate::ui::notice("cancelled");
         return Ok(None);
     }
 
@@ -582,9 +582,5 @@ pub async fn run(
             }
         }
     }
-    // Drain the last iteration's notices right before exit — so a transcript
-    // warning that lands in the buffer on the /quit or Exit path is still seen
-    // while the TUI is up.
-    crate::tui::page::flush_notices(&mut tui)?;
     Ok(Some((session, recorder, lock))) // Tui drop → restore
 }

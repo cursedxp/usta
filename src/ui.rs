@@ -18,11 +18,11 @@ pub const AMBER: &str = "\x1b[38;5;179m";
 pub const RESET: &str = "\x1b[0m";
 
 /// Is the TUI active? While true, notice/warn/Spinner don't print raw ANSI — they're
-/// buffered/no-op so they don't collide with ratatui's inline viewport.
+/// buffered/no-op so they don't collide with the fullscreen TUI.
 static TUI_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Notices accumulated while the TUI is active — tui/page.rs flushes these to the
-/// scrollback via page_notice.
+/// chat pane; leftovers are printed by flush_tui_notices after exit.
 static TUI_NOTICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Set the flag when entering/leaving the TUI loop (main.rs is responsible for this).
@@ -40,6 +40,26 @@ pub fn drain_tui_notices() -> Vec<String> {
         Ok(mut guard) => std::mem::take(&mut *guard),
         // No panic on the cleanup path even if poisoned — recover the lock.
         Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    }
+}
+
+/// Split a buffered message into (is_warn, text) — `warn` stores a `G_WARN ` prefix.
+fn split_tui_notice(m: &str) -> (bool, &str) {
+    let prefix = format!("{} ", crate::tui::theme::G_WARN);
+    match m.strip_prefix(prefix.as_str()) {
+        Some(rest) => (true, rest),
+        None => (false, m),
+    }
+}
+
+/// Print any still-buffered TUI messages on the normal screen (call after
+/// `set_tui_active(false)`; the chat pane is gone by then).
+pub fn flush_tui_notices() {
+    for m in drain_tui_notices() {
+        match split_tui_notice(&m) {
+            (true, rest) => warn(rest),
+            (false, text) => notice(text),
+        }
     }
 }
 
@@ -224,6 +244,13 @@ fn skin() -> MadSkin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_tui_notice_routes_warn_prefix() {
+        let w = format!("{} careful", crate::tui::theme::G_WARN);
+        assert_eq!(split_tui_notice(&w), (true, "careful"));
+        assert_eq!(split_tui_notice("plain msg"), (false, "plain msg"));
+    }
 
     #[test]
     fn render_markdown_indents_and_keeps_content() {
