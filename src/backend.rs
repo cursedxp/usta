@@ -146,14 +146,16 @@ impl Backend {
                     Some(_) => last_user_text(history),
                     None => render_transcript(history),
                 };
-                let attempt = run_claude_cli(bin, model, system, &input, resume.as_deref()).await;
+                let images = last_user_images(history);
+                let attempt =
+                    run_claude_cli(bin, model, system, &input, &images, resume.as_deref()).await;
                 let (text, new_sid, tokens) = match attempt {
                     Ok(v) => v,
                     // Stale/deleted session — retry once from scratch with the full transcript.
                     Err(_) if resume.is_some() => {
                         *session_id = None;
-                        run_claude_cli(bin, model, system, &render_transcript(history), None)
-                            .await?
+                        let transcript = render_transcript(history);
+                        run_claude_cli(bin, model, system, &transcript, &images, None).await?
                     }
                     Err(e) => return Err(e),
                 };
@@ -199,6 +201,49 @@ pub fn parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>) {
     }
 }
 
+/// Image blocks of the LAST user message. They ride on this call only: a resumed
+/// session already holds earlier images, and the no-resume transcript is plain text.
+fn last_user_images(history: &[Message]) -> Vec<serde_json::Value> {
+    history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(Message::image_blocks)
+        .unwrap_or_default()
+}
+
+/// The single stdin line for `--input-format stream-json`: images first, then the text.
+fn stream_input(text: &str, images: &[serde_json::Value]) -> String {
+    let mut content = images.to_vec();
+    content.push(serde_json::json!({"type": "text", "text": text}));
+    let mut line = serde_json::json!({
+        "type": "user",
+        "message": {"role": "user", "content": content}
+    })
+    .to_string();
+    line.push('\n');
+    line
+}
+
+/// `--output-format stream-json` prints NDJSON; the answer is the last `"type":"result"`
+/// line, which carries the same `result` / `session_id` / `usage` as json mode.
+pub fn parse_stream_output(stdout: &str) -> Result<(String, Option<String>, Option<u64>)> {
+    let v = stdout
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v["type"] == "result")
+        .context("claude CLI returned no result")?;
+    if v["is_error"] == true {
+        let why = v["result"]
+            .as_str()
+            .or(v["subtype"].as_str())
+            .unwrap_or("unknown error");
+        bail!("claude CLI error: {why}");
+    }
+    Ok(parse_cli_output(&v.to_string()))
+}
+
 /// Convert the conversation history into a plain-text transcript to be
 /// written to the `claude` CLI's stdin. User = `[SEN]`, assistant = `[USTA]`.
 fn render_transcript(history: &[Message]) -> String {
@@ -232,17 +277,33 @@ impl Drop for PromptFile {
     }
 }
 
-/// Run the `claude -p` subprocess: input is written to stdin, JSON output is read back.
+/// Run the `claude -p` subprocess: input is written to stdin, JSON output is read back
+/// (stream-json when `images` is non-empty).
 /// If `resume` is given, the server-side session is continued via `--resume <id>`.
 async fn run_claude_cli(
     bin: &Path,
     model: &str,
     system: &str,
     input: &str,
+    images: &[serde_json::Value],
     resume: Option<&str>,
 ) -> Result<(String, Option<String>, Option<u64>)> {
     let mut cmd = Command::new(bin);
-    cmd.arg("-p").arg("--output-format").arg("json");
+    cmd.arg("-p");
+    // Image turns need stream-json in (verified spike: requires stream-json out + --verbose);
+    // text-only turns keep the plain json path untouched.
+    let stream = !images.is_empty();
+    if stream {
+        cmd.args([
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ]);
+    } else {
+        cmd.arg("--output-format").arg("json");
+    }
     // On Windows every spawn (exe included) uses the file form — the command
     // line is capped at 32,767 UTF-16 chars and usta's system prompt is
     // already ~25K and growing. `.cmd`/`.bat` shims need it on any OS too:
@@ -285,8 +346,13 @@ async fn run_claude_cli(
             .stdin
             .take()
             .context("failed to get claude CLI stdin")?;
+        let payload = if stream {
+            stream_input(input, images)
+        } else {
+            input.to_string()
+        };
         stdin
-            .write_all(input.as_bytes())
+            .write_all(payload.as_bytes())
             .await
             .context("failed to write to claude CLI stdin")?;
         stdin.shutdown().await.ok();
@@ -306,7 +372,12 @@ async fn run_claude_cli(
         );
     }
 
-    Ok(parse_cli_output(&String::from_utf8_lossy(&output.stdout)))
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stream {
+        parse_stream_output(&stdout)
+    } else {
+        Ok(parse_cli_output(&stdout))
+    }
 }
 
 /// First-run wizard: what the user typed at the prompt (spec: onboarding-lite).
@@ -396,6 +467,7 @@ pub fn run_backend_wizard() -> Result<Backend> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image_attach::PastedImage;
 
     #[test]
     fn cli_call_isolates_usta_from_claude_code_settings() {
@@ -573,5 +645,116 @@ mod tests {
                 "{forbidden} must stay off: {tools:?}"
             );
         }
+    }
+
+    fn pasted(bytes: Vec<u8>) -> PastedImage {
+        PastedImage {
+            media_type: "image/png",
+            data: bytes,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn last_user_images_come_from_the_last_user_message_only() {
+        let history = vec![
+            Message::user_with_images("first [Image #1]", &[pasted(vec![1])]),
+            Message::assistant_raw(serde_json::Value::String("ok".into())),
+            Message::user_with_images("second [Image #1]", &[pasted(vec![2]), pasted(vec![3])]),
+        ];
+        assert_eq!(last_user_images(&history).len(), 2);
+        let plain_last = vec![
+            Message::user_with_images("a", &[pasted(vec![1])]),
+            Message::user("b"),
+        ];
+        assert!(last_user_images(&plain_last).is_empty());
+    }
+
+    #[test]
+    fn stream_input_is_one_json_line_with_images_before_text() {
+        let blocks = vec![pasted(vec![1, 2, 3]).to_block()];
+        let line = stream_input("describe [Image #1]", &blocks);
+        assert!(line.ends_with('\n'));
+        assert_eq!(line.matches('\n').count(), 1);
+        let v: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["message"]["role"], "user");
+        assert_eq!(v["message"]["content"][0]["type"], "image");
+        assert_eq!(v["message"]["content"][0]["source"]["data"], "AQID");
+        assert_eq!(v["message"]["content"][1]["type"], "text");
+        assert_eq!(v["message"]["content"][1]["text"], "describe [Image #1]");
+    }
+
+    #[test]
+    fn parse_stream_output_takes_the_result_line_among_noise() {
+        let out = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s0\"}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"draft\"}]}}\n",
+            "{\"type\":\"rate_limit_event\"}\n",
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"Top red, bottom blue.\",\"session_id\":\"abc\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":5}}\n",
+        );
+        let (text, sid, tokens) = parse_stream_output(out).unwrap();
+        assert_eq!(text, "Top red, bottom blue.");
+        assert_eq!(sid.as_deref(), Some("abc"));
+        assert_eq!(tokens, Some(15));
+    }
+
+    #[test]
+    fn parse_stream_output_errors_on_is_error_result() {
+        let out = "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"session_id\":\"x\"}\n";
+        let err = parse_stream_output(out).unwrap_err().to_string();
+        assert!(err.contains("error_during_execution"), "{err}");
+    }
+
+    #[test]
+    fn parse_stream_output_errors_without_a_result_line() {
+        assert!(parse_stream_output("{\"type\":\"system\"}\nnot json\n").is_err());
+        assert!(parse_stream_output("").is_err());
+    }
+
+    #[test]
+    fn cli_call_uses_stream_json_only_for_image_turns() {
+        // Source pin - the flags live inside an async spawn fn.
+        let src = include_str!("backend.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        for flag in ["--input-format", "stream-json", "--verbose"] {
+            assert!(production.contains(flag), "missing {flag}");
+        }
+        assert!(
+            production.contains("let stream = !images.is_empty();"),
+            "stream-json must stay opt-in per turn"
+        );
+    }
+
+    /// Live end-to-end check against the real `claude` CLI (costs ~$0.005, needs login).
+    /// Run: cargo test live_cli_describes_an_image -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_cli_describes_an_image() {
+        let mut img = image::RgbaImage::from_pixel(120, 80, image::Rgba([220, 20, 20, 255]));
+        for y in 40..80 {
+            for x in 0..120 {
+                img.put_pixel(x, y, image::Rgba([20, 20, 220, 255]));
+            }
+        }
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let block = pasted(png).to_block();
+        let (text, sid, _) = run_claude_cli(
+            Path::new("claude"),
+            "haiku",
+            "You are terse.",
+            "Name the two colors in [Image #1], top then bottom, two words.",
+            &[block],
+            None,
+        )
+        .await
+        .unwrap();
+        let t = text.to_lowercase();
+        assert!(t.contains("red") && t.contains("blue"), "{text}");
+        assert!(sid.is_some());
     }
 }

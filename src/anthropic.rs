@@ -49,8 +49,6 @@ impl Message {
         }
     }
 
-    // TEMP(image-paste): consumed from Task 4-6; remove this allow then.
-    #[allow(dead_code)]
     /// The `image` blocks of an array message (empty for string content).
     pub fn image_blocks(&self) -> Vec<Value> {
         self.content
