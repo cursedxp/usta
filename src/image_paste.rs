@@ -2,6 +2,7 @@
 //! drag-and-drop, or the system clipboard (Ctrl+V).
 
 use crate::image_attach::{self, PastedImage};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 const IMAGE_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
@@ -46,16 +47,23 @@ pub fn parse_dropped_path(raw: &str) -> Option<PathBuf> {
     (IMAGE_EXTS.contains(&ext.as_str()) && path.is_file()).then_some(path)
 }
 
-/// Dropped path -> prepared image. `None` on any failure: the caller pastes the text as-is.
-pub fn load_dropped(raw: &str) -> Option<PastedImage> {
+/// Dropped path -> prepared image. `None`: the paste is not one existing image file (the
+/// caller pastes the text as-is). `Some(Err)`: it looked like an image file but failed.
+pub fn load_dropped(raw: &str) -> Option<Result<PastedImage>> {
     let path = parse_dropped_path(raw)?;
-    image_attach::prepare(std::fs::read(path).ok()?).ok()
+    Some(
+        std::fs::read(&path)
+            .context("cannot read file")
+            .and_then(image_attach::prepare),
+    )
 }
 
 /// What the system clipboard held.
 pub enum Clip {
     Image(PastedImage),
     Text(String),
+    /// A clipboard image that could not be converted.
+    Failed(String),
     Empty,
 }
 
@@ -65,11 +73,14 @@ pub fn read_clipboard() -> Clip {
         return Clip::Empty;
     };
     if let Ok(img) = cb.get_image() {
-        if let Ok(p) =
-            image_attach::from_rgba(img.width as u32, img.height as u32, img.bytes.into_owned())
-        {
-            return Clip::Image(p);
-        }
+        return match image_attach::from_rgba(
+            img.width as u32,
+            img.height as u32,
+            img.bytes.into_owned(),
+        ) {
+            Ok(p) => Clip::Image(p),
+            Err(e) => Clip::Failed(e.to_string()),
+        };
     }
     match cb.get_text() {
         Ok(t) if !t.is_empty() => Clip::Text(t),
@@ -176,15 +187,24 @@ mod tests {
         let d = scratch("load");
         let p = d.join("x.png");
         write_png(&p);
-        let img = load_dropped(p.to_str().unwrap()).unwrap();
+        let img = load_dropped(p.to_str().unwrap()).unwrap().unwrap();
         assert_eq!((img.media_type, img.width, img.height), ("image/png", 8, 8));
     }
 
     #[test]
-    fn load_dropped_is_none_for_a_corrupt_image() {
+    fn load_dropped_reports_a_corrupt_image() {
         let d = scratch("corrupt");
         let p = d.join("bad.png");
         std::fs::write(&p, b"not a png").unwrap();
+        assert!(matches!(load_dropped(p.to_str().unwrap()), Some(Err(_))));
+    }
+
+    #[test]
+    fn load_dropped_is_none_for_a_text_file() {
+        let d = scratch("text");
+        let p = d.join("notes.txt");
+        std::fs::write(&p, b"hello").unwrap();
         assert!(load_dropped(p.to_str().unwrap()).is_none());
+        assert!(load_dropped("just some words").is_none());
     }
 }

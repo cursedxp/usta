@@ -174,6 +174,8 @@ pub(crate) fn draw(
     watch: Option<(bool, bool, usize)>,
     verify_failing: bool,
 ) -> Result<()> {
+    // Every loop draws: flushing here shows notices raised in intro/entry/confirm too.
+    flush_notices(tui)?;
     let line = render_status(status, tokens, window, watch, verify_failing);
     let chat = &mut tui.chat;
     tui.terminal
@@ -288,8 +290,22 @@ mod tests {
             "draw must use render_screen"
         );
         assert!(
+            draw.contains("flush_notices(tui)"),
+            "draw must flush buffered notices"
+        );
+        assert!(
             !draw.contains("set_height("),
             "no viewport rebuild in fullscreen"
+        );
+    }
+
+    #[test]
+    fn run_loop_no_longer_flushes_notices_itself() {
+        let src = include_str!("run.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            !production.contains("flush_notices("),
+            "draw owns the notice flush"
         );
     }
 

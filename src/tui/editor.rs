@@ -14,6 +14,7 @@ use ratatui_textarea::{CursorMove, TextArea};
 use crate::image_attach::PastedImage;
 use crate::image_paste::{self, Clip};
 use crate::tui::theme;
+use crate::ui;
 
 /// Result of key handling — the loop behaves accordingly.
 #[derive(Debug)]
@@ -272,7 +273,11 @@ impl InputBox {
     /// token; anything else is ordinary text.
     pub fn paste(&mut self, s: &str) {
         match image_paste::load_dropped(s) {
-            Some(img) => self.attach_image(img),
+            Some(Ok(img)) => self.attach_image(img),
+            Some(Err(e)) => {
+                self.insert_str(s);
+                ui::notice(&format!("couldn't attach image: {e}"));
+            }
             None => self.insert_str(s),
         }
     }
@@ -286,6 +291,7 @@ impl InputBox {
         match clip {
             Clip::Image(img) => self.attach_image(img),
             Clip::Text(t) => self.insert_str(&t),
+            Clip::Failed(e) => ui::notice(&format!("couldn't attach image: {e}")),
             Clip::Empty => {}
         }
     }
@@ -1058,6 +1064,43 @@ mod tests {
         b.clear();
         b.paste("/no/such/file.png");
         assert_eq!(b.value(), "/no/such/file.png");
+    }
+
+    static NOTICES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn notices_after(f: impl FnOnce()) -> Vec<String> {
+        let _g = NOTICES.lock().unwrap_or_else(|p| p.into_inner());
+        crate::ui::set_tui_active(true);
+        crate::ui::drain_tui_notices();
+        f();
+        crate::ui::drain_tui_notices()
+    }
+
+    #[test]
+    fn failed_drop_inserts_the_path_and_leaves_a_notice() {
+        let dir = std::env::temp_dir().join(format!("usta editor bad {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("bad.png");
+        std::fs::write(&p, b"not a png").unwrap();
+        let raw = p.to_str().unwrap().to_string();
+        let mut b = InputBox::new();
+        let n = notices_after(|| b.paste(&raw));
+        assert_eq!(b.value(), raw);
+        assert!(
+            n.iter().any(|m| m.starts_with("couldn't attach image: ")),
+            "{n:?}"
+        );
+    }
+
+    #[test]
+    fn failed_clipboard_image_leaves_a_notice() {
+        let mut b = InputBox::new();
+        let n = notices_after(|| b.apply_clip(Clip::Failed("bad size".into())));
+        assert_eq!(b.value(), "");
+        assert!(
+            n.iter().any(|m| m == "couldn't attach image: bad size"),
+            "{n:?}"
+        );
     }
 
     #[test]

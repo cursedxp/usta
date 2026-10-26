@@ -430,10 +430,6 @@ pub async fn run(
     let mut live = crate::tui::polite::live_from_approach(&approach);
     let mut pending = crate::tui::polite::PendingChanges::new();
     loop {
-        // Drain the buffer at the start of every iteration — notices that
-        // accumulate outside maybe_compact, like a transcript write error,
-        // should never be lost either.
-        crate::tui::page::flush_notices(&mut tui)?;
         crate::tui::page::draw(
             &mut tui,
             &editor,
