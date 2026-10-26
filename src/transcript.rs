@@ -67,18 +67,26 @@ pub fn delete_unflushed(files: &[PathBuf]) -> (usize, Vec<String>) {
 }
 
 /// Read a transcript file written by `Recorder` (`{"role","text"}` per line)
-/// and reconstruct it as `Message` history, preserving order. Any line that
-/// fails to parse, or carries a role other than "user"/"assistant"/"rollback", fails
-/// the whole read — a salvage flush must not silently drop turns. A "rollback" line
-/// drops the user turn the live session rolled back.
+/// and reconstruct it as `Message` history, preserving order. A line that fails
+/// to parse, or carries a role other than "user"/"assistant"/"rollback", fails
+/// the whole read — a salvage flush must not silently drop turns — except the
+/// LAST line: a crash mid-append leaves it torn, and only that one is skipped
+/// (with a warning). Bytes are read lossily, so a cut multibyte char can't fail
+/// the read. A "rollback" line drops the user turn the live session rolled back.
 pub fn read_history(path: &Path) -> Result<Vec<Message>> {
-    let content = std::fs::read_to_string(path)?;
+    let bytes = std::fs::read(path)?;
+    let content = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
     let mut out = Vec::new();
-    for l in content.lines() {
-        if l.trim().is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = serde_json::from_str(l)?;
+    for (i, l) in lines.iter().enumerate() {
+        let v: serde_json::Value = match serde_json::from_str(l) {
+            Ok(v) => v,
+            Err(_) if i + 1 == lines.len() => {
+                crate::ui::warn("last session line was incomplete — skipped");
+                break;
+            }
+            Err(e) => return Err(e.into()),
+        };
         let role = v
             .get("role")
             .and_then(|r| r.as_str())
@@ -245,6 +253,54 @@ mod tests {
         let h = read_history(&p).unwrap();
         assert_eq!(h.len(), 2);
         assert_eq!(h[1].role, "assistant");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_history_skips_a_torn_last_line() {
+        let base =
+            std::env::temp_dir().join(format!("usta_transcript_torn_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let p = base.join("rust-1.jsonl");
+        let r = Recorder::new(p.clone());
+        r.user("merhaba");
+        r.assistant("selam");
+        // Crash mid-append: half a line, cut inside the multibyte 'ş' (0xC5 0x9F).
+        let mut torn = br#"{"role":"user","text":"ba"#.to_vec();
+        torn.push(0xC5);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&p)
+            .unwrap()
+            .write_all(&torn)
+            .unwrap();
+        let h = read_history(&p).unwrap();
+        assert_eq!(h.len(), 2);
+        assert_eq!(h[1].role, "assistant");
+        // An ASCII-only torn tail is skipped the same way.
+        let q = base.join("rust-2.jsonl");
+        std::fs::write(&q, format!("{}{}", line("user", "a"), r#"{"role":"assis"#)).unwrap();
+        assert_eq!(read_history(&q).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_history_rejects_a_bad_middle_line() {
+        let base =
+            std::env::temp_dir().join(format!("usta_transcript_badmid_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let p = base.join("rust-1.jsonl");
+        std::fs::write(
+            &p,
+            format!("{}not json\n{}", line("user", "a"), line("assistant", "b")),
+        )
+        .unwrap();
+        assert!(
+            read_history(&p).is_err(),
+            "a salvage flush must not drop turns"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
