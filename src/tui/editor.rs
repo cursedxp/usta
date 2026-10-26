@@ -241,21 +241,23 @@ impl InputBox {
         }
     }
 
+    /// Text rows this box wants at `width` (prefix deducted), clamped to 1..=MAX_INPUT_ROWS.
+    #[allow(dead_code)] // consumed by the viewport sizing in Task 3
+    pub fn desired_rows(&self, width: u16) -> u16 {
+        let inner = width.saturating_sub(2) as usize;
+        let (rows, _, _) = wrap_rows(self.lines(), inner, self.cursor_rc());
+        (rows.len() as u16).clamp(1, MAX_INPUT_ROWS)
+    }
+
     /// Draw the box: a single rule above (no side or bottom borders) + `> ` prefix +
-    /// cursor. Long text WRAPS TO THE NEXT LINE at the full width minus the
-    /// prefix (no horizontal scrolling); if it exceeds the inner line count,
-    /// the vertical window follows the cursor.
+    /// cursor. Rows break at word boundaries (or mid-word when a word is wider
+    /// than the row) at the full width minus the prefix; logical lines are real
+    /// lines, no ⏎ marker. If rows exceed the inner line count, the vertical
+    /// window follows the cursor.
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let inner_w = area.width.saturating_sub(2) as usize; // "> " prefix
         let visible = area.height.saturating_sub(1).max(1) as usize; // lines under the rule
-        let value = self.value();
-        let (r, c) = self.cursor_rc();
-        let idx = self.lines()[..r]
-            .iter()
-            .map(|l| l.chars().count() + 1)
-            .sum::<usize>()
-            + c;
-        let (rows, cur_row, cur_col) = wrap_visual(&value, inner_w, idx);
+        let (rows, cur_row, cur_col) = wrap_rows(self.lines(), inner_w, self.cursor_rc());
         // Vertical window: last `visible` lines so the cursor stays visible.
         let start = (cur_row + 1).saturating_sub(visible);
         let lines: Vec<Line> = rows
@@ -286,40 +288,63 @@ impl InputBox {
     }
 }
 
-/// Wrap the value into visual lines — width is CELL-based (unicode-width),
-/// `\n` splits the line and shows as ⏎ at line end. Also returns the
-/// row/column equivalent of the cursor (character index). Pure — render draws
-/// from this, the Submit value is UNCHANGED.
-fn wrap_visual(value: &str, width: usize, cursor: usize) -> (Vec<String>, usize, usize) {
+/// Most text rows the box shows before it scrolls (opencode-style growth, 1..=8).
+#[allow(dead_code)] // consumed by the viewport sizing in Task 3
+pub const MAX_INPUT_ROWS: u16 = 8;
+
+fn cell(ch: char) -> usize {
     use unicode_width::UnicodeWidthChar;
-    let width = width.max(1);
-    let mut rows: Vec<String> = vec![String::new()];
-    let mut col = 0usize;
-    let (mut cur_row, mut cur_col) = (0usize, 0usize);
-    for (i, ch) in value.chars().enumerate() {
-        let (ch, w, breaks) = if ch == '\n' {
-            ('⏎', 1usize, true)
-        } else {
-            (ch, ch.width().unwrap_or(0).max(1), false)
-        };
-        if col + w > width {
-            rows.push(String::new());
-            col = 0;
+    ch.width().unwrap_or(0).max(1)
+}
+
+/// Visual-row start indices for one logical line: break at the last space that fits,
+/// or mid-word when a single word is wider than the row. Width is cell-based.
+fn row_starts(chars: &[char], width: usize) -> Vec<usize> {
+    let mut starts = vec![0];
+    let (mut w, mut last_space) = (0usize, None::<usize>);
+    let mut i = 0;
+    while i < chars.len() {
+        let start = *starts.last().expect("starts boş olamaz");
+        if w + cell(chars[i]) > width && i > start {
+            let s = match last_space {
+                Some(sp) if sp + 1 > start && sp < i => sp + 1,
+                _ => i,
+            };
+            starts.push(s);
+            w = chars[s..i].iter().map(|&c| cell(c)).sum();
+            last_space = None;
+            continue;
         }
-        if i == cursor {
-            cur_row = rows.len() - 1;
-            cur_col = col;
+        if chars[i] == ' ' {
+            last_space = Some(i);
         }
-        rows.last_mut().expect("rows boş olamaz").push(ch);
-        col += w;
-        if breaks {
-            rows.push(String::new());
-            col = 0;
-        }
+        w += cell(chars[i]);
+        i += 1;
     }
-    if cursor >= value.chars().count() {
-        cur_row = rows.len() - 1;
-        cur_col = col;
+    starts
+}
+
+/// Wrap logical lines into visual rows; also map the data cursor (row, char col)
+/// to (visual row, cell column). Pure — render draws from this, the value is unchanged.
+fn wrap_rows(
+    lines: &[String],
+    width: usize,
+    cursor: (usize, usize),
+) -> (Vec<String>, usize, usize) {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    let (mut cur_row, mut cur_col) = (0, 0);
+    for (r, line) in lines.iter().enumerate() {
+        let chars: Vec<char> = line.chars().collect();
+        let starts = row_starts(&chars, width);
+        for (k, &s) in starts.iter().enumerate() {
+            let e = starts.get(k + 1).copied().unwrap_or(chars.len());
+            if r == cursor.0 && cursor.1 >= s && (cursor.1 < e || k + 1 == starts.len()) {
+                cur_row = rows.len();
+                cur_col = chars[s..cursor.1].iter().map(|&c| cell(c)).sum();
+            }
+            rows.push(chars[s..e].iter().collect());
+        }
     }
     (rows, cur_row, cur_col)
 }
@@ -406,42 +431,55 @@ mod tests {
     }
 
     #[test]
-    fn wrap_visual_wraps_long_text_at_cell_width() {
-        // 10-cell width, 25 characters → 3 lines (10+10+5).
-        let v = "a".repeat(25);
-        let (rows, cur_row, cur_col) = wrap_visual(&v, 10, 25);
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].chars().count(), 10);
-        assert_eq!(rows[2].chars().count(), 5);
-        // If the cursor is at the end, it's at the end of the last line.
-        assert_eq!((cur_row, cur_col), (2, 5));
+    fn wrap_breaks_at_word_boundary() {
+        let lines = vec!["aaa bbb ccc".to_string()];
+        let (rows, r, c) = wrap_rows(&lines, 8, (0, 11));
+        assert_eq!(rows, vec!["aaa bbb ".to_string(), "ccc".to_string()]);
+        assert_eq!((r, c), (1, 3));
     }
 
     #[test]
-    fn wrap_visual_breaks_on_newline_with_visible_marker() {
-        let (rows, _, _) = wrap_visual("ab\ncd", 10, 0);
-        assert_eq!(rows, vec!["ab⏎".to_string(), "cd".to_string()]);
+    fn wrap_splits_a_word_longer_than_the_row() {
+        let lines = vec!["abcdefghij".to_string()];
+        let (rows, _, _) = wrap_rows(&lines, 4, (0, 0));
+        assert_eq!(rows, vec!["abcd", "efgh", "ij"]);
     }
 
     #[test]
-    fn wrap_visual_cursor_mid_text_lands_on_correct_row() {
-        let v = "a".repeat(15); // width 10 → row0: 0..9, row1: 10..14
-        let (_, cur_row, cur_col) = wrap_visual(&v, 10, 12);
-        assert_eq!((cur_row, cur_col), (1, 2));
+    fn wrap_counts_wide_chars_by_cell() {
+        let lines = vec!["日本語".to_string()]; // 6 cells
+        let (rows, r, c) = wrap_rows(&lines, 4, (0, 3));
+        assert_eq!(rows, vec!["日本", "語"]);
+        assert_eq!((r, c), (1, 2));
     }
 
     #[test]
-    fn wrap_visual_turkish_chars_count_one_cell() {
-        let (rows, _, _) = wrap_visual("çğşöüiçğşöüi", 6, 0); // 12 characters, 6 cells → 2 lines
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], "çğşöüi");
+    fn wrap_keeps_logical_lines_and_turkish_cursor() {
+        let lines = vec!["şeker".to_string(), "çay".to_string()];
+        let (rows, r, c) = wrap_rows(&lines, 20, (1, 2));
+        assert_eq!(rows, vec!["şeker", "çay"]);
+        assert_eq!((r, c), (1, 2));
     }
 
     #[test]
-    fn wrap_visual_empty_value_single_empty_row() {
-        let (rows, cur_row, cur_col) = wrap_visual("", 10, 0);
-        assert_eq!(rows, vec![String::new()]);
-        assert_eq!((cur_row, cur_col), (0, 0));
+    fn desired_rows_grows_and_caps_at_eight() {
+        let mut b = InputBox::new();
+        assert_eq!(b.desired_rows(40), 1);
+        b.insert_str("1\n2\n3");
+        assert_eq!(b.desired_rows(40), 3);
+        b.insert_str(&"\nx".repeat(20));
+        assert_eq!(b.desired_rows(40), MAX_INPUT_ROWS);
+    }
+
+    #[test]
+    fn render_rule_prefix_and_cursor() {
+        let mut b = InputBox::new();
+        b.insert_str("ab\ncd");
+        let (rows, cur) = render_rows(&b, 20, 4);
+        assert!(rows[0].chars().all(|c| c == '─'));
+        assert!(rows[1].starts_with("> ab"));
+        assert!(rows[2].starts_with("  cd"));
+        assert_eq!(cur, (4, 2));
     }
 
     #[test]
