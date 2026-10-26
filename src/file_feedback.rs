@@ -230,6 +230,7 @@ pub(crate) async fn handle_file_change(
         text: clean,
         web: reply.web,
         context_tokens: reply.context_tokens,
+        truncated: reply.truncated,
     };
     Ok(FileFeedback::Yanit {
         tokens,
@@ -376,6 +377,7 @@ pub(crate) async fn handle_batch_change(
         text: clean,
         web: reply.web,
         context_tokens: reply.context_tokens,
+        truncated: reply.truncated,
     };
     Ok((
         meta.notices,

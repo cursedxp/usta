@@ -11,7 +11,8 @@ use crate::image_attach::PastedImage;
 pub const DEFAULT_MODEL: &str = "claude-opus-4-8";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const MAX_TOKENS: u32 = 8000;
+/// Output budget for a normal chat turn (adaptive thinking shares it).
+pub const MAX_TOKENS: u32 = 8000;
 const MAX_CONTINUATIONS: usize = 6;
 
 /// A conversation message. `content` can be a string (user input) or a raw
@@ -143,10 +144,10 @@ pub struct MessageRequest {
 }
 
 impl MessageRequest {
-    pub fn new(model: String, system: String, messages: Vec<Message>) -> Self {
+    pub fn new(model: String, system: String, messages: Vec<Message>, max_tokens: u32) -> Self {
         MessageRequest {
             model,
-            max_tokens: MAX_TOKENS,
+            max_tokens,
             system,
             messages,
             thinking: Thinking { kind: "adaptive" },
@@ -170,6 +171,13 @@ struct MessageResponse {
     content: Vec<Value>,
     stop_reason: Option<String>,
     usage: Option<Value>,
+}
+
+impl MessageResponse {
+    /// The reply hit the output budget — its text is cut off.
+    fn truncated(&self) -> bool {
+        self.stop_reason.as_deref() == Some("max_tokens")
+    }
 }
 
 /// Extract the visible text from the response content array (type == "text").
@@ -221,14 +229,20 @@ impl Client {
     /// Complete the request. The request body is built from model/system/history.
     /// If `pause_turn` comes back, append the assistant content and continue.
     /// The raw content juggling for `pause_turn` stays here — it doesn't leak into the session.
-    /// Returns the final (text, used_web_search, context_tokens) triple.
+    /// Returns (text, used_web_search, context_tokens, truncated) of the final response.
     pub async fn complete(
         &self,
         model: &str,
         system: &str,
         history: &[Message],
-    ) -> Result<(String, bool, Option<u64>)> {
-        let mut req = MessageRequest::new(model.to_string(), system.to_string(), history.to_vec());
+        max_tokens: u32,
+    ) -> Result<(String, bool, Option<u64>, bool)> {
+        let mut req = MessageRequest::new(
+            model.to_string(),
+            system.to_string(),
+            history.to_vec(),
+            max_tokens,
+        );
         let mut web = false;
         for _ in 0..MAX_CONTINUATIONS {
             let resp = self
@@ -261,7 +275,12 @@ impl Client {
             }
 
             let tokens = parsed.usage.as_ref().and_then(sum_context_tokens);
-            return Ok((extract_text(&parsed.content), web, tokens));
+            return Ok((
+                extract_text(&parsed.content),
+                web,
+                tokens,
+                parsed.truncated(),
+            ));
         }
         bail!("too many pause_turn continuations — loop aborted");
     }
@@ -305,6 +324,7 @@ mod tests {
             DEFAULT_MODEL.into(),
             "sistem".into(),
             vec![Message::user_with_images("hi", &[img(vec![9])])],
+            MAX_TOKENS,
         );
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["messages"][0]["content"][0]["type"], "image");
@@ -331,9 +351,11 @@ mod tests {
             DEFAULT_MODEL.into(),
             "sistem".into(),
             vec![Message::user("merhaba")],
+            MAX_TOKENS,
         );
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["model"], "claude-opus-4-8");
+        assert_eq!(v["max_tokens"], 8000);
         assert_eq!(v["thinking"]["type"], "adaptive");
         assert_eq!(v["output_config"]["effort"], "high");
         assert_eq!(v["tools"][0]["type"], "web_search_20260209");
@@ -342,6 +364,29 @@ mod tests {
         assert_eq!(v["tools"][1]["name"], "web_fetch");
         assert_eq!(v["messages"][0]["role"], "user");
         assert_eq!(v["messages"][0]["content"], "merhaba");
+    }
+
+    #[test]
+    fn response_with_max_tokens_stop_is_truncated() {
+        let cut: MessageResponse = serde_json::from_str(
+            r#"{"content":[{"type":"text","text":"===FILE: progress===\n# Ru"}],"stop_reason":"max_tokens"}"#,
+        )
+        .unwrap();
+        assert!(cut.truncated());
+        let done: MessageResponse =
+            serde_json::from_str(r#"{"content":[],"stop_reason":"end_turn"}"#).unwrap();
+        assert!(!done.truncated());
+    }
+
+    #[test]
+    fn request_carries_the_requested_output_budget() {
+        let req = MessageRequest::new(
+            DEFAULT_MODEL.into(),
+            "s".into(),
+            vec![Message::user("x")],
+            32000,
+        );
+        assert_eq!(serde_json::to_value(&req).unwrap()["max_tokens"], 32000);
     }
 
     #[test]

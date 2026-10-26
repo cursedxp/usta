@@ -24,6 +24,9 @@ pub struct Reply {
     pub web: bool,
     /// Total context tokens of the last call (input + cache) — for the indicator.
     pub context_tokens: Option<u64>,
+    /// The model hit the output budget — `text` is cut off (API `stop_reason:
+    /// max_tokens`). Always false on the CLI: its output-limit hit exits 1 → Err.
+    pub truncated: bool,
 }
 
 /// Default model for the CLI backend. `claude -p --model opus`.
@@ -127,13 +130,27 @@ impl Backend {
     /// Request a completion from the selected backend, returns `Reply`.
     /// In CLI mode web usage can't be detected from the text → `false`.
     pub async fn complete(&mut self, system: &str, history: &[Message]) -> Result<Reply> {
+        self.complete_with_limit(system, history, anthropic::MAX_TOKENS)
+            .await
+    }
+
+    /// `complete` with an explicit output budget — the closing/compaction flush
+    /// needs more room than a chat turn. The CLI backend ignores it.
+    pub async fn complete_with_limit(
+        &mut self,
+        system: &str,
+        history: &[Message],
+        max_tokens: u32,
+    ) -> Result<Reply> {
         match self {
             Backend::Api { client, model } => {
-                let (text, web, tokens) = client.complete(model, system, history).await?;
+                let (text, web, tokens, truncated) =
+                    client.complete(model, system, history, max_tokens).await?;
                 Ok(Reply {
                     text,
                     web,
                     context_tokens: tokens,
+                    truncated,
                 })
             }
             Backend::Cli {
@@ -167,6 +184,7 @@ impl Backend {
                     text,
                     web: false,
                     context_tokens: tokens,
+                    truncated: false,
                 })
             }
         }

@@ -160,8 +160,12 @@ mod tests {
             s.push_assistant("ok".into());
         }
         assert_eq!(dropped, 5);
-        let req =
-            crate::anthropic::MessageRequest::new("m".into(), "s".into(), s.history().to_vec());
+        let req = crate::anthropic::MessageRequest::new(
+            "m".into(),
+            "s".into(),
+            s.history().to_vec(),
+            crate::anthropic::MAX_TOKENS,
+        );
         let body = serde_json::to_string(&req).unwrap();
         assert_eq!(
             body.matches("\"type\":\"image\"").count(),
