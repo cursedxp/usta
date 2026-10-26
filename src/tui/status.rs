@@ -8,7 +8,14 @@ use crate::tui::theme;
 
 pub enum Status {
     Idle,
-    Thinking { frame: usize, cancel_hint: bool },
+    Thinking {
+        frame: usize,
+        cancel_hint: bool,
+    },
+    /// End-of-session save after quit — the TUI stays up until files are written.
+    Saving {
+        frame: usize,
+    },
 }
 
 /// Context gauge style: amber (WARN) once the window is ≥70% full, quiet dim
@@ -64,6 +71,15 @@ pub fn render_status(
         spans.push(Span::styled(
             format!(
                 "{} Usta is thinking…{hint} ",
+                theme::SPINNER[frame % theme::SPINNER.len()]
+            ),
+            theme::info(),
+        ));
+    }
+    if let Status::Saving { frame } = s {
+        spans.push(Span::styled(
+            format!(
+                "{} saving session — writing progress files… ",
                 theme::SPINNER[frame % theme::SPINNER.len()]
             ),
             theme::info(),
@@ -131,6 +147,24 @@ mod tests {
             false,
         );
         assert!(text(&l).contains("ctrl-c again"));
+    }
+
+    /// The closing save reuses the status line with a plain label — no cancel
+    /// hint (the save is not cancellable) and no "thinking" wording.
+    #[test]
+    fn saving_shows_plain_save_label() {
+        let t = text(&render_status(
+            &Status::Saving { frame: 0 },
+            None,
+            1_000_000,
+            None,
+            false,
+        ));
+        assert!(t.starts_with(theme::SPINNER[0]));
+        assert!(t.contains("saving session — writing progress files…"));
+        assert!(!t.contains("thinking"));
+        assert!(!t.contains("esc"));
+        assert!(!t.contains("ctrl-c"));
     }
 
     #[test]

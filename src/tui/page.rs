@@ -194,6 +194,23 @@ pub(crate) fn draw(
     Ok(())
 }
 
+/// Closing-save frame: like `draw`, but buffered notices stay in `ui`'s queue —
+/// the chat pane disappears with the alternate screen, so the save's
+/// "updated: …" lines must reach the normal screen via `ui::flush_tui_notices`.
+pub(crate) fn draw_keep_notices(
+    tui: &mut Tui,
+    editor: &InputBox,
+    status: &Status,
+    tokens: Option<u64>,
+    window: u64,
+) -> Result<()> {
+    let line = render_status(status, tokens, window, None, false);
+    let chat = &mut tui.chat;
+    tui.terminal
+        .draw(|f| render_screen(f, chat, editor, line))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +333,22 @@ mod tests {
             !draw.contains("set_height("),
             "no viewport rebuild in fullscreen"
         );
+    }
+
+    /// Source pin: the closing-save frame paints like `draw` but leaves buffered
+    /// notices for `ui::flush_tui_notices` — the chat pane is about to vanish.
+    #[test]
+    fn draw_keep_notices_does_not_flush_notices() {
+        let src = include_str!("page.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let body = src
+            .split("pub(crate) fn draw_keep_notices(")
+            .nth(1)
+            .expect("draw_keep_notices");
+        assert!(body.contains("render_screen("));
+        assert!(!body.contains("flush_notices("));
     }
 
     #[test]

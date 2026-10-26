@@ -180,12 +180,14 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Both paths produce `(Session, Recorder, PathBuf)`; closing is shared.
+    // Both paths produce `(Session, Recorder, PathBuf, flush result)`; the rest of closing
+    // is shared. The TUI path runs the closing flush inside run() while the fullscreen UI
+    // is still up (keys can't echo or leak to the shell); the plain path runs it here.
     // TUI path: topic entry + slug/confirmation + build_session all happen inside run() —
     // topic_arg is passed raw, a `None` return means the user exited without giving a topic.
     // Plain path (no TTY / NO_COLOR): resolve_topic + lock-conflict + build_session
     // + banner + run_plain_loop happen here — behavior preserved exactly.
-    let (session, recorder, lock) = if !ui::is_plain() {
+    let (session, recorder, lock, flushed) = if !ui::is_plain() {
         // While TUI is active, don't let notice/warn/Spinner print raw ANSI —
         // turn the flag on, and always turn it off when run() returns (even on error), then raise the error.
         ui::set_tui_active(true);
@@ -258,10 +260,11 @@ async fn main() -> Result<()> {
             },
         )
         .await?;
-        (session, recorder, lock)
+        let flushed = flush_progress(&mut backend, &session, &project_root, true).await;
+        (session, recorder, lock, flushed)
     };
 
-    if let Err(e) = flush_progress(&mut backend, &session, &project_root, true).await {
+    if let Err(e) = flushed {
         ui::warn(&format!(
             "progress could not be updated: {e} — raw record left on disk: {}",
             recorder.path().display()

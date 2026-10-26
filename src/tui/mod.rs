@@ -3,6 +3,7 @@
 
 pub mod ask;
 pub mod chat;
+pub mod closing;
 pub mod convert;
 pub mod editor;
 pub mod entry;

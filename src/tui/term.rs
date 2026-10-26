@@ -105,6 +105,14 @@ pub fn restore() {
         LeaveAlternateScreen,
         crossterm::cursor::Show
     );
+    // Swallow typed-ahead input still queued (zero-timeout poll, never a blocking
+    // read) so stray keys don't reach the shell once cooked mode is back. If the
+    // event reader is momentarily busy, poll reports nothing and this is a no-op.
+    while let Ok(true) = crossterm::event::poll(std::time::Duration::ZERO) {
+        if crossterm::event::read().is_err() {
+            break;
+        }
+    }
     let _ = crossterm::terminal::disable_raw_mode();
 }
 
@@ -182,6 +190,19 @@ mod tests {
         ] {
             assert!(!prod().contains(needle), "term.rs still contains {needle}");
         }
+    }
+
+    /// Source pin: typed-ahead keys are drained (zero-timeout poll, never a
+    /// blocking read) before cooked mode returns, so they can't leak to the shell.
+    #[test]
+    fn restore_drains_pending_input_before_leaving_raw_mode() {
+        let body = prod().split("pub fn restore(").nth(1).expect("restore");
+        let body = body.split("impl Drop for Tui").next().unwrap();
+        let drain = body
+            .find("poll(std::time::Duration::ZERO)")
+            .expect("zero-timeout drain");
+        let raw = body.find("disable_raw_mode").expect("raw off");
+        assert!(drain < raw);
     }
 
     #[test]

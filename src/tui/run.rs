@@ -27,8 +27,9 @@ use crate::{feedback, progress, watcher};
 
 /// TUI session: topic entry (if no arg) + welcome box + drill/intro + main
 /// loop. Session/recorder are set up inside via `build_session`. Return:
-/// `Some((session, recorder, lock))` — closing is shared with the plain path in
-/// main; `None` — the user quit without giving a topic (no session, no lock). On
+/// `Some((session, recorder, lock, flushed))` — the closing flush already ran
+/// inside the TUI (`closing::save_live`); the rest of closing is shared with the
+/// plain path in main; `None` — the user quit without giving a topic (no session, no lock). On
 /// return, Tui drops → terminal restore.
 pub async fn run(
     backend: &mut Backend,
@@ -38,7 +39,7 @@ pub async fn run(
     topic_arg: Option<String>,
     max_feedback_batch: usize,
     watch_rx: &mut UnboundedReceiver<PathBuf>,
-) -> Result<Option<(Session, Recorder, PathBuf)>> {
+) -> Result<Option<(Session, Recorder, PathBuf, Result<()>)>> {
     // setup() installs the panic hook → called EXACTLY ONCE PER PROCESS (not in a loop).
     let mut tui = crate::tui::term::setup()?;
     let mut editor = InputBox::new();
@@ -369,5 +370,17 @@ pub async fn run(
             }
         }
     }
-    Ok(Some((session, recorder, lock))) // Tui drop → restore
+    // Closing save while the TUI is still up (keys dropped, status line busy);
+    // main does the remaining closing steps with the result.
+    let flushed = crate::tui::closing::save_live(
+        &mut tui,
+        &editor,
+        &mut events,
+        backend,
+        &session,
+        project_root,
+        last_tokens,
+    )
+    .await;
+    Ok(Some((session, recorder, lock, flushed))) // Tui drop → restore
 }
