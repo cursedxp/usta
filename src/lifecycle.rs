@@ -264,6 +264,9 @@ pub(crate) async fn maybe_compact(
     tokens: Option<u64>,
 ) {
     let Some(t) = tokens else { return };
+    if !session.compaction_allowed() {
+        return;
+    }
     if (t as f64) < COMPACT_THRESHOLD * backend.context_window() as f64 {
         return;
     }
@@ -275,6 +278,7 @@ pub(crate) async fn maybe_compact(
         ui::warn(&format!(
             "interim checkpoint failed, compaction postponed: {e}"
         ));
+        session.compaction_failed();
         return;
     }
     match config::global_root() {

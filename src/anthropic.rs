@@ -14,8 +14,9 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Output budget for a normal chat turn (adaptive thinking shares it).
 pub const MAX_TOKENS: u32 = 8000;
 /// Output budget for the closing / compaction flush: up to six full files plus
-/// thinking — 8000 is what cut them off (review P1-1).
-pub const CLOSING_MAX_TOKENS: u32 = 32000;
+/// thinking — 8000 is what cut them off (review P1-1). 16000 keeps the SDKs'
+/// 10-minute non-streaming estimate under its limit.
+pub const CLOSING_MAX_TOKENS: u32 = 16000;
 const MAX_CONTINUATIONS: usize = 6;
 
 /// A conversation message. `content` can be a string (user input) or a raw
@@ -224,7 +225,10 @@ pub struct Client {
 impl Client {
     pub fn new(api_key: String) -> Self {
         Client {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .tcp_keepalive(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default(),
             api_key,
         }
     }

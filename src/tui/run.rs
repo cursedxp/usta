@@ -362,6 +362,10 @@ pub async fn run(
                             Err(e) => {
                                 crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
                                 crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?;
+                                crate::tui::page::page_notice(
+                                    &mut tui,
+                                    "your message was not kept — press Up to bring it back",
+                                )?;
                             }
                         }
                     }

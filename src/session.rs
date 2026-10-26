@@ -19,7 +19,12 @@ pub struct Session {
     pub system: String,
     /// Conversation history (user/assistant in order).
     history: Vec<Message>,
+    /// Turns left to skip compaction after a failed attempt.
+    compact_cooldown: u8,
 }
+
+/// After a failed compaction, skip this many turns before retrying.
+pub const COMPACT_RETRY_COOLDOWN: u8 = 5;
 
 impl Session {
     /// New session — starts with empty history.
@@ -28,7 +33,23 @@ impl Session {
             topic: topic.into(),
             system: system.into(),
             history: Vec::new(),
+            compact_cooldown: 0,
         }
+    }
+
+    /// Called once per turn: true when a compaction attempt is allowed now.
+    /// While cooling down it counts one turn off and returns false.
+    pub fn compaction_allowed(&mut self) -> bool {
+        if self.compact_cooldown > 0 {
+            self.compact_cooldown -= 1;
+            return false;
+        }
+        true
+    }
+
+    /// A compaction attempt failed: skip the next `COMPACT_RETRY_COOLDOWN` turns.
+    pub fn compaction_failed(&mut self) {
+        self.compact_cooldown = COMPACT_RETRY_COOLDOWN;
     }
 
     /// Add a user turn.
@@ -79,6 +100,17 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compaction_cooldown_skips_five_turns_after_failure() {
+        let mut s = super::Session::new("rust", "sistem");
+        assert!(s.compaction_allowed());
+        s.compaction_failed();
+        for _ in 0..super::COMPACT_RETRY_COOLDOWN {
+            assert!(!s.compaction_allowed());
+        }
+        assert!(s.compaction_allowed());
+    }
+
     use super::*;
 
     #[test]
