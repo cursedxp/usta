@@ -33,6 +33,7 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
         .watch(root, RecursiveMode::Recursive)
         .with_context(|| format!("failed to watch: {}", root.display()))?;
 
+    let watch_root = WatchRoot::new(root);
     thread::spawn(move || {
         // Keep the watcher alive inside the thread — watching stops if it's dropped.
         let _watcher = watcher;
@@ -43,7 +44,7 @@ pub fn spawn(root: &Path) -> Result<UnboundedReceiver<PathBuf>> {
                 EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
             ) {
                 for path in event.paths {
-                    if !should_forward(&path, &event.kind) {
+                    if !should_forward(&watch_root, &path, &event.kind) {
                         continue;
                     }
                     // End the thread if the REPL receiver has closed.
@@ -105,8 +106,8 @@ pub fn is_ignored(path: &Path) -> bool {
 /// (deletions, rename sources), forward on every kind: classification
 /// happens at flush time (polite::classify_flush), where existence is
 /// probed exactly once.
-pub fn should_forward(path: &Path, kind: &EventKind) -> bool {
-    if is_ignored(path) {
+pub fn should_forward(root: &WatchRoot, path: &Path, kind: &EventKind) -> bool {
+    if is_ignored(root.relative(path)) {
         return false;
     }
     if path.is_dir() {
@@ -116,6 +117,31 @@ pub fn should_forward(path: &Path, kind: &EventKind) -> bool {
         );
     }
     true
+}
+
+/// The watched root, raw and canonical. Ignore rules judge only the path BELOW
+/// it: a project under `~/.work/`, `~/secrets-lab/` or `/x/target/` must not hide
+/// itself (review P1-4). Both forms are kept because macOS FSEvents reports
+/// realpaths (`/private/var/...` for `/var/...`).
+pub struct WatchRoot {
+    raw: PathBuf,
+    canon: PathBuf,
+}
+
+impl WatchRoot {
+    pub fn new(root: &Path) -> Self {
+        WatchRoot {
+            raw: root.to_path_buf(),
+            canon: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+        }
+    }
+
+    /// `path` relative to the root; a path outside it is returned as given.
+    pub fn relative<'a>(&self, path: &'a Path) -> &'a Path {
+        path.strip_prefix(&self.canon)
+            .or_else(|_| path.strip_prefix(&self.raw))
+            .unwrap_or(path)
+    }
 }
 
 /// Session-scoped directory inventory (spec D1): seeded from the project
@@ -134,19 +160,19 @@ impl StructureTracker {
         let mut tracker = StructureTracker {
             dirs: std::collections::BTreeSet::new(),
         };
-        tracker.walk(root);
+        tracker.walk(&WatchRoot::new(root), root);
         tracker
     }
 
-    fn walk(&mut self, dir: &Path) {
+    fn walk(&mut self, root: &WatchRoot, dir: &Path) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && !is_ignored(&path) {
+            if path.is_dir() && !is_ignored(root.relative(&path)) {
                 self.dirs.insert(path.clone());
-                self.walk(&path);
+                self.walk(root, &path);
             }
         }
     }
@@ -216,6 +242,11 @@ mod tests {
     use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
     use std::time::Duration;
     use tokio::time::Instant;
+
+    /// Root for the pre-P1-4 tests: their paths all live under temp_dir().
+    fn tmp_root() -> WatchRoot {
+        WatchRoot::new(&std::env::temp_dir())
+    }
 
     #[test]
     fn debouncer_push_dedups_and_preserves_order() {
@@ -346,8 +377,16 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("usta_watcher_forward_kinds_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(should_forward(&dir, &EventKind::Create(CreateKind::Folder)));
-        assert!(!should_forward(&dir, &EventKind::Modify(ModifyKind::Any)));
+        assert!(should_forward(
+            &tmp_root(),
+            &dir,
+            &EventKind::Create(CreateKind::Folder)
+        ));
+        assert!(!should_forward(
+            &tmp_root(),
+            &dir,
+            &EventKind::Modify(ModifyKind::Any)
+        ));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -364,7 +403,11 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert!(should_forward(&dir, &EventKind::Remove(RemoveKind::Folder)));
+        assert!(should_forward(
+            &tmp_root(),
+            &dir,
+            &EventKind::Remove(RemoveKind::Folder)
+        ));
     }
 
     #[test]
@@ -380,20 +423,24 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(should_forward(
+            &tmp_root(),
             &dir,
             &EventKind::Modify(ModifyKind::Name(RenameMode::Any))
         ));
         assert!(should_forward(
+            &tmp_root(),
             &dir,
             &EventKind::Modify(ModifyKind::Name(RenameMode::To))
         ));
         // Ordinary directory Modify kinds must still be filtered — a
         // directory's mtime/metadata changes whenever a child changes.
         assert!(!should_forward(
+            &tmp_root(),
             &dir,
             &EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any))
         ));
         assert!(!should_forward(
+            &tmp_root(),
             &dir,
             &EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any))
         ));
@@ -407,19 +454,37 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&file, b"fn main() {}").unwrap();
-        assert!(should_forward(&file, &EventKind::Modify(ModifyKind::Any)));
-        assert!(should_forward(&file, &EventKind::Create(CreateKind::File)));
+        assert!(should_forward(
+            &tmp_root(),
+            &file,
+            &EventKind::Modify(ModifyKind::Any)
+        ));
+        assert!(should_forward(
+            &tmp_root(),
+            &file,
+            &EventKind::Create(CreateKind::File)
+        ));
         std::fs::remove_file(&file).unwrap();
         // A vanished path (deletion / rename source): is_dir() is false —
         // forward; flush-time classification decides what it means.
-        assert!(should_forward(&file, &EventKind::Remove(RemoveKind::File)));
-        assert!(should_forward(&file, &EventKind::Modify(ModifyKind::Any)));
+        assert!(should_forward(
+            &tmp_root(),
+            &file,
+            &EventKind::Remove(RemoveKind::File)
+        ));
+        assert!(should_forward(
+            &tmp_root(),
+            &file,
+            &EventKind::Modify(ModifyKind::Any)
+        ));
         // Ignored stays ignored on every kind.
         assert!(!should_forward(
+            &tmp_root(),
             Path::new("target/debug/x.rs"),
             &EventKind::Modify(ModifyKind::Any)
         ));
         assert!(!should_forward(
+            &tmp_root(),
             Path::new(".git/HEAD"),
             &EventKind::Remove(RemoveKind::File)
         ));
@@ -441,6 +506,7 @@ mod tests {
         let ignored_dir = base.join("target").join("debug_stuff");
         std::fs::create_dir_all(&ignored_dir).unwrap();
         assert!(!should_forward(
+            &tmp_root(),
             &ignored_dir,
             &EventKind::Create(CreateKind::Folder)
         ));
@@ -500,6 +566,40 @@ mod tests {
             "a child of a removed directory must be forgotten too, so its recreation reports as new"
         );
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A project root under hidden / secret / target ancestors (review P1-4).
+    /// Returns (scratch base to delete, root).
+    fn awkward_root(tag: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("usta_watcher_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join(".h/secrets/target/proj");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        (base, root)
+    }
+
+    #[test]
+    fn should_forward_judges_only_the_path_below_the_root() {
+        let (base, root) = awkward_root("rel_forward");
+        let wr = WatchRoot::new(&root);
+        let file = root.join("src/main.rs");
+        std::fs::write(&file, b"fn main() {}").unwrap();
+        let modify = EventKind::Modify(ModifyKind::Any);
+        assert!(should_forward(&wr, &file, &modify));
+        // The realpath form FSEvents may report is matched via the canonical root.
+        assert!(should_forward(&wr, &file.canonicalize().unwrap(), &modify));
+        // Rules still apply below the root.
+        assert!(!should_forward(&wr, &root.join(".git/HEAD"), &modify));
+        assert!(!should_forward(&wr, &root.join("target/x"), &modify));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn structure_tracker_seeds_under_an_awkward_root() {
+        let (base, root) = awkward_root("rel_seed");
+        let mut t = StructureTracker::seed(&root);
+        assert!(!t.note_new_dir(&root.join("src")), "src must be seeded");
         let _ = std::fs::remove_dir_all(&base);
     }
 }
