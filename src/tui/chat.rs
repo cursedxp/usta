@@ -116,9 +116,24 @@ fn to_line(cells: Vec<(char, Style)>, style: Style) -> Line<'static> {
     Line::from(spans).style(style)
 }
 
-/// First visual row of `wrap_line` — a line cut at the pane edge.
+/// A line cut at the pane edge: as many whole cells as fit in `w` columns.
 fn clip_line(line: &Line<'static>, w: usize) -> Line<'static> {
-    wrap_line(line, w).0.swap_remove(0)
+    let w = w.max(1);
+    let mut used = 0usize;
+    let mut cells: Vec<(char, Style)> = Vec::new();
+    for (c, st) in line
+        .spans
+        .iter()
+        .flat_map(|s| s.content.chars().map(move |c| (c, s.style)))
+    {
+        let cw = c.width().unwrap_or(0);
+        if used + cw > w {
+            break;
+        }
+        used += cw;
+        cells.push((c, st));
+    }
+    to_line(cells, line.style)
 }
 
 fn wrap_text(t: &Text<'static>, w: u16) -> (Vec<Line<'static>>, Vec<bool>) {
@@ -407,6 +422,40 @@ mod tests {
     #[test]
     fn clip_line_truncates_to_width() {
         assert_eq!(plain(&[clip_line(&Line::raw("abcdef"), 4)]), vec!["abcd"]);
+    }
+
+    #[test]
+    fn clip_line_cuts_mid_word_and_by_display_width() {
+        assert_eq!(
+            plain(&[clip_line(&Line::raw("│ ab cd │"), 6)]),
+            vec!["│ ab c"]
+        );
+        assert_eq!(plain(&[clip_line(&Line::raw("日本語"), 3)]), vec!["日"]);
+    }
+
+    #[test]
+    fn incremental_cache_equals_a_full_rebuild() {
+        let mut c = ChatBuffer::default();
+        c.visible(12, 5); // warm the cache
+        c.push(Source::Text(Text::raw(
+            "one two three four
+five six seven",
+        )));
+        c.push(Source::Echo("hello there my friend, how are you".into()));
+        c.push(Source::Reply(
+            "some **bold** reply text that is long".into(),
+        ));
+        c.push(Source::Panel(Box::new(|w| {
+            Text::raw(format!("│ panel {w} │"))
+        })));
+        c.push(Source::Text(Text::raw("last notice wraps too")));
+        let (_, lines, soft) = c.cache.clone().expect("cache warm");
+        let snap = (plain(&lines), soft);
+        c.cache = None;
+        c.visible(12, 5);
+        let (_, lines2, soft2) = c.cache.clone().expect("cache rebuilt");
+        assert_eq!(snap, (plain(&lines2), soft2.clone()));
+        assert_eq!(soft2.len(), lines2.len());
     }
 
     #[test]
