@@ -1,6 +1,7 @@
 //! Test module for setup.rs, split out for file size; still a child module via #[path], private access preserved.
 
 use super::*;
+use crate::progress;
 
 #[test]
 fn factory_targets_includes_uncatalogued_cwd_project() {
@@ -469,51 +470,6 @@ fn write_project_scaffold_writes_visuals_gitignore() {
     let gitignore = base.join(".usta/visuals/.gitignore");
     assert!(gitignore.is_file());
     assert_eq!(std::fs::read_to_string(&gitignore).unwrap(), "*\n");
-
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-/// Görev 5: `usta reset <topic>` also removes `.usta/visuals/<topic>/`.
-/// `run_reset_topic` itself reads stdin (confirm) and `cwd`, so it isn't
-/// unit-testable directly — this tests the extracted deletion step,
-/// following the same temp-dir pattern as the scaffold tests above.
-#[test]
-fn remove_topic_visuals_deletes_a_populated_dir() {
-    let base = std::env::temp_dir().join(format!(
-        "usta_main_test_reset_visuals_{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&base);
-    let topic_dir = base.join(".usta/visuals/rust");
-    std::fs::create_dir_all(&topic_dir).unwrap();
-    std::fs::write(topic_dir.join("2026-01-01-000000-ownership.html"), "x").unwrap();
-    let sibling_dir = base.join(".usta/visuals/dns");
-    std::fs::create_dir_all(&sibling_dir).unwrap();
-    std::fs::write(sibling_dir.join("2026-01-01-000000-records.html"), "x").unwrap();
-
-    remove_topic_visuals(&base, "rust").unwrap();
-
-    assert!(
-        !topic_dir.exists(),
-        "topic visuals dir must be gone after reset"
-    );
-    // Sibling topics are untouched — reset is scoped to the one topic.
-    assert!(sibling_dir.is_dir());
-
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-#[test]
-fn remove_topic_visuals_missing_dir_is_not_an_error() {
-    let base = std::env::temp_dir().join(format!(
-        "usta_main_test_reset_visuals_missing_{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
-
-    // No `.usta/visuals/rust` was ever created (topic never ran `/show`).
-    assert!(remove_topic_visuals(&base, "rust").is_ok());
 
     let _ = std::fs::remove_dir_all(&base);
 }

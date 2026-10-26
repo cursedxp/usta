@@ -1,15 +1,14 @@
-//! Scaffold writing (`usta init`), the `topics`/`stats` reports, all three
-//! reset flows (topic/factory/profile), and the confirm prompts they share —
-//! extracted from `main.rs` (module split, Task 7). All three sub-clusters
-//! live behind a CLI subcommand and never enter the session loop; `confirm`
-//! is the thread that ties them together, so they stay in one module.
+//! Scaffold writing (`usta init`), the `topics`/`stats` reports, the factory
+//! and profile reset flows, and the confirm prompts they share — extracted from
+//! `main.rs` (module split, Task 7). `usta reset <topic>` lives in `reset.rs`.
+//! All of these live behind a CLI subcommand and never enter the session loop.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::{config, defaults, history, index, migrate, progress, ui};
+use crate::{config, defaults, history, index, migrate, ui};
 
 /// One-shot TR→EN protocol-token migration, run at the top of every command
 /// dispatch path (start/topics/stats/reset) right after global root + project
@@ -198,57 +197,6 @@ fn render_stats(entries: &[history::Entry], today: &str) -> String {
         ));
     }
     out
-}
-
-/// `usta reset <topic>` — delete the progress for that topic in the current
-/// project (with confirmation), remove its generated visuals (Görev 5), and
-/// drop it from the global catalog. No LLM needed.
-pub(crate) fn run_reset_topic(topic: &str) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let Some(root) = config::find_project_root(&cwd) else {
-        anyhow::bail!("no .usta in this directory (or above) — no project found to reset");
-    };
-    let global = config::global_root()?;
-    run_migration(&global, Some(&root.join(".usta")));
-    let path = progress::progress_path(&root, topic);
-    if !path.is_file() {
-        println!("no record: {}", path.display());
-        return Ok(());
-    }
-    if !confirm(
-        &format!(
-            "{} and its visuals will be deleted. Are you sure? [y/N] ",
-            path.display()
-        ),
-        &["e", "evet", "y", "yes"],
-    )? {
-        println!("cancelled.");
-        return Ok(());
-    }
-    std::fs::remove_file(&path).with_context(|| format!("could not delete: {}", path.display()))?;
-    println!("deleted: {}", path.display());
-
-    remove_topic_visuals(&root, topic)?;
-
-    // Drop it from the catalog too — pass silently if the catalog doesn't exist / can't be read.
-    let index_path = global.join("learner/index.md");
-    if let Ok(current) = std::fs::read_to_string(&index_path) {
-        let updated = index::remove(&current, topic, &root);
-        progress::write_atomic(&index_path, &updated)?;
-    }
-    Ok(())
-}
-
-/// Removes a topic's generated visuals (`.usta/visuals/<topic>/`, Görev 5).
-/// Idempotent: a topic that never ran `/show` has no such directory — that's
-/// `NotFound`, not an error, so reset still succeeds cleanly.
-fn remove_topic_visuals(root: &Path, topic: &str) -> Result<()> {
-    let dir = root.join(".usta/visuals").join(topic);
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("could not delete: {}", dir.display())),
-    }
 }
 
 /// Factory-reset confirmation prompt. Both `yes` and `evet` are accepted (see the

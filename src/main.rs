@@ -23,6 +23,7 @@ mod materials;
 mod migrate;
 mod plain;
 mod progress;
+mod reset;
 mod session;
 mod setup;
 mod slash;
@@ -43,7 +44,7 @@ use crate::lifecycle::{build_session, flush_core, flush_progress, lock_path, tod
 use crate::plain::{resolve_topic, run_plain_loop, PlainLoopCtx};
 use crate::setup::{
     confirm, confirm_recover, ensure_scaffold, profile_is_generic, run_init, run_migration,
-    run_reset_factory, run_reset_profile, run_reset_topic, run_stats, run_topics,
+    run_reset_factory, run_reset_profile, run_stats, run_topics,
 };
 
 /// Maximum number of files given feedback in a single debounce window — above
@@ -57,7 +58,7 @@ async fn main() -> Result<()> {
         Command::Init => return run_init(),
         Command::Topics => return run_topics(),
         Command::Stats => return run_stats(),
-        Command::Reset(ResetTarget::Topic(t)) => return run_reset_topic(&t),
+        Command::Reset(ResetTarget::Topic(t)) => return reset::run_reset_topic(&t),
         Command::Reset(ResetTarget::Factory) => return run_reset_factory(),
         Command::Reset(ResetTarget::Profile) => return run_reset_profile(),
         Command::Start(t) => t,
