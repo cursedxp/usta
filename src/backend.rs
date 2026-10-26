@@ -142,19 +142,20 @@ impl Backend {
                 bin,
             } => {
                 let resume = session_id.clone();
-                let input = match &resume {
-                    Some(_) => last_user_text(history),
-                    None => render_transcript(history),
+                let (input, images) = match &resume {
+                    Some(_) => (last_user_text(history), last_user_images(history)),
+                    None => (render_transcript(history), history_images(history)),
                 };
-                let images = last_user_images(history);
                 let attempt =
                     run_claude_cli(bin, model, system, &input, &images, resume.as_deref()).await;
                 let (text, new_sid, tokens) = match attempt {
                     Ok(v) => v,
-                    // Stale/deleted session — retry once from scratch with the full transcript.
+                    // Stale/deleted session — retry once from scratch with the full transcript
+                    // and every budgeted image (also recovers a session overgrown with images).
                     Err(_) if resume.is_some() => {
                         *session_id = None;
                         let transcript = render_transcript(history);
+                        let images = history_images(history);
                         run_claude_cli(bin, model, system, &transcript, &images, None).await?
                     }
                     Err(e) => return Err(e),
@@ -201,8 +202,8 @@ pub fn parse_cli_output(stdout: &str) -> (String, Option<String>, Option<u64>) {
     }
 }
 
-/// Image blocks of the LAST user message. They ride on this call only: a resumed
-/// session already holds earlier images, and the no-resume transcript is plain text.
+/// Image blocks of the LAST user message, for a resumed call (the server-side
+/// session already holds earlier images).
 fn last_user_images(history: &[Message]) -> Vec<serde_json::Value> {
     history
         .iter()
@@ -210,6 +211,21 @@ fn last_user_images(history: &[Message]) -> Vec<serde_json::Value> {
         .find(|m| m.role == "user")
         .map(Message::image_blocks)
         .unwrap_or_default()
+}
+
+/// Every image still in (budgeted) history, for a no-resume call: per user message k
+/// (1-based among user messages) that has images, one label text block then its images.
+fn history_images(history: &[Message]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for (k, m) in history.iter().filter(|m| m.role == "user").enumerate() {
+        let imgs = m.image_blocks();
+        if imgs.is_empty() {
+            continue;
+        }
+        out.push(serde_json::json!({"type": "text", "text": format!("images attached to [SEN] message {}:", k + 1)}));
+        out.extend(imgs);
+    }
+    out
 }
 
 /// The single stdin line for `--input-format stream-json`: images first, then the text.
@@ -684,6 +700,46 @@ mod tests {
             Message::user("b"),
         ];
         assert!(last_user_images(&plain_last).is_empty());
+    }
+
+    #[test]
+    fn history_images_labels_each_user_message_with_images() {
+        let mut history = vec![
+            Message::user_with_images("one [Image #1]", &[pasted(vec![1])]),
+            Message::assistant_raw(serde_json::Value::String("ok".into())),
+            Message::user("two"),
+            Message::assistant_raw(serde_json::Value::String("ok".into())),
+            Message::user_with_images("three", &[pasted(vec![2]), pasted(vec![3])]),
+        ];
+        let v = history_images(&history);
+        let kinds: Vec<&str> = v.iter().map(|b| b["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["text", "image", "text", "image", "image"]);
+        assert_eq!(v[0]["text"], "images attached to [SEN] message 1:");
+        assert_eq!(v[2]["text"], "images attached to [SEN] message 3:");
+        // pruned placeholders are not images
+        crate::anthropic::prune_images(&mut history, 2, usize::MAX);
+        let v = history_images(&history);
+        assert_eq!(v.iter().filter(|b| b["type"] == "image").count(), 2);
+        assert_eq!(v[0]["text"], "images attached to [SEN] message 3:");
+    }
+
+    #[test]
+    fn history_images_is_empty_for_text_only_history() {
+        let history = vec![Message::user("a"), Message::user("b")];
+        assert!(history_images(&history).is_empty());
+    }
+
+    #[test]
+    fn no_resume_calls_send_history_images() {
+        let src = include_str!("backend.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            production.contains("None => (render_transcript(history), history_images(history)),")
+        );
+        assert!(
+            production.contains("let images = history_images(history);"),
+            "stale retry re-sends the bounded set"
+        );
     }
 
     #[test]
