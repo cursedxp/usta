@@ -72,6 +72,10 @@ fn wrap_line(line: &Line<'static>, w: usize) -> (Vec<Line<'static>>, Vec<bool>) 
                     let rest = cur.split_off(i + 1);
                     rows.push(std::mem::replace(&mut cur, rest));
                     used = width(&cur);
+                    if used + cw > w && used > 0 {
+                        rows.push(std::mem::take(&mut cur));
+                        used = 0;
+                    }
                 }
                 _ => {
                     rows.push(std::mem::take(&mut cur));
@@ -286,6 +290,20 @@ mod tests {
         assert_eq!(plain(&lines), vec!["aa ", "bbbb"]);
         assert_eq!(lines[1].spans[0].style, b);
         assert_eq!(wrap_line(&Line::raw(""), 10).0.len(), 1);
+    }
+
+    #[test]
+    fn wrap_line_counts_the_carried_rest_after_a_split() {
+        let (r, soft) = rows(&Line::raw("aa bb cc dd"), 5);
+        assert_eq!(r, vec!["aa bb ", "cc dd"]);
+        assert_eq!(soft, vec![false, true]);
+    }
+
+    #[test]
+    fn wrap_line_never_overflows_when_a_wide_char_follows_a_carry() {
+        let (r, _) = rows(&Line::raw(" abc日"), 4);
+        assert_eq!(r, vec![" ", "abc", "日"]);
+        assert_eq!(r.concat(), " abc日");
     }
 
     #[test]
