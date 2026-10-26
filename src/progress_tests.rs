@@ -120,6 +120,7 @@ fn parse_closing_reply_rejects_an_empty_section() {
     let err = parse_closing_reply("===FILE: progress===\nP\n===FILE: approach===\n  \n", false)
         .unwrap_err();
     assert!(err.to_string().contains("approach"), "{err}");
+    assert!(err.to_string().contains("empty"), "{err}");
 }
 
 #[test]

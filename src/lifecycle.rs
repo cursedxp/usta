@@ -157,6 +157,7 @@ pub(crate) async fn flush_core(
     // `- gamification:` line BEFORE the model rewrites USER.md. If the closing prompt's
     // KEEP rule is ignored (line dropped or value flipped), we restore it after the write.
     let game_pref_before = global.as_deref().and_then(read_game_pref);
+    let mut written = 0usize;
     for (name, content) in files {
         let path = match name.as_str() {
             "progress" => p_path.clone(),
@@ -176,6 +177,12 @@ pub(crate) async fn flush_core(
         };
         progress::write_atomic(&path, &content)?;
         ui::notice(&format!("updated: {}", path.display()));
+        written += 1;
+    }
+    if written == 0 {
+        anyhow::bail!(
+            "progress not saved: the reply named no known file — session kept for recovery"
+        );
     }
 
     // Restore the `/game` preference if the model's profile rewrite dropped or flipped
@@ -370,5 +377,12 @@ mod tests {
         let write = body.find("progress::write_atomic(").expect("write");
         assert!(gate < write, "the gate must run before any write");
         assert!(!body.contains("split_files("));
+        // zero files written must fail before anything after the loop runs
+        let bail = body.find("if written == 0 {").expect("zero-write bail");
+        assert!(body.contains("written += 1;"));
+        assert!(write < bail);
+        assert!(body.contains("progress not saved: the reply named no known file"));
+        let restore = body.find("restore_game_pref(").expect("restore");
+        assert!(bail < restore, "bail must precede post-write steps");
     }
 }
