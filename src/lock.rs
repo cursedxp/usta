@@ -1,0 +1,148 @@
+//! Topic lock (`.usta/.lock-<topic>`, content: the owner's pid): is the owner
+//! still running? Liveness is probed with the platform's own tool — no new
+//! crates (an OS advisory lock would need one, or Rust 1.89). Review P2-8.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+/// Is a process with this pid running? Unix: `kill -0 <pid>` exits 0. A pid
+/// owned by another user answers EPERM -> non-zero -> treated as dead (a false
+/// "dead" only means recovery is offered). Windows: `tasklist` lists the pid.
+/// A tool that can't be spawned -> dead.
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+    #[cfg(windows)]
+    {
+        let want = pid.to_string();
+        Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .is_ok_and(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .split_whitespace()
+                    .any(|w| w == want)
+            })
+    }
+}
+
+/// The pid of ANOTHER running usta holding this topic's lock, if any. A lock
+/// left by a crashed run (dead pid) or by this process reads as no owner.
+pub(crate) fn live_owner(root: &Path, topic: &str) -> Option<u32> {
+    let pid: u32 = std::fs::read_to_string(crate::lifecycle::lock_path(root, topic))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    (pid != 0 && pid != std::process::id() && pid_alive(pid)).then_some(pid)
+}
+
+/// Split unfinished transcripts into (recoverable, topics a running usta owns).
+/// A live session's transcript must not be flushed, renamed or deleted under it.
+pub(crate) fn split_live(root: &Path, records: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+    let mut free = Vec::new();
+    let mut live: Vec<String> = Vec::new();
+    for p in records {
+        match crate::transcript::topic_from_record(&p) {
+            Some(t) if live_owner(root, &t).is_some() => {
+                if !live.contains(&t) {
+                    live.push(t);
+                }
+            }
+            _ => free.push(p),
+        }
+    }
+    (free, live)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("usta_lock_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".usta/sessions")).unwrap();
+        base
+    }
+
+    #[cfg(unix)]
+    fn reaped_pid() -> u32 {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    #[test]
+    fn pid_alive_true_for_self() {
+        assert!(pid_alive(std::process::id()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_alive_false_for_a_reaped_child() {
+        assert!(!pid_alive(reaped_pid()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_owner_ignores_missing_own_and_dead_pids() {
+        let root = project("owner");
+        let lock = crate::lifecycle::lock_path(&root, "rust");
+        assert_eq!(live_owner(&root, "rust"), None, "no lock");
+        std::fs::write(&lock, std::process::id().to_string()).unwrap();
+        assert_eq!(live_owner(&root, "rust"), None, "own pid");
+        std::fs::write(&lock, reaped_pid().to_string()).unwrap();
+        assert_eq!(live_owner(&root, "rust"), None, "dead pid = crashed run");
+        std::fs::write(&lock, "garbage").unwrap();
+        assert_eq!(live_owner(&root, "rust"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_live_skips_records_a_running_usta_owns() {
+        let root = project("split");
+        let mut other = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        std::fs::write(
+            crate::lifecycle::lock_path(&root, "rust"),
+            other.id().to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            crate::lifecycle::lock_path(&root, "dns"),
+            reaped_pid().to_string(),
+        )
+        .unwrap();
+        let rec = |n: &str| root.join(".usta/sessions").join(n);
+        let records = vec![
+            rec("dns-20261026-101500.jsonl"),
+            rec("odd.jsonl"),
+            rec("rust-20261026-101500.jsonl"),
+            rec("rust-20261026-111500.jsonl"),
+        ];
+        let (free, live) = split_live(&root, records);
+        assert_eq!(
+            free,
+            vec![rec("dns-20261026-101500.jsonl"), rec("odd.jsonl")]
+        );
+        assert_eq!(live, vec!["rust".to_string()]);
+        let _ = other.kill();
+        let _ = other.wait();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

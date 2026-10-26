@@ -19,6 +19,7 @@ mod image_paste;
 mod index;
 mod input;
 mod lifecycle;
+mod lock;
 mod materials;
 mod migrate;
 mod plain;
@@ -109,7 +110,14 @@ async fn main() -> Result<()> {
     // the plain path uses rustyline, the TUI path uses crossterm EventStream.
     let mut watch_rx = watcher::spawn(&project_root)?;
 
-    let stale = transcript::find_unfinished(&project_root);
+    // A record whose topic lock belongs to another RUNNING usta is that session's
+    // live transcript — never recover (flush + rename) or delete it (review P2-8).
+    let (stale, live) = lock::split_live(&project_root, transcript::find_unfinished(&project_root));
+    for topic in live {
+        ui::notice(&format!(
+            "skipping {topic}: a running usta owns this session"
+        ));
+    }
     if !stale.is_empty() {
         let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         if !tty {
