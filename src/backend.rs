@@ -135,8 +135,18 @@ impl Backend {
     }
 
     /// `complete` with an explicit output budget — the closing/compaction flush
-    /// needs more room than a chat turn. The CLI backend ignores it.
+    /// needs more room than a chat turn. The CLI backend ignores it. A blank reply
+    /// is an error (see `ensure_nonempty`).
     pub async fn complete_with_limit(
+        &mut self,
+        system: &str,
+        history: &[Message],
+        max_tokens: u32,
+    ) -> Result<Reply> {
+        ensure_nonempty(self.complete_raw(system, history, max_tokens).await?)
+    }
+
+    async fn complete_raw(
         &mut self,
         system: &str,
         history: &[Message],
@@ -189,6 +199,15 @@ impl Backend {
             }
         }
     }
+}
+
+/// A blank reply (thinking-only, cut off before any text, empty CLI `result`) must
+/// never reach history: an empty assistant turn makes every later API call fail.
+pub(crate) fn ensure_nonempty(reply: Reply) -> Result<Reply> {
+    if reply.text.trim().is_empty() {
+        bail!("empty reply from the model — nothing was added to the conversation");
+    }
+    Ok(reply)
 }
 
 /// Return the plain text of the LAST user message in history — on a resume
@@ -517,6 +536,36 @@ pub fn run_backend_wizard() -> Result<Backend> {
 mod tests {
     use super::*;
     use crate::image_attach::PastedImage;
+
+    fn reply(text: &str) -> Reply {
+        Reply {
+            text: text.into(),
+            web: false,
+            context_tokens: None,
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn ensure_nonempty_rejects_blank_replies() {
+        assert!(ensure_nonempty(reply("")).is_err());
+        let err = ensure_nonempty(reply("  \n"))
+            .err()
+            .expect("blank is an error");
+        assert!(err.to_string().contains("empty reply"), "{err}");
+        assert_eq!(ensure_nonempty(reply("hi")).unwrap().text, "hi");
+    }
+
+    /// Source pin: every completion (both backends, chat and closing) passes the guard.
+    #[test]
+    fn complete_routes_through_the_empty_reply_guard() {
+        let production = include_str!("backend.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(production
+            .contains("ensure_nonempty(self.complete_raw(system, history, max_tokens).await?)"));
+    }
 
     #[test]
     fn cli_call_isolates_usta_from_claude_code_settings() {
