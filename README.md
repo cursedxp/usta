@@ -33,7 +33,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 🔎 **Research** | Searches the web for what it doesn't know (WebSearch) and reads pages you link (WebFetch) — no making things up. |
 | 🌍 **Any topic** | Not Rust-specific. For a new topic (Linux security, GTM, anything) Usta **derives the approach through an introduction** and builds a web-researched **curriculum map** (`not seen → seen → settled → deepened`). Scope guarding: nothing stays hanging in the air. |
 | 📚 **Bring your own material** | Drop your book/course notes (md/txt — PDFs auto-convert if `pdftotext` is installed) into `materials/` — Usta anchors the curriculum to its chapters, assigns reading, and quizzes you on it. You read; it never summarizes the book at you. |
-| 🎨 **Terminal UI** | Claude Code-style terminal UI: two-column welcome box on open (learning status + what's next), a borderless live input area (a single rule above, fixed height), sticky status line (spinner + context gauge); a calm, colorblind-safe visual language (glyph+color pairs, one accent), designed in a full TUI design system. The bottom region is a small inline viewport pinned under the conversation — the flow stays in normal scrollback, so scroll up and copy. Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
+| 🎨 **Terminal UI** | Claude Code-style terminal UI: two-column welcome box on open (learning status + what's next), a borderless multiline input (a single rule above, grows to 8 rows), sticky status line (spinner + context gauge); a calm, colorblind-safe visual language (glyph+color pairs, one accent), designed in a full TUI design system. Fullscreen: usta owns the window and keeps the conversation in its own scrollable pane (mouse wheel / PageUp / PageDown; Shift+drag to select and copy). Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
 | 🗂️ **Management** | `usta topics` shows what you're learning where; `reset` clears a topic or everything. |
 | 📈 **Visible progress** | Every session lands in a lightweight history — `usta stats` shows your week (sessions, map %, settled items) and streaks. Broken streak? No guilt: it shows your longest instead. |
 
@@ -109,7 +109,7 @@ Both are plain markdown, meant to be read and hand-edited — Usta never overwri
 
 ## Interface
 
-In an interactive terminal Usta opens a **ratatui inline-viewport TUI**: a live input box + status line at the bottom, while the permanent flow (Usta's replies, file feedback) is printed to normal **scrollback** — scroll up to read or copy history. No alternate screen; your terminal history is preserved.
+In an interactive terminal Usta opens a **fullscreen ratatui TUI** on the alternate screen: the conversation fills a scrollable pane, with the input box and status line pinned below it. Scroll with the mouse wheel or PageUp/PageDown; hold Shift while dragging to select and copy text (iTerm2/Ghostty/WezTerm). Leaving usta restores your previous terminal content — the conversation is not printed to scrollback, it lives in usta's own history.
 
 A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (logo + your saved topics), and the input box below asks for the topic — type a word, or describe it in a sentence (the model reduces sentences to a short slug). With a filled `PROJECT.md` you can also just press Enter and Usta will start a conversational suggestion. `usta start <topic>` shows the **full-mode welcome** (learning status: level, map %, what's next) and starts directly.
 
@@ -119,6 +119,7 @@ A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (
 |---|---|
 | Enter | send |
 | Shift/Ctrl/Alt+Enter, Ctrl+J | newline |
+| Mouse wheel / PageUp / PageDown | scroll the chat pane |
 | Up / Down | move the cursor a line; on the first/last line, step through history (an edited recall is not overwritten) |
 | Ctrl+A / Ctrl+E (Home / End) | start / end of line |
 | Ctrl+K / Ctrl+U | delete to end / start of line |
