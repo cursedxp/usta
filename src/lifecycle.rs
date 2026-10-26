@@ -146,11 +146,13 @@ pub(crate) async fn flush_core(
         read(&prj_path).as_deref(),
         read(&ppg_path).as_deref(),
     )));
-    let reply = ask_usta(backend, system, &msgs).await?;
-    let files = progress::split_files(&reply.text);
-    if files.is_empty() {
-        anyhow::bail!("model produced no files — nothing was written");
-    }
+    let spinner = ui::Spinner::start("Usta is thinking…");
+    let reply = backend
+        .complete_with_limit(system, &msgs, crate::anthropic::CLOSING_MAX_TOKENS)
+        .await;
+    spinner.stop().await;
+    let reply = reply?;
+    let files = progress::parse_closing_reply(&reply.text, reply.truncated)?;
     // Shell guarantee for the `/game` preference: capture the on-disk state of the
     // `- gamification:` line BEFORE the model rewrites USER.md. If the closing prompt's
     // KEEP rule is ignored (line dropped or value flipped), we restore it after the write.
@@ -172,10 +174,6 @@ pub(crate) async fn flush_core(
                 continue;
             }
         };
-        if content.is_empty() {
-            ui::warn(&format!("empty content skipped: {name}"));
-            continue;
-        }
         progress::write_atomic(&path, &content)?;
         ui::notice(&format!("updated: {}", path.display()));
     }
@@ -351,5 +349,26 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Source pin: flush_core asks with the closing budget and passes the reply
+    /// through the gate BEFORE the first write (review P1-1/P1-2).
+    #[test]
+    fn flush_core_gates_the_reply_before_any_write() {
+        let prod = include_str!("lifecycle.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let start = prod.find("pub(crate) async fn flush_core").unwrap();
+        let end = prod.find("pub(crate) async fn flush_progress").unwrap();
+        let body = &prod[start..end];
+        assert!(body
+            .contains("complete_with_limit(system, &msgs, crate::anthropic::CLOSING_MAX_TOKENS)"));
+        let gate = body
+            .find("progress::parse_closing_reply(&reply.text, reply.truncated)?")
+            .expect("gate");
+        let write = body.find("progress::write_atomic(").expect("write");
+        assert!(gate < write, "the gate must run before any write");
+        assert!(!body.contains("split_files("));
     }
 }

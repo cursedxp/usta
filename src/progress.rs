@@ -51,12 +51,9 @@ with this topic, how they like to learn. At most 1-2 questions, not a form; don'
 delay getting into the topic. If the user already introduced themselves, don't ask \
 again. What you learn will be written to their profile at session close.\n";
 
-/// Split the closing reply into (name, content) pairs. If there's no delimiter,
-/// the whole reply counts as a single "progress" file — keeps the old format backward compatible.
+/// Split the closing reply into (name, content) pairs, one per `===FILE: <name>===`
+/// section. No delimiter → no files: a conversational reply is never a progress file.
 pub fn split_files(reply: &str) -> Vec<(String, String)> {
-    if !reply.contains(FILE_DELIM) {
-        return vec![("progress".to_string(), clean_markdown_reply(reply))];
-    }
     let mut out = Vec::new();
     for chunk in reply.split(FILE_DELIM).skip(1) {
         let Some((header, body)) = chunk.split_once("===") else {
@@ -69,6 +66,26 @@ pub fn split_files(reply: &str) -> Vec<(String, String)> {
         out.push((name, clean_markdown_reply(body)));
     }
     out
+}
+
+/// The gate before any closing/compaction write: a cut-off reply, a reply without
+/// `===FILE:` sections, or an empty section is rejected — nothing is written and the
+/// caller keeps the transcript / history (review P1-1, P1-2).
+pub fn parse_closing_reply(text: &str, truncated: bool) -> Result<Vec<(String, String)>> {
+    if truncated {
+        anyhow::bail!("reply was cut off (max tokens) — nothing written");
+    }
+    if !text.contains(FILE_DELIM) {
+        anyhow::bail!("reply has no file sections — nothing written");
+    }
+    let files = split_files(text);
+    if files.is_empty() {
+        anyhow::bail!("reply has no files — nothing written");
+    }
+    if let Some((name, _)) = files.iter().find(|(_, body)| body.is_empty()) {
+        anyhow::bail!("empty file in reply: {name} — nothing written");
+    }
+    Ok(files)
 }
 
 /// User-turn content for the closing call: the current state of the three files +

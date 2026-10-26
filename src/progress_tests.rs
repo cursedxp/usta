@@ -92,11 +92,47 @@ fn paths_build_expected_layout() {
 }
 
 #[test]
-fn split_files_without_delimiter_is_progress() {
-    let out = split_files("# Rust — İlerleme\niçerik");
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].0, "progress");
-    assert!(out[0].1.contains("içerik"));
+fn split_files_without_delimiter_is_empty() {
+    // A conversational reply (apology, refusal, error text) is never a progress file.
+    assert!(split_files("# Rust — İlerleme\niçerik").is_empty());
+}
+
+#[test]
+fn parse_closing_reply_rejects_a_cut_off_reply() {
+    let err = parse_closing_reply("===FILE: progress===\nP", true).unwrap_err();
+    assert!(err.to_string().contains("cut off"), "{err}");
+}
+
+#[test]
+fn parse_closing_reply_rejects_a_reply_without_sections() {
+    let err = parse_closing_reply("Sorry, I can't summarize this session.", false).unwrap_err();
+    assert!(err.to_string().contains("no file sections"), "{err}");
+}
+
+#[test]
+fn parse_closing_reply_rejects_sections_without_names() {
+    let err = parse_closing_reply("===FILE: ===\nP", false).unwrap_err();
+    assert!(err.to_string().contains("no files"), "{err}");
+}
+
+#[test]
+fn parse_closing_reply_rejects_an_empty_section() {
+    let err = parse_closing_reply("===FILE: progress===\nP\n===FILE: approach===\n  \n", false)
+        .unwrap_err();
+    assert!(err.to_string().contains("approach"), "{err}");
+}
+
+#[test]
+fn parse_closing_reply_accepts_a_complete_reply() {
+    let files =
+        parse_closing_reply("===FILE: progress===\nP\n===FILE: approach===\nA\n", false).unwrap();
+    assert_eq!(
+        files,
+        vec![
+            ("progress".to_string(), "P".to_string()),
+            ("approach".to_string(), "A".to_string()),
+        ]
+    );
 }
 
 #[test]
