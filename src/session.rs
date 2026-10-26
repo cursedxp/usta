@@ -30,8 +30,6 @@ impl Session {
         self.history.push(Message::user(text));
     }
 
-    // TEMP(image-paste): consumed from Task 4-6; remove this allow then.
-    #[allow(dead_code)]
     /// Add a user turn that carries images (`[Image #N]` tokens stay in `text`).
     pub fn push_user_with_images(&mut self, text: &str, images: &[PastedImage]) {
         self.history.push(Message::user_with_images(text, images));

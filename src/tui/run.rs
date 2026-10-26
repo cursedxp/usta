@@ -453,7 +453,7 @@ pub async fn run(
                 let k = match ev {
                     Event::Key(k) => k,
                     // Bracketed paste: single event, Enter isn't triggered, structure is preserved.
-                    Event::Paste(s) => { editor.insert_str(&s); continue }
+                    Event::Paste(s) => { editor.paste(&s); continue }
                     Event::Resize(_, _) => { crate::tui::page::handle_resize(&mut tui)?; continue }
                     _ => continue,
                 };
@@ -523,6 +523,7 @@ pub async fn run(
                         }
                         // /exam: echo the literal command, gate on goal presence, then swap the
                         // outgoing text and fall through to the normal ask flow below.
+                        let images = if crate::slash::is_exam_command(&line) || game_cmd.is_some() { Vec::new() } else { editor.take_images() };
                         let outgoing = if crate::slash::is_exam_command(&line) {
                             crate::tui::page::page_user_echo(&mut tui, "/exam")?;
                             if !crate::slash::topic_has_goal(project_root, global, &topic) {
@@ -542,10 +543,11 @@ pub async fn run(
                         } else {
                             // Push the submitted line to scrollback as a distinct user block.
                             crate::tui::page::page_user_echo(&mut tui, &line)?;
+                            crate::tui::page::page_image_echo(&mut tui, &images)?;
                             // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
                             crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, &mut monitor, line.clone()).await?
                         };
-                        session.push_user(&outgoing);
+                        session.push_user_with_images(&outgoing, &images);
                         recorder.user(&outgoing);
                         match crate::tui::ask::ask_live(
                             &mut tui, &mut editor, &mut events, backend,

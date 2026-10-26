@@ -1,6 +1,4 @@
 //! Pasted / dropped images: format sniffing, downscaling and the API content block.
-// Tasks 2-6 wire this module in; remove this allow in Task 6.
-#![allow(dead_code)]
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -125,7 +123,7 @@ impl PastedImage {
 
     /// Chat echo line, `n` is the 1-based position among the message's images.
     pub fn echo_label(&self, n: usize) -> String {
-        format!("🖼 image {n} ({}×{})", self.width, self.height)
+        format!("image {n} ({}×{})", self.width, self.height)
     }
 }
 
@@ -215,6 +213,6 @@ mod tests {
             width: 1280,
             height: 720,
         };
-        assert_eq!(img.echo_label(1), "🖼 image 1 (1280×720)");
+        assert_eq!(img.echo_label(1), "image 1 (1280×720)");
     }
 }

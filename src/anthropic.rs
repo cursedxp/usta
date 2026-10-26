@@ -23,8 +23,6 @@ pub struct Message {
 }
 
 impl Message {
-    // TEMP(image-paste): consumed from Task 4-6; remove this allow then.
-    #[allow(dead_code)]
     /// A user turn with images: image blocks first (the docs' recommended order), then
     /// one text block. No images => the usual plain-string message.
     pub fn user_with_images(text: impl Into<String>, images: &[PastedImage]) -> Self {

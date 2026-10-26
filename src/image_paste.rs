@@ -1,7 +1,5 @@
 //! Getting an image into the editor: a file path the terminal pasted after a
 //! drag-and-drop, or the system clipboard (Ctrl+V).
-// Task 6 wires this module in; remove this allow in Task 6.
-#![allow(dead_code)]
 
 use crate::image_attach::{self, PastedImage};
 use std::path::PathBuf;

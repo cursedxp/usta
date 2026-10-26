@@ -251,7 +251,6 @@ impl InputBox {
 
     /// Bracketed paste: a dragged-in image file (the terminal pastes its path) becomes a
     /// token; anything else is ordinary text.
-    #[allow(dead_code)] // wired by the event loops in the next task
     pub fn paste(&mut self, s: &str) {
         match image_paste::load_dropped(s) {
             Some(img) => self.attach_image(img),
@@ -282,7 +281,6 @@ impl InputBox {
     }
 
     /// Images of the last submitted line (drained). Call right after `Action::Submit`.
-    #[allow(dead_code)] // wired by the event loops in the next task
     pub fn take_images(&mut self) -> Vec<PastedImage> {
         std::mem::take(&mut self.submitted)
     }
