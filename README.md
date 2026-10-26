@@ -113,6 +113,20 @@ In an interactive terminal Usta opens a **ratatui inline-viewport TUI**: a live 
 
 A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (logo + your saved topics), and the input box below asks for the topic — type a word, or describe it in a sentence (the model reduces sentences to a short slug). With a filled `PROJECT.md` you can also just press Enter and Usta will start a conversational suggestion. `usta start <topic>` shows the **full-mode welcome** (learning status: level, map %, what's next) and starts directly.
 
+**Input keys** (opencode-style multiline editor; the box grows up to 8 rows):
+
+| Key | Action |
+|---|---|
+| Enter | send |
+| Shift/Ctrl/Alt+Enter, Ctrl+J | newline |
+| Up / Down | move the cursor a line; on the first/last line, step through history (an edited recall is not overwritten) |
+| Ctrl+A / Ctrl+E (Home / End) | start / end of line |
+| Ctrl+K / Ctrl+U | delete to end / start of line |
+| Ctrl+W | delete previous word |
+| Alt+F / Alt+B | word forward / back |
+| Ctrl+- / Ctrl+. | undo / redo |
+| Ctrl+C / Ctrl+D | exit |
+
 No TTY or `NO_COLOR=1` → the TUI never opens — it falls back to the plain line mode (pipe/CI/script safe).
 
 ## How it works — "thin shell, thick brain"
