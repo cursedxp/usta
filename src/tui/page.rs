@@ -23,10 +23,10 @@ pub(crate) fn page(tui: &mut Tui, text: Text<'static>) -> Result<()> {
     Ok(())
 }
 
-/// Like `page`, but the lines are pre-sized panels (welcome box): clipped on a
-/// narrower terminal instead of re-wrapped, so box borders stay intact.
-pub(crate) fn page_fixed(tui: &mut Tui, text: Text<'static>) -> Result<()> {
-    tui.chat.push(Source::Fixed(text));
+/// Like `page`, but a pre-sized panel (welcome box): `f` builds it for the current
+/// width on every render, so a resize re-lays it out; narrower than its minimum it is clipped.
+pub(crate) fn page_fixed(tui: &mut Tui, f: impl Fn(u16) -> Text<'static> + 'static) -> Result<()> {
+    tui.chat.push(Source::Panel(Box::new(f)));
     Ok(())
 }
 
@@ -250,7 +250,7 @@ mod tests {
         );
         assert!(prod.contains("Source::Reply"));
         assert!(prod.contains("Source::Echo"));
-        assert!(prod.contains("Source::Fixed"));
+        assert!(prod.contains("Source::Panel"));
     }
 
     #[test]

@@ -209,22 +209,22 @@ pub(crate) fn print_identity_welcome(
     introduction: bool,
 ) -> Result<()> {
     let name = profile.and_then(welcome_data::extract_name);
-    let width = crate::tui::page::current_width(tui);
-    crate::tui::page::page_fixed(
-        tui,
+    let (model, dir) = (model.to_string(), dir.to_string());
+    let (local_o, other_o) = (local.to_vec(), other.to_vec());
+    crate::tui::page::page_fixed(tui, move |width| {
         welcome::render_welcome_identity(
             name.as_deref(),
-            model,
-            dir,
-            local,
-            other,
+            &model,
+            &dir,
+            &local_o,
+            &other_o,
             project_known,
             width,
             week_sessions,
             streak,
             introduction,
-        ),
-    )?;
+        )
+    })?;
     if show_prompt {
         // The "Enter = suggests" hint is only truthful on a first session with no
         // resumable topics — when `local` is non-empty, empty Enter resumes

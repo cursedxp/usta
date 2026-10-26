@@ -134,9 +134,11 @@ pub async fn run(
         // `None` only on the resume path with nothing recorded yet (Finding 1,
         // v0.21 review) — the `resuming: <topic>` notice already printed by the
         // topic-entry loop stands on its own; skip the panel rather than print
-        // an empty frame.
-        if let Some(text) = welcome::render_for_entry(had_topic_arg, &data, w) {
-            crate::tui::page::page_fixed(&mut tui, text)?;
+        // an empty frame. Checked once here; the panel re-renders per width.
+        if welcome::render_for_entry(had_topic_arg, &data, w).is_some() {
+            crate::tui::page::page_fixed(&mut tui, move |w| {
+                welcome::render_for_entry(had_topic_arg, &data, w).unwrap_or_default()
+            })?;
         }
     }
 

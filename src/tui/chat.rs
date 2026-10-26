@@ -12,8 +12,9 @@ use crate::tui::paint::{reply_text, user_echo_text};
 pub enum Source {
     /// Word-wrapped on width change — notices, warnings, errors.
     Text(Text<'static>),
-    /// Clipped, never re-wrapped — welcome panels (box borders break if wrapped).
-    Fixed(Text<'static>),
+    /// Pre-sized panel (welcome box), rebuilt at the current width on every render and
+    /// clipped (never wrapped) when the pane is narrower than the panel's minimum.
+    Panel(Box<dyn Fn(u16) -> Text<'static>>),
     /// Assistant markdown, re-rendered for the width.
     Reply(String),
     /// The user's submitted line, re-wrapped for the width.
@@ -131,8 +132,12 @@ fn wrap_text(t: &Text<'static>, w: u16) -> (Vec<Line<'static>>, Vec<bool>) {
 fn render(src: &Source, w: u16) -> (Vec<Line<'static>>, Vec<bool>) {
     match src {
         Source::Text(t) => wrap_text(t, w),
-        Source::Fixed(t) => {
-            let lines: Vec<_> = t.lines.iter().map(|l| clip_line(l, w as usize)).collect();
+        Source::Panel(f) => {
+            let lines: Vec<_> = f(w)
+                .lines
+                .iter()
+                .map(|l| clip_line(l, w as usize))
+                .collect();
             let soft = vec![false; lines.len()];
             (lines, soft)
         }
@@ -463,12 +468,24 @@ mod tests {
     }
 
     #[test]
-    fn fixed_entries_are_clipped_not_wrapped() {
+    fn panels_rerender_at_the_current_width_and_clip_below_it() {
         let mut c = ChatBuffer::default();
-        c.push(Source::Fixed(Text::raw("0123456789")));
-        assert_eq!(plain(&c.visible(4, 5)), vec!["0123"]);
-        c.push(Source::Text(Text::raw("0123456789")));
-        assert_eq!(c.line_count(4), 1 + 3);
+        c.push(Source::Panel(Box::new(|w| {
+            Text::raw(format!("{}|", "-".repeat(w as usize - 1)))
+        })));
+        assert_eq!(
+            plain(&c.visible(100, 5)),
+            vec![format!("{}|", "-".repeat(99))]
+        );
+        let rows = plain(&c.visible(60, 5));
+        assert_eq!(rows, vec![format!("{}|", "-".repeat(59))]);
+        assert!(
+            rows[0].ends_with('|'),
+            "border on the last column at the new width"
+        );
+        // a panel wider than the pane is clipped, never wrapped
+        c.push(Source::Panel(Box::new(|_| Text::raw("0123456789"))));
+        assert_eq!(plain(&c.visible(4, 5)).last().unwrap(), "0123");
     }
 
     #[test]
