@@ -4,10 +4,13 @@
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, MouseEventKind};
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::text::{Line, Span, Text};
+use ratatui::style::Style;
+use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::image_attach::PastedImage;
 use crate::tui::chat::ChatBuffer;
@@ -119,6 +122,16 @@ pub(crate) fn handle_resize(tui: &mut Tui) -> Result<()> {
     Ok(())
 }
 
+/// Paint `label` right-aligned on the editor's rule row (decoration only), keeping
+/// the rest of the rule. Shared slot for the "new message" indicator.
+pub(crate) fn rule_label(buf: &mut Buffer, box_area: Rect, label: &str, style: Style) {
+    let w = UnicodeWidthStr::width(label) as u16;
+    if box_area.height == 0 || box_area.width < w {
+        return;
+    }
+    buf.set_string(box_area.x + box_area.width - w, box_area.y, label, style);
+}
+
 /// One frame: chat pane (fills the rest) / editor (rule + 1..=8 rows) / status bar.
 /// Pure over its inputs so it can be driven by a `TestBackend`.
 pub(crate) fn render_screen(
@@ -137,18 +150,10 @@ pub(crate) fn render_screen(
     .areas(area);
     let lines = chat.visible(chat_area.width, chat_area.height);
     f.render_widget(Paragraph::new(lines), chat_area);
-    if chat.unread() && chat_area.height > 0 {
-        let row = Rect {
-            y: chat_area.y + chat_area.height - 1,
-            height: 1,
-            ..chat_area
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(NEW_MESSAGE, theme::brand())).right_aligned()),
-            row,
-        );
-    }
     editor.render(f, box_area);
+    if chat.unread() {
+        rule_label(f.buffer_mut(), box_area, NEW_MESSAGE, theme::brand());
+    }
     f.render_widget(status, status_area);
 }
 
@@ -345,22 +350,27 @@ mod tests {
     }
 
     #[test]
-    fn indicator_shows_only_while_unread() {
-        let mut chat = filled_chat(30);
+    fn indicator_sits_on_the_rule_row_not_the_last_chat_line() {
+        let mut chat = filled_chat(60);
         let editor = InputBox::new();
-        let rows = screen_rows(40, 10, &mut chat, &editor); // pane = 7 rows
-        assert!(!rows[6].contains("new message"));
         chat.scroll_up(3);
         chat.push(Source::Text(Text::raw("fresh")));
-        let rows = screen_rows(40, 10, &mut chat, &editor);
+        let rows = screen_rows(80, 24, &mut chat, &editor);
         assert!(
-            rows[6].trim_end().ends_with("↓ new message"),
+            !rows[20].trim().is_empty(),
+            "last chat row keeps content: {:?}",
+            rows[20]
+        );
+        assert!(!rows[20].contains("new message"));
+        assert!(rows[21].starts_with('─'), "{:?}", rows[21]);
+        assert!(
+            rows[21].trim_end().ends_with("↓ new message"),
             "{:?}",
-            rows[6]
+            rows[21]
         );
         chat.scroll_down(100);
-        let rows = screen_rows(40, 10, &mut chat, &editor);
-        assert!(!rows[6].contains("new message"));
+        let rows = screen_rows(80, 24, &mut chat, &editor);
+        assert!(!rows[21].contains("new message"));
     }
 
     /// Source pin: every loop that reads the EventStream routes through handle_nav

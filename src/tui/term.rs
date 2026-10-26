@@ -6,9 +6,11 @@
 use std::io::Stdout;
 
 use anyhow::Result;
+#[cfg(windows)]
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
@@ -27,13 +29,30 @@ pub struct Tui {
     pub chat: ChatBuffer,
 }
 
+/// Button-event mouse tracking with SGR coordinates (`?1000h ?1002h ?1006h`): presses,
+/// releases, wheel and drag-while-held, never bare any-motion tracking, so idle mouse
+/// movement doesn't wake every loop for a redraw (spec C6). `DisableMouseCapture`
+/// turns all of these off again.
+struct EnableButtonMouse;
+
+impl crossterm::Command for EnableButtonMouse {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str("\x1b[?1000h\x1b[?1002h\x1b[?1006h")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        crossterm::Command::execute_winapi(&EnableMouseCapture)
+    }
+}
+
 /// Raw mode + alternate screen + mouse capture. Restore is chained onto the
 /// panic hook — the previous hook is preserved (the test harness's hook isn't
 /// overwritten).
 pub fn setup() -> Result<Tui> {
     crossterm::terminal::enable_raw_mode()?;
-    // Own the whole window; wheel events reach us (Shift+drag selects natively).
-    if let Err(e) = crossterm::execute!(std::io::stdout(), EnterAlternateScreen, EnableMouseCapture)
+    // Own the whole window; wheel and drag events reach us (Shift+drag still selects natively).
+    if let Err(e) = crossterm::execute!(std::io::stdout(), EnterAlternateScreen, EnableButtonMouse)
     {
         restore();
         return Err(e.into());
@@ -114,14 +133,26 @@ mod tests {
         assert_eq!(viewport_height(8), 10);
     }
 
-    /// Source pin: setup takes the whole window.
+    /// Source pin: setup takes the whole window with button-event mouse tracking only.
     #[test]
-    fn setup_enters_the_alternate_screen_with_mouse_capture() {
+    fn setup_enables_button_event_mouse_only() {
         let body = prod().split("pub fn setup(").nth(1).expect("setup");
         let body = body.split("pub fn restore(").next().unwrap();
         assert!(body.contains("EnterAlternateScreen"));
-        assert!(body.contains("EnableMouseCapture"));
+        assert!(body.contains("EnableButtonMouse"));
+        assert!(!body.contains("EnableMouseCapture"));
         assert!(body.contains("Viewport::Fullscreen"));
+        assert!(
+            !prod().contains("1003h"),
+            "no any-motion tracking (spec C6)"
+        );
+    }
+
+    #[test]
+    fn button_mouse_writes_button_event_and_sgr_modes() {
+        let mut s = String::new();
+        crossterm::Command::write_ansi(&EnableButtonMouse, &mut s).unwrap();
+        assert_eq!(s, "\x1b[?1000h\x1b[?1002h\x1b[?1006h");
     }
 
     /// Source pin: restore() undoes both, mouse capture first, and the panic hook calls it.
