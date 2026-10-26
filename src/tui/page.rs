@@ -3,7 +3,7 @@
 //! (cleanup round, Task 4).
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, MouseButton, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -106,6 +106,10 @@ fn nav(chat: &mut ChatBuffer, ev: &Event, copy: &mut dyn FnMut(&str)) -> bool {
             chat.clear_flash();
             false
         }
+        // Windows reports every key twice (Press + Release). The release is
+        // consumed here: every event loop routes through handle_nav first, so
+        // no loop handles a key twice (review P2-1). Repeat stays: held keys type.
+        Event::Key(k) if k.kind == KeyEventKind::Release => true,
         Event::Key(k) => {
             chat.clear_flash();
             match k.code {
@@ -216,7 +220,8 @@ mod tests {
     use super::*;
     use crate::tui::chat::Source;
     use crossterm::event::{
-        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     };
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
@@ -411,6 +416,23 @@ mod tests {
         assert!(c.flash().is_some());
         assert!(!nav(&mut c, &Event::Paste("x".into()), &mut |_| {}));
         assert!(c.flash().is_none(), "paste clears the flash");
+    }
+
+    #[test]
+    fn nav_consumes_key_release_and_changes_nothing() {
+        // Windows reports Press + Release for every key; the release must not
+        // scroll a second time nor reach the caller's key match.
+        let mut c = filled_chat(40);
+        let release = |code| {
+            Event::Key(KeyEvent::new_with_kind(
+                code,
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            ))
+        };
+        assert!(nav(&mut c, &release(KeyCode::PageUp), &mut |_| {}));
+        assert!(c.is_following(), "a released PageUp must not scroll");
+        assert!(nav(&mut c, &release(KeyCode::Char('a')), &mut |_| {}));
     }
 
     #[test]

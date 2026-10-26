@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -92,6 +92,10 @@ impl InputBox {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
+        // Defence in depth for P2-1: a key release is never an edit.
+        if key.kind == KeyEventKind::Release {
+            return Action::None;
+        }
         let m = key.modifiers;
         let ctrl = m.contains(KeyModifiers::CONTROL);
         if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
@@ -545,6 +549,26 @@ mod tests {
         for c in s.chars() {
             assert!(matches!(b.handle_key(key(c)), Action::None));
         }
+    }
+
+    #[test]
+    fn release_events_are_ignored() {
+        let rel = |code| {
+            KeyEvent::new_with_kind(
+                code,
+                KeyModifiers::NONE,
+                crossterm::event::KeyEventKind::Release,
+            )
+        };
+        let mut b = InputBox::new();
+        assert!(matches!(
+            b.handle_key(rel(KeyCode::Char('x'))),
+            Action::None
+        ));
+        assert_eq!(b.value(), "");
+        type_str(&mut b, "hi");
+        assert!(matches!(b.handle_key(rel(KeyCode::Enter)), Action::None));
+        assert_eq!(b.value(), "hi", "a released Enter must not submit");
     }
 
     #[test]
