@@ -287,7 +287,7 @@ impl InputBox {
             Some(Ok(img)) => self.attach_image(img),
             Some(Err(e)) => {
                 self.insert_str(s);
-                ui::notice(&format!("couldn't attach image: {e}"));
+                ui::notice(&format!("couldn't attach image: {e:#}"));
             }
             None => self.insert_str(s),
         }

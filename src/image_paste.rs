@@ -79,7 +79,7 @@ pub fn read_clipboard() -> Clip {
             img.bytes.into_owned(),
         ) {
             Ok(p) => Clip::Image(p),
-            Err(e) => Clip::Failed(e.to_string()),
+            Err(e) => Clip::Failed(format!("{e:#}")),
         };
     }
     match cb.get_text() {
