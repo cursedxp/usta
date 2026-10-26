@@ -185,9 +185,9 @@ async fn main() -> Result<()> {
     // is still up (keys can't echo or leak to the shell); the plain path runs it here.
     // TUI path: topic entry + slug/confirmation + build_session all happen inside run() —
     // topic_arg is passed raw, a `None` return means the user exited without giving a topic.
-    // Plain path (no TTY / NO_COLOR): resolve_topic + lock-conflict + build_session
+    // Plain path (stdin or stdout not a TTY / NO_COLOR): resolve_topic + lock-conflict + build_session
     // + banner + run_plain_loop happen here — behavior preserved exactly.
-    let (session, recorder, lock, flushed) = if !ui::is_plain() {
+    let (session, recorder, lock, flushed) = if ui::use_tui() {
         // While TUI is active, don't let notice/warn/Spinner print raw ANSI —
         // turn the flag on, and always turn it off when run() returns (even on error), then raise the error.
         ui::set_tui_active(true);

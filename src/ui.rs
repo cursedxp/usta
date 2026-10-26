@@ -75,6 +75,17 @@ pub fn is_plain() -> bool {
     !std::io::stdout().is_terminal() || std::env::var_os("NO_COLOR").is_some()
 }
 
+/// Open the fullscreen TUI? Both ends must be a terminal: crossterm reads keys
+/// from the tty, so with a piped stdin (`echo hi | usta`) the pipe would never
+/// be read and the TUI would hang. The plain path reads the pipe.
+pub fn use_tui() -> bool {
+    use_tui_from(std::io::stdin().is_terminal(), is_plain())
+}
+
+fn use_tui_from(stdin_tty: bool, plain: bool) -> bool {
+    stdin_tty && !plain
+}
+
 /// Usta reply block: blank line + orange ● + markdown render + blank line.
 pub fn print_usta_reply(reply: &str, web: bool) {
     if is_plain() {
@@ -250,6 +261,17 @@ mod tests {
         let w = format!("{} careful", crate::tui::theme::G_WARN);
         assert_eq!(split_tui_notice(&w), (true, "careful"));
         assert_eq!(split_tui_notice("plain msg"), (false, "plain msg"));
+    }
+
+    #[test]
+    fn use_tui_needs_a_terminal_stdin_and_not_plain() {
+        assert!(use_tui_from(true, false));
+        assert!(
+            !use_tui_from(false, false),
+            "`echo hi | usta` takes the plain path"
+        );
+        assert!(!use_tui_from(true, true));
+        assert!(!use_tui_from(false, true));
     }
 
     #[test]

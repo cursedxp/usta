@@ -157,10 +157,7 @@ mod tests {
     #[test]
     fn main_flushes_only_on_the_plain_path() {
         let src = prod(include_str!("../main.rs"));
-        let tui = src
-            .split("if !ui::is_plain() {")
-            .nth(1)
-            .expect("tui branch");
+        let tui = src.split("if ui::use_tui() {").nth(1).expect("tui branch");
         let (tui_branch, plain_branch) = tui
             .split_once("resolve_topic(&mut backend")
             .expect("plain branch");
