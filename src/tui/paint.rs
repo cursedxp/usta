@@ -64,7 +64,6 @@ pub(crate) fn user_echo_text(line: &str, width: u16) -> Text<'static> {
 
 /// Assistant reply block: orange `●` line + termimad markdown + blank line,
 /// rendered for `width`. Pure — `ChatBuffer` re-runs it on every width change.
-#[allow(dead_code)] // used by ChatBuffer; wired in Task 2
 pub(crate) fn reply_text(reply: &str, width: u16) -> Text<'static> {
     let ansi = crate::ui::render_markdown(reply, width as usize);
     let mut t = ansi_to_text(&format!(

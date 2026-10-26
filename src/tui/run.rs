@@ -353,7 +353,7 @@ pub async fn run(
         // topic-entry loop stands on its own; skip the panel rather than print
         // an empty frame.
         if let Some(text) = welcome::render_for_entry(had_topic_arg, &data, w) {
-            crate::tui::page::page(&mut tui, text)?;
+            crate::tui::page::page_fixed(&mut tui, text)?;
         }
     }
 

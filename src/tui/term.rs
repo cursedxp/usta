@@ -13,6 +13,7 @@ use ratatui::layout::Position;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use crate::tui::backend_wrap::{fallback_seed, TrackedBackend};
+use crate::tui::chat::ChatBuffer;
 use crate::tui::editor::MAX_INPUT_ROWS;
 
 /// Bottom region: rule + 1..=8 input rows + status line, height follows the text.
@@ -23,6 +24,7 @@ pub fn viewport_height(rows: u16) -> u16 {
 pub struct Tui {
     pub terminal: Terminal<TrackedBackend<Stdout>>,
     height: u16,
+    pub chat: ChatBuffer,
 }
 
 /// Raw mode + inline viewport. Restore is chained onto the panic hook — the
@@ -60,7 +62,11 @@ pub fn setup() -> Result<Tui> {
         .unwrap_or_else(|_| fallback_seed(crossterm::terminal::size().map_or(0, |(_, h)| h)));
     let height = viewport_height(1);
     let terminal = inline_terminal(seed, height)?;
-    Ok(Tui { terminal, height })
+    Ok(Tui {
+        terminal,
+        height,
+        chat: ChatBuffer::default(),
+    })
 }
 
 fn inline_terminal(seed: Position, h: u16) -> Result<Terminal<TrackedBackend<Stdout>>> {

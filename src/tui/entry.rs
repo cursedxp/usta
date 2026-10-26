@@ -210,7 +210,7 @@ pub(crate) fn print_identity_welcome(
 ) -> Result<()> {
     let name = profile.and_then(welcome_data::extract_name);
     let width = crate::tui::page::current_width(tui);
-    crate::tui::page::page(
+    crate::tui::page::page_fixed(
         tui,
         welcome::render_welcome_identity(
             name.as_deref(),
