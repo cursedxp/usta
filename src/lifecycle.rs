@@ -54,20 +54,17 @@ pub(crate) fn rollback_turn(session: &mut Session, recorder: &Recorder, mark: us
 /// Session setup once the topic is known — system prompt + Session + write its
 /// own lock + recorder + has_progress. The lock-CONFLICT confirmation is NOT here
 /// (handled by the caller depending on the path: plain stdin, TUI single-key). Returns:
-/// `(session, recorder, lock_path, has_progress)`.
+/// `(session, recorder, lock guard, has_progress)` — dropping the guard removes the lock.
 pub(crate) fn build_session(
     global: &Path,
     project_root: &Path,
     topic: &str,
     today: &str,
-) -> Result<(Session, Recorder, PathBuf, bool)> {
+) -> Result<(Session, Recorder, crate::lock::LockGuard, bool)> {
     let system = brain::load_system_prompt(global, Some(project_root), topic, today);
     let session = Session::new(topic.to_string(), system);
 
-    let lock = lock_path(project_root, topic);
-    if let Err(e) = std::fs::write(&lock, std::process::id().to_string()) {
-        ui::warn(&format!("topic lock could not be written: {e}"));
-    }
+    let lock = crate::lock::LockGuard::acquire(lock_path(project_root, topic));
 
     let recorder = Recorder::new(transcript::session_path(project_root, topic, &now_stamp()));
 

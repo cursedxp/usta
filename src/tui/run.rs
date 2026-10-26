@@ -27,7 +27,8 @@ use crate::{feedback, progress, watcher};
 
 /// TUI session: topic entry (if no arg) + welcome box + drill/intro + main
 /// loop. Session/recorder are set up inside via `build_session`. Return:
-/// `Some((session, recorder, lock, flushed))` — the closing flush already ran
+/// `Some((session, recorder, lock, flushed))` (`lock` is the guard — dropping it
+/// removes the lock file) — the closing flush already ran
 /// inside the TUI (`closing::save_live`); the rest of closing is shared with the
 /// plain path in main; `None` — the user quit without giving a topic (no session, no lock). On
 /// return, Tui drops → terminal restore.
@@ -39,7 +40,7 @@ pub async fn run(
     topic_arg: Option<String>,
     max_feedback_batch: usize,
     watch_rx: &mut UnboundedReceiver<PathBuf>,
-) -> Result<Option<(Session, Recorder, PathBuf, Result<()>)>> {
+) -> Result<Option<(Session, Recorder, crate::lock::LockGuard, Result<()>)>> {
     // setup() installs the panic hook → called EXACTLY ONCE PER PROCESS (not in a loop).
     let mut tui = crate::tui::term::setup()?;
     let mut editor = InputBox::new();
@@ -84,7 +85,7 @@ pub async fn run(
         return Ok(None);
     }
 
-    // build_session writes its own lock; the returned lock = same path.
+    // build_session writes its own lock and returns its guard.
     let (mut session, recorder, lock, has_progress) =
         crate::lifecycle::build_session(global, project_root, &topic, today)?;
 

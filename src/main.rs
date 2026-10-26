@@ -196,7 +196,7 @@ async fn main() -> Result<()> {
     // topic_arg is passed raw, a `None` return means the user exited without giving a topic.
     // Plain path (stdin or stdout not a TTY / NO_COLOR): resolve_topic + lock-conflict + build_session
     // + banner + run_plain_loop happen here — behavior preserved exactly.
-    let (session, recorder, lock, flushed) = if ui::use_tui() {
+    let (session, recorder, lock, flushed, looped) = if ui::use_tui() {
         // While TUI is active, don't let notice/warn/Spinner print raw ANSI —
         // turn the flag on, and always turn it off when run() returns (even on error), then raise the error.
         ui::set_tui_active(true);
@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
         ui::set_tui_active(false);
         ui::flush_tui_notices(); // shutdown messages buffered while the TUI was up
         match r? {
-            Some(artifacts) => artifacts,
+            Some((session, recorder, lock, flushed)) => (session, recorder, lock, flushed, Ok(())),
             None => {
                 // Exited without giving a topic — no session/lock, nothing to close.
                 ui::notice("See you — keep getting in the water.");
@@ -254,7 +254,7 @@ async fn main() -> Result<()> {
             .as_deref()
             .map(profile_is_generic)
             .unwrap_or(true);
-        run_plain_loop(
+        let looped = run_plain_loop(
             &mut backend,
             &mut session,
             &mut watch_rx,
@@ -268,9 +268,11 @@ async fn main() -> Result<()> {
                 profile_generic,
             },
         )
-        .await?;
+        .await;
+        // Flush even when the loop failed — the turns are in memory; the error
+        // propagates after the closing steps below.
         let flushed = flush_progress(&mut backend, &session, &project_root, true).await;
-        (session, recorder, lock, flushed)
+        (session, recorder, lock, flushed, looped)
     };
 
     if let Err(e) = flushed {
@@ -284,7 +286,8 @@ async fn main() -> Result<()> {
         ui::warn(&format!("session record could not be marked done: {e}"));
     }
 
-    let _ = std::fs::remove_file(&lock);
+    drop(lock); // LockGuard: removes the topic lock
+    looped?;
 
     ui::notice("See you — keep getting in the water.");
     Ok(())

@@ -165,4 +165,26 @@ mod tests {
         assert!(!tui_branch.contains("flush_progress("));
         assert!(plain_branch.contains("flush_progress("));
     }
+
+    /// Source pin: a plain-loop error no longer skips the closing flush — the
+    /// loop result is kept, the flush runs, and the error propagates last (P2-9).
+    #[test]
+    fn main_flushes_the_plain_session_even_when_the_loop_fails() {
+        let src = prod(include_str!("../main.rs"));
+        let after_loop = src
+            .split("run_plain_loop(")
+            .nth(1)
+            .expect("plain loop call");
+        let until_flush = after_loop.split("flush_progress(").next().unwrap();
+        assert!(
+            !until_flush.contains(".await?"),
+            "a loop error must not skip the flush"
+        );
+        assert!(
+            src.contains("drop(lock);"),
+            "the lock goes through its guard"
+        );
+        assert!(src.contains("looped?;"));
+        assert!(!src.contains("remove_file(&lock)"));
+    }
 }

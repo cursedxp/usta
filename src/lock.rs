@@ -1,6 +1,7 @@
 //! Topic lock (`.usta/.lock-<topic>`, content: the owner's pid): is the owner
 //! still running? Liveness is probed with the platform's own tool — no new
 //! crates (an OS advisory lock would need one, or Rust 1.89). Review P2-8.
+//! `LockGuard` removes the lock on every exit path (review P2-9).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -65,6 +66,27 @@ pub(crate) fn split_live(root: &Path, records: Vec<PathBuf>) -> (Vec<PathBuf>, V
     (free, live)
 }
 
+/// The topic lock this process holds. Dropping it removes the file — on the
+/// normal close, on any `?` error and on a panic that unwinds.
+pub(crate) struct LockGuard(PathBuf);
+
+impl LockGuard {
+    /// Write the own pid to `path`. A write failure only warns: the lock is a
+    /// courtesy check, it must never block the session.
+    pub(crate) fn acquire(path: PathBuf) -> LockGuard {
+        if let Err(e) = std::fs::write(&path, std::process::id().to_string()) {
+            crate::ui::warn(&format!("topic lock could not be written: {e}"));
+        }
+        LockGuard(path)
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +96,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join(".usta/sessions")).unwrap();
         base
+    }
+
+    #[test]
+    fn lock_guard_writes_own_pid_and_removes_the_file_on_drop() {
+        let root = project("guard");
+        let path = crate::lifecycle::lock_path(&root, "rust");
+        let guard = LockGuard::acquire(path.clone());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            std::process::id().to_string()
+        );
+        assert_eq!(
+            live_owner(&root, "rust"),
+            None,
+            "own lock is not another owner"
+        );
+        drop(guard);
+        assert!(!path.exists(), "every exit path drops the guard");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
