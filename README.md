@@ -126,7 +126,10 @@ A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (
 | Ctrl+W | delete previous word |
 | Alt+F / Alt+B | word forward / back |
 | Ctrl+Z / Ctrl+_ / Ctrl+- , Ctrl+. | undo (all three) , redo — Ctrl+- / Ctrl+. need a kitty-protocol terminal; Ctrl+Z / Ctrl+_ work everywhere |
+| Ctrl+V | paste a screenshot from the clipboard (text on the clipboard is pasted as text) |
 | Ctrl+C / Ctrl+D | exit |
+
+**Images:** Ctrl+V pastes a screenshot from the clipboard; dragging an image file into the terminal attaches it. Each image shows up as an `[Image #N]` token in the input - delete the token to drop the image. Works with both the API and the `claude` CLI backend.
 
 No TTY or `NO_COLOR=1` → the TUI never opens — it falls back to the plain line mode (pipe/CI/script safe).
 

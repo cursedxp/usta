@@ -56,7 +56,7 @@ pub(crate) async fn ask_live(
                 if crate::tui::page::handle_nav(tui, &ev) { continue; }
                 // Paste is still processed by the editor even while locked (doesn't submit).
                 if let Event::Paste(s) = &ev {
-                    editor.insert_str(s);
+                    editor.paste(s);
                 } else if let Event::Resize(_, _) = ev {
                     crate::tui::page::handle_resize(tui)?;
                 } else if let Event::Key(k) = ev {

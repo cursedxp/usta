@@ -1,8 +1,9 @@
 //! Session state: topic + system prompt + conversation history.
-//! History is kept as plain-text `Message`s (role + Value::String content).
+//! History is `Message`s (role + content): a plain string, or an array of image blocks + one text block for turns with pasted images.
 //! The model lives in the backend — not kept here (varies by backend).
 
 use crate::anthropic::Message;
+use crate::image_attach::PastedImage;
 
 /// A single learning session.
 pub struct Session {
@@ -27,6 +28,11 @@ impl Session {
     /// Add a user turn.
     pub fn push_user(&mut self, text: &str) {
         self.history.push(Message::user(text));
+    }
+
+    /// Add a user turn that carries images (`[Image #N]` tokens stay in `text`).
+    pub fn push_user_with_images(&mut self, text: &str, images: &[PastedImage]) {
+        self.history.push(Message::user_with_images(text, images));
     }
 
     /// Add the assistant's (Usta's) reply as plain text.
@@ -111,5 +117,22 @@ mod tests {
         s.push_user("tek");
         s.compact(4, "[CHECKPOINT]");
         assert_eq!(s.history().len(), 1);
+    }
+
+    #[test]
+    fn push_user_with_images_stores_block_content() {
+        let mut s = Session::new("rust", "sistem");
+        let img = crate::image_attach::PastedImage {
+            media_type: "image/png",
+            data: vec![1],
+            width: 1,
+            height: 1,
+        };
+        s.push_user_with_images("look [Image #1]", &[img]);
+        s.push_user_with_images("no image", &[]);
+        let h = s.history();
+        assert!(h[0].content.is_array());
+        assert_eq!(h[0].text(), "look [Image #1]");
+        assert_eq!(h[1].content, serde_json::Value::String("no image".into()));
     }
 }

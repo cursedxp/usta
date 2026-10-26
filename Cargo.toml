@@ -1,6 +1,6 @@
 [package]
 name = "usta"
-version = "0.33.0"
+version = "0.34.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Terminal'de çalışan, Opus destekli Socratic öğrenim mentoru"
@@ -36,3 +36,6 @@ crokey-proc_macros = "=1.5.0"
 # `std` StreamExt için yeterli.
 futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 ratatui-textarea = { version = "0.9.3", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+arboard = "3.7"
+base64 = "0.22"

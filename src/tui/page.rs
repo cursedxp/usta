@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+use crate::image_attach::PastedImage;
 use crate::tui::chat::{ChatBuffer, Source};
 use crate::tui::editor::InputBox;
 use crate::tui::status::{render_status, Status};
@@ -64,6 +65,14 @@ pub(crate) fn flush_notices(tui: &mut Tui) -> Result<()> {
 pub(crate) fn page_user_echo(tui: &mut Tui, line: &str) -> Result<()> {
     tui.chat.jump_bottom();
     tui.chat.push(Source::Echo(line.to_string()));
+    Ok(())
+}
+
+/// One `image N (W×H)` line per attached image, right under the user's echo.
+pub(crate) fn page_image_echo(tui: &mut Tui, images: &[PastedImage]) -> Result<()> {
+    for (i, img) in images.iter().enumerate() {
+        page_notice(tui, &img.echo_label(i + 1))?;
+    }
     Ok(())
 }
 

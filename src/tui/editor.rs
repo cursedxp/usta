@@ -9,6 +9,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use ratatui_textarea::{CursorMove, TextArea};
 
+use crate::image_attach::PastedImage;
+use crate::image_paste::{self, Clip};
 use crate::tui::theme;
 
 /// Result of key handling — the loop behaves accordingly.
@@ -28,6 +30,12 @@ pub struct InputBox {
     cursor: Option<usize>,
     /// Fresh text from before entering history — comes back with Down.
     stash: String,
+    /// Images attached to the text being composed, with their `[Image #N]` number.
+    images: Vec<(usize, PastedImage)>,
+    /// Next token number (1-based, restarts after every submit / clear).
+    next_image: usize,
+    /// Images of the last submitted line - drained by `take_images`.
+    submitted: Vec<PastedImage>,
 }
 
 /// TextArea holding `s`, cursor at the very end (recall / reset).
@@ -38,6 +46,10 @@ fn area_with(s: &str) -> TextArea<'static> {
     ta
 }
 
+fn image_token(n: usize) -> String {
+    format!("[Image #{n}]")
+}
+
 impl InputBox {
     pub fn new() -> Self {
         Self {
@@ -45,6 +57,9 @@ impl InputBox {
             history: Vec::new(),
             cursor: None,
             stash: String::new(),
+            images: Vec::new(),
+            next_image: 1,
+            submitted: Vec::new(),
         }
     }
 
@@ -66,6 +81,10 @@ impl InputBox {
         if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
             return Action::Exit;
         }
+        if ctrl && key.code == KeyCode::Char('v') {
+            self.paste_clipboard();
+            return Action::None;
+        }
         // Newline: Shift/Ctrl/Alt+Enter (kitty protocol) or Ctrl+J (universal). Bare Enter submits.
         let newline = (key.code == KeyCode::Enter
             && m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL))
@@ -84,6 +103,7 @@ impl InputBox {
                     return Action::None;
                 }
                 self.history.push(line.clone());
+                self.submitted = self.referenced_images(&line);
                 self.clear();
                 Action::Submit(line)
             }
@@ -207,6 +227,8 @@ impl InputBox {
     pub fn clear(&mut self) {
         self.ta = TextArea::default();
         self.cursor = None;
+        self.images.clear();
+        self.next_image = 1;
     }
 
     /// Insert pasted text at the cursor (bracketed paste). Line breaks are PRESERVED as
@@ -217,6 +239,50 @@ impl InputBox {
             .replace('\r', "\n")
             .replace('\t', "    ");
         self.ta.insert_str(cleaned);
+    }
+
+    /// Insert an `[Image #N]` token at the cursor and keep the image for submit.
+    pub fn attach_image(&mut self, img: PastedImage) {
+        let n = self.next_image;
+        self.next_image += 1;
+        self.ta.insert_str(image_token(n));
+        self.images.push((n, img));
+    }
+
+    /// Bracketed paste: a dragged-in image file (the terminal pastes its path) becomes a
+    /// token; anything else is ordinary text.
+    pub fn paste(&mut self, s: &str) {
+        match image_paste::load_dropped(s) {
+            Some(img) => self.attach_image(img),
+            None => self.insert_str(s),
+        }
+    }
+
+    /// Ctrl+V: clipboard image => token; clipboard text => inserted; nothing => no-op.
+    pub fn paste_clipboard(&mut self) {
+        self.apply_clip(image_paste::read_clipboard());
+    }
+
+    fn apply_clip(&mut self, clip: Clip) {
+        match clip {
+            Clip::Image(img) => self.attach_image(img),
+            Clip::Text(t) => self.insert_str(&t),
+            Clip::Empty => {}
+        }
+    }
+
+    /// Pending images whose `[Image #N]` token survives in `line`, in attach order.
+    fn referenced_images(&mut self, line: &str) -> Vec<PastedImage> {
+        std::mem::take(&mut self.images)
+            .into_iter()
+            .filter(|(n, _)| line.contains(&image_token(*n)))
+            .map(|(_, img)| img)
+            .collect()
+    }
+
+    /// Images of the last submitted line (drained). Call right after `Action::Submit`.
+    pub fn take_images(&mut self) -> Vec<PastedImage> {
+        std::mem::take(&mut self.submitted)
     }
 
     /// True when the shown text was edited after a recall — opencode won't overwrite it.
@@ -844,5 +910,133 @@ mod tests {
         b.insert_str("a\r\nb\rc");
         assert_eq!(b.value(), "a\nb\nc");
         assert_eq!(b.cursor_rc(), (2, 1));
+    }
+
+    use crate::image_attach::PastedImage;
+    use crate::image_paste::Clip;
+
+    fn pasted(tag: u8) -> PastedImage {
+        PastedImage {
+            media_type: "image/png",
+            data: vec![tag],
+            width: 1,
+            height: 1,
+        }
+    }
+
+    fn backspaces(b: &mut InputBox, n: usize) {
+        for _ in 0..n {
+            b.handle_key(code(KeyCode::Backspace));
+        }
+    }
+
+    #[test]
+    fn attach_image_inserts_numbered_tokens() {
+        let mut b = InputBox::new();
+        b.attach_image(pasted(1));
+        b.attach_image(pasted(2));
+        assert_eq!(b.value(), "[Image #1][Image #2]");
+    }
+
+    #[test]
+    fn submit_keeps_only_images_whose_token_is_still_in_the_text() {
+        let mut b = InputBox::new();
+        b.attach_image(pasted(1));
+        b.attach_image(pasted(2));
+        backspaces(&mut b, "[Image #2]".chars().count()); // delete token 2
+        type_str(&mut b, " what is this");
+        let Action::Submit(line) = b.handle_key(code(KeyCode::Enter)) else {
+            panic!("expected Submit")
+        };
+        assert_eq!(line, "[Image #1] what is this");
+        assert_eq!(b.take_images(), vec![pasted(1)]);
+    }
+
+    #[test]
+    fn submit_with_every_token_deleted_has_no_images() {
+        let mut b = InputBox::new();
+        b.attach_image(pasted(1));
+        backspaces(&mut b, "[Image #1]".chars().count());
+        type_str(&mut b, "hi");
+        assert!(matches!(
+            b.handle_key(code(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+        assert!(b.take_images().is_empty());
+    }
+
+    #[test]
+    fn token_ten_does_not_keep_image_one_alive() {
+        let mut b = InputBox::new();
+        for i in 1..=10 {
+            b.attach_image(pasted(i));
+        }
+        // delete tokens 1..=9 from the front: Home, then Delete the first 9 tokens.
+        b.handle_key(code(KeyCode::Home));
+        for _ in 0.."[Image #1]".len() * 9 {
+            b.handle_key(code(KeyCode::Delete));
+        }
+        assert_eq!(b.value(), "[Image #10]");
+        assert!(matches!(
+            b.handle_key(code(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+        assert_eq!(b.take_images(), vec![pasted(10)]);
+    }
+
+    #[test]
+    fn take_images_drains() {
+        let mut b = InputBox::new();
+        b.attach_image(pasted(1));
+        b.handle_key(code(KeyCode::Enter));
+        assert_eq!(b.take_images().len(), 1);
+        assert!(b.take_images().is_empty());
+    }
+
+    #[test]
+    fn clear_resets_images_and_numbering() {
+        let mut b = InputBox::new();
+        b.attach_image(pasted(1));
+        b.clear();
+        b.attach_image(pasted(2));
+        assert_eq!(b.value(), "[Image #1]");
+    }
+
+    #[test]
+    fn paste_of_an_image_path_becomes_a_token() {
+        let dir = std::env::temp_dir().join(format!("usta editor paste {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("shot one.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
+            .save(&p)
+            .unwrap();
+        let mut b = InputBox::new();
+        b.paste(&p.to_str().unwrap().replace(' ', "\\ "));
+        assert_eq!(b.value(), "[Image #1]");
+        assert!(matches!(
+            b.handle_key(code(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+        let imgs = b.take_images();
+        assert_eq!((imgs[0].width, imgs[0].height), (4, 4));
+    }
+
+    #[test]
+    fn paste_of_ordinary_text_is_inserted_verbatim() {
+        let mut b = InputBox::new();
+        b.paste("hello\nworld");
+        assert_eq!(b.value(), "hello\nworld");
+        b.clear();
+        b.paste("/no/such/file.png");
+        assert_eq!(b.value(), "/no/such/file.png");
+    }
+
+    #[test]
+    fn clipboard_image_text_and_empty_are_applied() {
+        let mut b = InputBox::new();
+        b.apply_clip(Clip::Image(pasted(5)));
+        b.apply_clip(Clip::Text(" and text".into()));
+        b.apply_clip(Clip::Empty);
+        assert_eq!(b.value(), "[Image #1] and text");
     }
 }
