@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode};
+use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures_util::StreamExt;
 
 use crate::anthropic::Message;
@@ -291,6 +291,9 @@ pub(crate) async fn ask_topic(
                 // returns the sentinel when a project is known, so the Suggest flow can
                 // trigger even with no resumable topics.
                 if matches!(k.code, KeyCode::Enter)
+                    && !k
+                        .modifiers
+                        .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)
                     && editor.value().trim().is_empty()
                     && (!local.is_empty() || project_known)
                 {
@@ -307,5 +310,21 @@ pub(crate) async fn ask_topic(
             Some(Ok(_)) | Some(Err(_)) => {} // other events — ignore
             None => return Ok(None),         // stream ended — don't spin in a hot loop (spec B4)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Source pin: the empty-Enter resume shortcut must ignore modified Enter
+    /// (Shift/Alt/Ctrl+Enter are newline keys, not "resume").
+    #[test]
+    fn empty_enter_resume_ignores_modified_enter() {
+        let src = include_str!("entry.rs");
+        let at = src.find("matches!(k.code, KeyCode::Enter)").unwrap();
+        let window = &src[at..at + 400];
+        assert!(
+            window.contains("KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL"),
+            "empty-Enter resume check must exclude modifiers"
+        );
     }
 }

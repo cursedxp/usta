@@ -124,7 +124,7 @@ A bare `usta` (Claude Code-style): the **identity welcome** box appears on top (
 | Ctrl+K / Ctrl+U | delete to end / start of line |
 | Ctrl+W | delete previous word |
 | Alt+F / Alt+B | word forward / back |
-| Ctrl+- / Ctrl+. | undo / redo |
+| Ctrl+Z / Ctrl+_ / Ctrl+- , Ctrl+. | undo (all three) , redo — Ctrl+- / Ctrl+. need a kitty-protocol terminal; Ctrl+Z / Ctrl+_ work everywhere |
 | Ctrl+C / Ctrl+D | exit |
 
 No TTY or `NO_COLOR=1` → the TUI never opens — it falls back to the plain line mode (pipe/CI/script safe).

@@ -3,7 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -147,9 +147,22 @@ impl InputBox {
             _ => None,
         };
         if let Some(mv) = mv {
-            // Shift+Home/End = select to buffer start/end; Ctrl+Shift+A/E = select to line edge.
-            let select = shift && !matches!(key.code, KeyCode::Char('B' | 'F'));
+            // Selecting moves (opencode): Shift+Left/Right, Shift+Home/End (buffer edges),
+            // Ctrl+Shift+A/E (line edges), Alt+Shift+Left/Right and Alt+Shift+B/F (words).
+            let select = shift
+                && match key.code {
+                    KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End => true,
+                    KeyCode::Char('a' | 'A' | 'e' | 'E') => ctrl,
+                    KeyCode::Char('b' | 'B' | 'f' | 'F') => alt,
+                    _ => false,
+                };
             self.move_to(mv, select);
+            // Top/Bottom keep the column; Shift+Home/End go to the very start/end.
+            match (key.code, mv) {
+                (KeyCode::Home, CursorMove::Top) => self.ta.move_cursor(CursorMove::Head),
+                (KeyCode::End, CursorMove::Bottom) => self.ta.move_cursor(CursorMove::End),
+                _ => {}
+            }
             return;
         }
         let ta = &mut self.ta;
@@ -178,7 +191,7 @@ impl InputBox {
             KeyCode::Char('u') if ctrl => {
                 ta.delete_line_by_head();
             }
-            KeyCode::Char('-') if ctrl => {
+            KeyCode::Char('-' | '_' | '7' | 'z') if ctrl => {
                 ta.undo();
             }
             KeyCode::Char('.') if ctrl => {
@@ -199,13 +212,16 @@ impl InputBox {
     /// Insert pasted text at the cursor (bracketed paste). Line breaks are PRESERVED as
     /// real lines; CRLF / CR → LF.
     pub fn insert_str(&mut self, s: &str) {
-        let cleaned = s.replace("\r\n", "\n").replace('\r', "\n");
+        let cleaned = s
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\t', "    ");
         self.ta.insert_str(cleaned);
     }
 
     /// True when the shown text was edited after a recall — opencode won't overwrite it.
     fn edited_recall(&self) -> bool {
-        matches!(self.cursor, Some(i) if self.history[i] != self.value())
+        matches!(self.cursor, Some(i) if !self.value().is_empty() && self.history[i] != self.value())
     }
 
     fn recall_prev(&mut self) {
@@ -245,7 +261,7 @@ impl InputBox {
     pub fn desired_rows(&self, width: u16) -> u16 {
         let inner = width.saturating_sub(2) as usize;
         let (rows, _, _) = wrap_rows(self.lines(), inner, self.cursor_rc());
-        (rows.len() as u16).clamp(1, MAX_INPUT_ROWS)
+        rows.len().min(MAX_INPUT_ROWS as usize).max(1) as u16
     }
 
     /// Draw the box: a single rule above (no side or bottom borders) + `> ` prefix +
@@ -254,9 +270,13 @@ impl InputBox {
     /// lines, no ⏎ marker. If rows exceed the inner line count, the vertical
     /// window follows the cursor.
     pub fn render(&self, f: &mut Frame, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
         let inner_w = area.width.saturating_sub(2) as usize; // "> " prefix
         let visible = area.height.saturating_sub(1).max(1) as usize; // lines under the rule
-        let (rows, cur_row, cur_col) = wrap_rows(self.lines(), inner_w, self.cursor_rc());
+        let (rows, cur_row, cur_col) = wrap_rows_src(self.lines(), inner_w, self.cursor_rc());
+        let sel = self.ta.selection_range();
         // Vertical window: last `visible` lines so the cursor stays visible.
         let start = (cur_row + 1).saturating_sub(visible);
         let lines: Vec<Line> = rows
@@ -264,12 +284,11 @@ impl InputBox {
             .enumerate()
             .skip(start)
             .take(visible)
-            .map(|(i, r)| {
+            .map(|(i, (text, drow, scol))| {
                 let prefix = if i == 0 { "> " } else { "  " };
-                Line::from(vec![
-                    Span::styled(prefix, theme::brand()),
-                    Span::raw(r.clone()),
-                ])
+                let mut spans = vec![Span::styled(prefix, theme::brand())];
+                spans.extend(row_spans(text, *drow, *scol, sel));
+                Line::from(spans)
             })
             .collect();
         let para = Paragraph::new(lines).block(
@@ -281,10 +300,50 @@ impl InputBox {
         let x = area.x + 2 + cur_col as u16;
         let y = area.y + 1 + (cur_row - start) as u16;
         f.set_cursor_position((
-            x.min(area.x + area.width - 1),
-            y.min(area.y + area.height - 1),
+            x.min((area.x + area.width).saturating_sub(1)),
+            y.min((area.y + area.height).saturating_sub(1)),
         ));
     }
+}
+
+/// Split one visual row into plain / REVERSED (selected) spans. `sel` is
+/// `selection_range()` in data coords; `scol` is the row's first char column.
+fn row_spans(
+    text: &str,
+    drow: usize,
+    scol: usize,
+    sel: Option<((usize, usize), (usize, usize))>,
+) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let Some((a, b)) = sel else {
+        return vec![Span::raw(text.to_string())];
+    };
+    if drow < a.0 || drow > b.0 {
+        return vec![Span::raw(text.to_string())];
+    }
+    let from = if drow == a.0 {
+        a.1.saturating_sub(scol).min(n)
+    } else {
+        0
+    };
+    let to = if drow == b.0 {
+        b.1.saturating_sub(scol).min(n)
+    } else {
+        n
+    };
+    if from >= to {
+        return vec![Span::raw(text.to_string())];
+    }
+    let seg = |r: std::ops::Range<usize>| chars[r].iter().collect::<String>();
+    vec![
+        Span::raw(seg(0..from)),
+        Span::styled(
+            seg(from..to),
+            Style::default().add_modifier(Modifier::REVERSED),
+        ),
+        Span::raw(seg(to..n)),
+    ]
 }
 
 /// Most text rows the box shows before it scrolls (opencode-style growth, 1..=8).
@@ -329,6 +388,16 @@ fn wrap_rows(
     width: usize,
     cursor: (usize, usize),
 ) -> (Vec<String>, usize, usize) {
+    let (rows, cur_row, cur_col) = wrap_rows_src(lines, width, cursor);
+    (rows.into_iter().map(|r| r.0).collect(), cur_row, cur_col)
+}
+
+/// `wrap_rows` plus, per visual row, its source `(data row, start char col)`.
+fn wrap_rows_src(
+    lines: &[String],
+    width: usize,
+    cursor: (usize, usize),
+) -> (Vec<(String, usize, usize)>, usize, usize) {
     let width = width.max(1);
     let mut rows = Vec::new();
     let (mut cur_row, mut cur_col) = (0, 0);
@@ -341,7 +410,7 @@ fn wrap_rows(
                 cur_row = rows.len();
                 cur_col = chars[s..cursor.1].iter().map(|&c| cell(c)).sum();
             }
-            rows.push(chars[s..e].iter().collect());
+            rows.push((chars[s..e].iter().collect(), r, s));
         }
     }
     (rows, cur_row, cur_col)
@@ -660,6 +729,113 @@ mod tests {
         assert_eq!(b.value(), "merhaba ");
         b.handle_key(mods(KeyCode::Char('.'), ctrl)); // redo
         assert_eq!(b.value(), "");
+    }
+
+    fn reversed_text(b: &InputBox, w: u16, h: u16) -> String {
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Modifier;
+        use ratatui::Terminal;
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| {
+            let a = f.area();
+            b.render(f, a);
+        })
+        .unwrap();
+        let buf = t.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                if buf[(x, y)].modifier.contains(Modifier::REVERSED) {
+                    out.push_str(buf[(x, y)].symbol());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn selection_is_highlighted_and_typing_replaces_it() {
+        let shift = KeyModifiers::SHIFT;
+        let mut b = InputBox::new();
+        type_str(&mut b, "merhaba");
+        b.handle_key(mods(KeyCode::Left, shift));
+        b.handle_key(mods(KeyCode::Left, shift));
+        assert_eq!(reversed_text(&b, 20, 3), "ba");
+        type_str(&mut b, "X");
+        assert_eq!(b.value(), "merhaX");
+        assert_eq!(reversed_text(&b, 20, 3), "");
+    }
+
+    #[test]
+    fn selection_highlight_spans_wrapped_rows_and_lines() {
+        let shift = KeyModifiers::SHIFT;
+        let mut b = InputBox::new();
+        b.insert_str("ab\ncd");
+        b.handle_key(mods(KeyCode::Home, shift)); // select to buffer start
+        assert_eq!(reversed_text(&b, 20, 4), "abcd");
+    }
+
+    #[test]
+    fn shift_home_end_select() {
+        let shift = KeyModifiers::SHIFT;
+        let mut b = InputBox::new();
+        b.insert_str("ab\ncd");
+        b.handle_key(mods(KeyCode::Home, shift));
+        type_str(&mut b, "Z");
+        assert_eq!(b.value(), "Z");
+        let mut b = InputBox::new();
+        b.insert_str("ab\ncd");
+        b.handle_key(mods(KeyCode::Up, KeyModifiers::NONE));
+        b.handle_key(mods(KeyCode::Home, KeyModifiers::NONE));
+        b.handle_key(mods(KeyCode::End, shift)); // select to buffer end
+        type_str(&mut b, "Z");
+        assert_eq!(b.value(), "Z");
+    }
+
+    #[test]
+    fn edited_recall_does_not_block_when_text_is_empty() {
+        let mut b = InputBox::new();
+        type_str(&mut b, "bir");
+        b.handle_key(code(KeyCode::Enter));
+        b.handle_key(code(KeyCode::Up));
+        assert_eq!(b.value(), "bir");
+        b.handle_key(mods(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(b.value(), "");
+        b.handle_key(code(KeyCode::Up));
+        assert_eq!(b.value(), "bir");
+    }
+
+    #[test]
+    fn render_into_zero_sized_area_does_not_panic() {
+        use ratatui::backend::TestBackend;
+        use ratatui::layout::Rect;
+        use ratatui::Terminal;
+        let b = InputBox::new();
+        let mut t = Terminal::new(TestBackend::new(10, 3)).unwrap();
+        t.draw(|f| {
+            b.render(f, Rect::new(0, 0, 10, 0));
+            b.render(f, Rect::new(0, 0, 0, 3));
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn paste_converts_tabs_to_spaces() {
+        let mut b = InputBox::new();
+        b.insert_str("a\tb");
+        assert_eq!(b.value(), "a    b");
+    }
+
+    #[test]
+    fn undo_works_on_non_kitty_aliases() {
+        for c in ['z', '_', '7'] {
+            let mut b = InputBox::new();
+            type_str(&mut b, "abc");
+            b.handle_key(mods(KeyCode::Char('u'), KeyModifiers::CONTROL));
+            assert_eq!(b.value(), "");
+            b.handle_key(mods(KeyCode::Char(c), KeyModifiers::CONTROL));
+            assert_eq!(b.value(), "abc", "Ctrl+{c}");
+        }
     }
 
     #[test]
