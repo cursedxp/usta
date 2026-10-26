@@ -148,7 +148,7 @@ pub(crate) fn render_screen(
         Constraint::Length(1),
     ])
     .areas(area);
-    let lines = chat.visible(chat_area.width, chat_area.height);
+    let lines = chat.visible_in(chat_area);
     f.render_widget(Paragraph::new(lines), chat_area);
     editor.render(f, box_area);
     if chat.unread() {

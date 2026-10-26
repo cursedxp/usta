@@ -2,12 +2,14 @@
 //! un-wrapped source so every width change re-wraps from scratch; the scroll
 //! position is `offset` = lines hidden BELOW the pane (0 = at the bottom).
 
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthChar;
 
 use crate::image_attach::PastedImage;
 use crate::tui::paint::{error_line, notice_line, reply_text, user_echo_text, warn_line};
+use crate::tui::select::{self, Sel};
 use crate::tui::theme;
 
 /// What was pushed, kept in a form that can be re-rendered at any width.
@@ -26,6 +28,8 @@ pub enum Source {
 /// Bound on kept entries; past it the oldest `TRIM_ENTRIES` are dropped.
 pub const MAX_ENTRIES: usize = 1000;
 const TRIM_ENTRIES: usize = 100;
+/// Flash text shown after a selection was copied.
+pub const COPIED: &str = "copied";
 
 pub struct ChatBuffer {
     entries: Vec<Source>,
@@ -37,6 +41,10 @@ pub struct ChatBuffer {
     width: u16,
     pane_h: u16,
     cache: Option<(u16, Vec<Line<'static>>, Vec<bool>)>,
+    /// Pane rect seen by the last `visible_in()` call (mouse -> flat mapping).
+    area: Rect,
+    sel: Option<Sel>,
+    flash: Option<&'static str>,
     /// Count of per-entry `render` calls (tests assert on incremental work).
     #[cfg(test)]
     renders: usize,
@@ -52,6 +60,9 @@ impl Default for ChatBuffer {
             width: 80,
             pane_h: 1,
             cache: None,
+            area: Rect::default(),
+            sel: None,
+            flash: None,
             #[cfg(test)]
             renders: 0,
         }
@@ -217,6 +228,7 @@ impl ChatBuffer {
         if self.entries.len() > MAX_ENTRIES {
             self.entries.drain(..TRIM_ENTRIES);
             self.cache = None;
+            self.sel = None; // flat indices shift: a selection would point at other text
         }
     }
 
@@ -238,6 +250,82 @@ impl ChatBuffer {
         let end = total - self.offset;
         let start = end.saturating_sub(h);
         self.flat(width)[start..end].to_vec()
+    }
+
+    /// `visible` for a pane at `area` (records it for mouse mapping).
+    pub fn visible_in(&mut self, area: Rect) -> Vec<Line<'static>> {
+        self.area = area;
+        self.visible(area.width, area.height)
+    }
+
+    /// Flat index of the pane's first visible row at the current offset.
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn view_top(&mut self) -> usize {
+        let w = self.width;
+        let total = self.flat(w).len();
+        let end = total.saturating_sub(self.offset);
+        end.saturating_sub(self.pane_h as usize)
+    }
+
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn mouse_down(&mut self, x: u16, y: u16) {
+        self.flash = None;
+        let top = self.view_top();
+        self.sel = select::cell_to_pos(self.area, top, x, y).map(|p| Sel { anchor: p, head: p });
+    }
+
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn mouse_drag(&mut self, x: u16, y: u16) {
+        if self.sel.is_none() {
+            return;
+        }
+        // Auto-scroll: terminals repeat drag events while the mouse moves.
+        if y < self.area.y {
+            self.scroll_up(1);
+        } else if y >= self.area.y + self.area.height {
+            self.scroll_down(1);
+        }
+        let top = self.view_top();
+        let head = select::clamp_pos(self.area, top, x, y);
+        if let Some(s) = self.sel.as_mut() {
+            s.head = head;
+        }
+    }
+
+    /// Finish the drag: `Some(text)` when something was selected (flash set to "copied").
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn mouse_up(&mut self, x: u16, y: u16) -> Option<String> {
+        self.mouse_drag(x, y);
+        let sel = self.sel.take()?;
+        let w = self.width;
+        self.flat(w);
+        let (_, lines, soft) = self.cache.as_ref()?;
+        let text = select::extract(lines, soft, &sel);
+        if text.is_empty() {
+            return None;
+        }
+        self.flash = Some(COPIED);
+        Some(text)
+    }
+
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn selection(&self) -> Option<Sel> {
+        self.sel
+    }
+
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn flash(&self) -> Option<&'static str> {
+        self.flash
+    }
+
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn clear_flash(&mut self) {
+        self.flash = None;
+    }
+
+    #[allow(dead_code)] // wired in by page.rs (next task)
+    pub fn clear_selection(&mut self) {
+        self.sel = None;
     }
 
     pub fn scroll_up(&mut self, n: usize) {
@@ -340,6 +428,7 @@ impl ChatBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::layout::Rect;
     use ratatui::style::Color;
 
     fn plain(lines: &[Line]) -> Vec<String> {
@@ -695,5 +784,90 @@ five six seven",
             .map(|s| s.style)
             .collect();
         assert_eq!(styles(&mut c)[0], expect);
+    }
+
+    fn pane(c: &mut ChatBuffer) -> Rect {
+        let a = Rect::new(0, 0, 80, 5);
+        c.visible_in(a);
+        a
+    }
+
+    #[test]
+    fn drag_selects_and_release_returns_the_text_and_flashes() {
+        let mut c = filled(20); // l0..l19, pane shows l15..l19 on rows 0..=4
+        pane(&mut c);
+        c.mouse_down(0, 1);
+        c.mouse_drag(2, 2);
+        assert_eq!(c.selection().unwrap().head, (17, 2));
+        assert_eq!(c.mouse_up(2, 2).as_deref(), Some("l16\nl17"));
+        assert!(c.selection().is_none());
+        assert_eq!(c.flash(), Some(COPIED));
+    }
+
+    #[test]
+    fn a_plain_click_copies_nothing() {
+        let mut c = filled(20);
+        pane(&mut c);
+        c.mouse_down(10, 0); // past the end of "l15"
+        assert_eq!(c.mouse_up(10, 0), None);
+        assert!(c.selection().is_none() && c.flash().is_none());
+    }
+
+    #[test]
+    fn mouse_down_outside_the_pane_starts_nothing_and_clears_flash() {
+        let mut c = filled(20);
+        pane(&mut c);
+        c.mouse_down(0, 0);
+        c.mouse_drag(2, 0);
+        c.mouse_up(2, 0);
+        assert!(c.flash().is_some());
+        c.mouse_down(0, 9); // below the pane
+        assert!(c.selection().is_none() && c.flash().is_none());
+    }
+
+    #[test]
+    fn mouse_down_in_an_empty_pane_starts_nothing() {
+        let mut c = filled(20);
+        c.visible_in(Rect::new(0, 0, 0, 0));
+        c.mouse_down(0, 0);
+        assert!(c.selection().is_none());
+    }
+
+    #[test]
+    fn dragging_past_the_pane_edges_scrolls() {
+        let mut c = filled(40);
+        pane(&mut c);
+        c.mouse_down(0, 2);
+        c.mouse_drag(0, 7); // below: already at the bottom, stays following
+        assert!(c.is_following());
+        c.mouse_drag(0, 0);
+        c.scroll_up(5);
+        let off = c.offset;
+        c.mouse_drag(0, 9); // below the pane -> scroll down one
+        assert_eq!(c.offset, off - 1);
+        // above the pane: y is unsigned, so "above" means a pane that doesn't start at 0
+        let a = Rect::new(0, 3, 80, 5);
+        c.visible_in(a);
+        let off = c.offset;
+        c.mouse_drag(0, 1);
+        assert_eq!(c.offset, off + 1);
+    }
+
+    #[test]
+    fn selection_survives_scrolling_but_not_trimming() {
+        let mut c = filled(20);
+        pane(&mut c);
+        c.mouse_down(0, 0);
+        c.mouse_drag(1, 0);
+        c.scroll_up(3);
+        assert_eq!(
+            c.selection().unwrap().anchor,
+            (15, 0),
+            "absolute flat index"
+        );
+        for i in 0..MAX_ENTRIES {
+            c.push(Source::Text(Text::raw(format!("x{i}"))));
+        }
+        assert!(c.selection().is_none(), "trim invalidates flat indices");
     }
 }
