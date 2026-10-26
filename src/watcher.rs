@@ -86,6 +86,8 @@ pub fn is_ignored(path: &Path) -> bool {
                 || s.ends_with('~')
                 || s.ends_with(".swp")
                 || s.ends_with(".tmp")
+                // Backup copies (usta's own `write_atomic` leaves `*.md.bak`).
+                || s.ends_with(".bak")
                 || (s.starts_with('#') && s.ends_with('#'))
         }
         _ => false,
@@ -342,6 +344,13 @@ mod tests {
     #[test]
     fn is_ignored_flags_tmp_suffix() {
         assert!(is_ignored(Path::new("upload.tmp")));
+    }
+
+    #[test]
+    fn is_ignored_flags_backup_copies() {
+        assert!(is_ignored(Path::new("mentor/PROJECT.md.bak")));
+        assert!(is_ignored(Path::new("notes.BAK")));
+        assert!(!is_ignored(Path::new("mentor/PROJECT.md")));
     }
 
     #[test]

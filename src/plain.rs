@@ -349,7 +349,7 @@ pub(crate) async fn run_plain_loop(
                                 let tokens = reply.context_tokens;
                                 ctx.recorder.assistant(&clean);
                                 session.push_assistant(clean);
-                                maybe_compact(backend, session, ctx.project_root, tokens).await;
+                                if maybe_compact(backend, session, ctx.project_root, tokens).await { seed_mentor_baseline(&mut files, ctx.project_root); }
                                 trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic).await;
                             }
                             Err(e) => {
@@ -397,7 +397,7 @@ pub(crate) async fn run_plain_loop(
                             Ok(FileFeedback::Bildirim(m)) => println!("{m}"),
                             Ok(FileFeedback::Yanit { tokens, reply, show_topic }) => {
                                 print_reply(&reply.text, reply.web, reply.context_tokens, backend.context_window());
-                                maybe_compact(backend, session, ctx.project_root, tokens).await;
+                                if maybe_compact(backend, session, ctx.project_root, tokens).await { seed_mentor_baseline(&mut files, ctx.project_root); }
                                 trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic).await;
                             }
                             // Deleted-before-we-read-it (a tool's transient temp file) or

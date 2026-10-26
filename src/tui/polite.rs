@@ -377,7 +377,10 @@ pub(crate) async fn process_batch(
                     }
                     let w = crate::tui::page::current_width(tui);
                     crate::tui::page::page_reply(tui, &reply.text, w)?;
-                    crate::lifecycle::maybe_compact(backend, session, project_root, tokens).await;
+                    if crate::lifecycle::maybe_compact(backend, session, project_root, tokens).await
+                    {
+                        crate::file_feedback::seed_mentor_baseline(files, project_root);
+                    }
                     crate::tui::entry::trigger_auto_visual(
                         tui,
                         editor,

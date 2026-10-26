@@ -257,21 +257,24 @@ pub(crate) async fn flush_progress(
 /// If the threshold is exceeded: interim flush → reload the system prompt with
 /// fresh files → trim history → reset the CLI session. If the flush fails,
 /// compaction is CANCELED — history is never discarded before the data lands on disk.
+/// Returns true when it compacted: the flush rewrote mentor/PROJECT.md and
+/// PROGRESS.md inside the watched project, so the caller re-seeds the watcher
+/// baseline (`file_feedback::seed_mentor_baseline`, review P2-4).
 pub(crate) async fn maybe_compact(
     backend: &mut Backend,
     session: &mut Session,
     project_root: &Path,
     tokens: Option<u64>,
-) {
-    let Some(t) = tokens else { return };
+) -> bool {
+    let Some(t) = tokens else { return false };
     if !session.compaction_allowed() {
-        return;
+        return false;
     }
     if (t as f64) < COMPACT_THRESHOLD * backend.context_window() as f64 {
-        return;
+        return false;
     }
     if session.history().len() <= COMPACT_KEEP_LAST {
-        return;
+        return false;
     }
     ui::notice("context filling up — taking an interim checkpoint…");
     if let Err(e) = flush_progress(backend, session, project_root, false).await {
@@ -279,7 +282,7 @@ pub(crate) async fn maybe_compact(
             "interim checkpoint failed, compaction postponed: {e}"
         ));
         session.compaction_failed();
-        return;
+        return false;
     }
     match config::global_root() {
         Ok(global) => {
@@ -291,6 +294,7 @@ pub(crate) async fn maybe_compact(
     session.compact(COMPACT_KEEP_LAST, &compact_note());
     backend.reset_session();
     ui::notice("context compacted — pick up where you left off");
+    true
 }
 
 /// Today's local date — the date field for catalog rows.
@@ -438,6 +442,43 @@ mod tests {
         ] {
             let prod = src.split("#[cfg(test)]").next().unwrap();
             assert_eq!(prod.matches("rollback_turn(").count(), n, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn maybe_compact_reports_whether_it_compacted() {
+        let mut backend = Backend::Cli {
+            model: "opus".into(),
+            session_id: None,
+            bin: PathBuf::from("usta-no-such-claude"),
+        };
+        let mut session = Session::new("rust", "system");
+        let root = Path::new("/nonexistent-usta-project");
+        assert!(!maybe_compact(&mut backend, &mut session, root, None).await);
+        assert!(!maybe_compact(&mut backend, &mut session, root, Some(10)).await);
+    }
+
+    /// Source pin: a compaction rewrites mentor/PROJECT.md + PROGRESS.md inside the
+    /// watched project - every call site re-seeds the watcher baseline when it
+    /// compacted, so usta's own write is not fed back as a user change (P2-4).
+    #[test]
+    fn every_compaction_site_reseeds_the_mentor_baseline() {
+        for (name, src, initial_seeds) in [
+            ("tui/run.rs", include_str!("tui/run.rs"), 1),
+            ("plain.rs", include_str!("plain.rs"), 1),
+            ("tui/polite.rs", include_str!("tui/polite.rs"), 0),
+        ] {
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            let calls = prod.matches("maybe_compact(").count();
+            assert!(calls > 0, "{name}");
+            let checked = prod.matches("if crate::lifecycle::maybe_compact(").count()
+                + prod.matches("if maybe_compact(").count();
+            assert_eq!(checked, calls, "{name}: compaction result ignored");
+            assert_eq!(
+                prod.matches("seed_mentor_baseline(").count(),
+                calls + initial_seeds,
+                "{name}"
+            );
         }
     }
 }

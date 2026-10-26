@@ -349,7 +349,7 @@ pub async fn run(
                                 crate::tui::page::page_reply(&mut tui, &clean, w)?;
                                 recorder.assistant(&clean);
                                 session.push_assistant(clean);
-                                crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await;
+                                if crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await { crate::file_feedback::seed_mentor_baseline(&mut files, project_root); }
                                 crate::tui::entry::trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
                             }
                             Ok(crate::tui::ask::AskOutcome::Cancelled) => {

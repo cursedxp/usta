@@ -748,6 +748,23 @@ mod tests {
     }
 
     #[test]
+    fn reseeding_after_usta_rewrites_mentor_docs_makes_queued_events_skip() {
+        let dir = scratch_dir("reseed-mentor");
+        let md = progress::project_md_path(&dir);
+        std::fs::create_dir_all(md.parent().unwrap()).unwrap();
+        std::fs::write(&md, "# Project\nold\n").unwrap();
+        let mut files = feedback::FileMemory::new();
+        seed_mentor_baseline(&mut files, &dir);
+        std::fs::write(&md, "# Project\nnew\n").unwrap();
+        seed_mentor_baseline(&mut files, &dir);
+        assert!(matches!(
+            files.observe(&md, "# Project\nnew\n".to_string()),
+            feedback::ChangePayload::Skip
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn batch_payload_merges_files_and_drops_skips() {
         let dir = scratch_dir("batch-merge");
         let unchanged = dir.join("unchanged.rs");
