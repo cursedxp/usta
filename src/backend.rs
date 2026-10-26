@@ -177,13 +177,17 @@ impl Backend {
                     run_claude_cli(bin, model, system, &input, &images, resume.as_deref()).await;
                 let (text, new_sid, tokens) = match attempt {
                     Ok(v) => v,
-                    // Stale/deleted session — retry once from scratch with the full transcript
-                    // and every budgeted image (also recovers a session overgrown with images).
-                    Err(_) if resume.is_some() => {
+                    // The resumed session is gone, or overgrown (too long / too many
+                    // images) — retry once from scratch with the full transcript and every
+                    // budgeted image. Any other error (rate limit, auth, network) is
+                    // returned as-is and the session id kept.
+                    Err(first) if resume.is_some() && should_retry_fresh(&first) => {
                         *session_id = None;
                         let transcript = render_transcript(history);
                         let images = history_images(history);
-                        run_claude_cli(bin, model, system, &transcript, &images, None).await?
+                        run_claude_cli(bin, model, system, &transcript, &images, None)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{e} (after: {first})"))?
                     }
                     Err(e) => return Err(e),
                 };
@@ -208,6 +212,22 @@ pub(crate) fn ensure_nonempty(reply: Reply) -> Result<Reply> {
         bail!("empty reply from the model — nothing was added to the conversation");
     }
     Ok(reply)
+}
+
+/// A resume failure worth one full-transcript retry: the CLI session no longer exists
+/// ("No conversation found with session ID: …") or has outgrown the context (too long,
+/// too many / too large images). Case-insensitive over the whole error chain.
+fn should_retry_fresh(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        let t = c.to_string().to_ascii_lowercase();
+        t.contains("no conversation found")
+            || t.contains("prompt is too long")
+            || t.contains("too many images")
+            || (t.contains("image")
+                && ["exceed", "too large", "limit"]
+                    .iter()
+                    .any(|k| t.contains(k)))
+    })
 }
 
 /// Return the plain text of the LAST user message in history — on a resume
@@ -539,6 +559,33 @@ pub fn run_backend_wizard() -> Result<Backend> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn should_retry_fresh_matches_only_gone_or_overgrown_sessions() {
+        let e = |m: &str| anyhow::anyhow!("claude CLI error: {m}");
+        assert!(should_retry_fresh(&e(
+            "No conversation found with session ID: x"
+        )));
+        assert!(should_retry_fresh(
+            &anyhow::anyhow!("no conversation found").context("claude CLI returned an error")
+        ));
+        assert!(should_retry_fresh(&e("Prompt is too long")));
+        assert!(should_retry_fresh(&e("too many images in request")));
+        assert!(should_retry_fresh(&e("image exceeds 5 MB maximum")));
+        assert!(!should_retry_fresh(&e("rate limit exceeded")));
+        assert!(!should_retry_fresh(&e("529 overloaded")));
+        assert!(!should_retry_fresh(&e("authentication failed")));
+        assert!(!should_retry_fresh(&anyhow::anyhow!(
+            "claude CLI returned an error (exit status: 1): "
+        )));
+        // Source pin: the retry arm is gated on the predicate, not on any error.
+        let prod = include_str!("backend.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(prod.contains("Err(first) if resume.is_some() && should_retry_fresh(&first)"));
+        assert!(!prod.contains("Err(_) if resume.is_some()"));
+    }
+
     use super::*;
     use crate::image_attach::PastedImage;
 
