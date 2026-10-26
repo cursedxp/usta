@@ -38,9 +38,9 @@ pub fn render_status(
     if let Some((watching, live, pending)) = watch {
         let txt = match (watching, live) {
             (false, _) => "watch off ".to_string(),
-            (true, true) => "👁 watching·live ".to_string(),
-            (true, false) if pending > 0 => format!("👁 watching · {pending} changes noted "),
-            (true, false) => "👁 watching ".to_string(),
+            (true, true) => "watching·live ".to_string(),
+            (true, false) if pending > 0 => format!("watching · {pending} changes noted "),
+            (true, false) => "watching ".to_string(),
         };
         spans.push(Span::styled(txt, theme::info()));
     }
@@ -214,7 +214,7 @@ mod tests {
             Some((true, false, 0)),
             false,
         ));
-        assert!(idle.contains("👁 watching"));
+        assert!(idle.contains("watching"));
         assert!(!idle.contains("live") && !idle.contains("noted"));
         // companion with pending: the deterministic counter (spec K3)
         let noted = text(&render_status(
@@ -224,7 +224,7 @@ mod tests {
             Some((true, false, 2)),
             false,
         ));
-        assert!(noted.contains("👁 watching · 2 changes noted"));
+        assert!(noted.contains("watching · 2 changes noted"));
         // watch off wins regardless of the rest
         let off = text(&render_status(
             &Status::Idle,

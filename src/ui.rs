@@ -80,7 +80,7 @@ pub fn print_usta_reply(reply: &str, web: bool) {
     if is_plain() {
         println!("Usta> {reply}");
         if web {
-            println!("(🔎 web researched)");
+            println!("(web researched)");
         }
         return;
     }
@@ -103,7 +103,7 @@ pub fn print_usta_reply(reply: &str, web: bool) {
         println!("  {line}");
     }
     if web {
-        println!("{DIM}  🔎 web researched{RESET}");
+        println!("{DIM}  web researched{RESET}");
     }
     println!();
 }
