@@ -38,11 +38,19 @@ impl Message {
     }
 
     /// Plain text of the message: a string as is; a block array = its text blocks joined
-    /// (image blocks contribute nothing, so base64 never leaks into transcripts or reports).
+    /// (image blocks and omitted-image placeholders contribute nothing, so base64 and
+    /// pruning notes never leak into transcripts or reports).
     pub fn text(&self) -> String {
         match &self.content {
             Value::String(s) => s.clone(),
-            Value::Array(blocks) => extract_text(blocks),
+            Value::Array(blocks) => {
+                let kept: Vec<Value> = blocks
+                    .iter()
+                    .filter(|b| b.get("text").and_then(Value::as_str) != Some(IMAGE_OMITTED))
+                    .cloned()
+                    .collect();
+                extract_text(&kept)
+            }
             other => other.to_string(),
         }
     }
@@ -72,6 +80,36 @@ impl Message {
             content,
         }
     }
+}
+
+/// Stands in for an image block that `prune_images` dropped from history.
+pub const IMAGE_OMITTED: &str = "[earlier image omitted to stay under the request size limit]";
+
+/// Keep only the newest images within `max_count` blocks and `max_b64` base64 bytes.
+/// Walks messages newest to oldest and, inside a message, image blocks last to first;
+/// every image block over budget becomes an `IMAGE_OMITTED` text block in place.
+/// Returns how many blocks were newly replaced (placeholders are skipped: idempotent).
+pub fn prune_images(history: &mut [Message], max_count: usize, max_b64: usize) -> usize {
+    let (mut count, mut bytes, mut dropped) = (0usize, 0usize, 0usize);
+    for msg in history.iter_mut().rev() {
+        let Some(blocks) = msg.content.as_array_mut() else {
+            continue;
+        };
+        for b in blocks.iter_mut().rev() {
+            if b.get("type").and_then(Value::as_str) != Some("image") {
+                continue;
+            }
+            let len = b["source"]["data"].as_str().map_or(0, str::len);
+            if count < max_count && bytes + len <= max_b64 {
+                count += 1;
+                bytes += len;
+            } else {
+                *b = json!({"type": "text", "text": IMAGE_OMITTED});
+                dropped += 1;
+            }
+        }
+    }
+    dropped
 }
 
 #[derive(Debug, Serialize)]
@@ -344,5 +382,64 @@ mod tests {
     #[test]
     fn sum_context_tokens_none_without_input_tokens() {
         assert_eq!(sum_context_tokens(&json!({"output_tokens": 5})), None);
+    }
+
+    fn img_msg(n: usize, b64_len: usize) -> Message {
+        let blocks: Vec<Value> = (0..n)
+            .map(|_| json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":"A".repeat(b64_len)}}))
+            .chain(std::iter::once(json!({"type":"text","text":"look"})))
+            .collect();
+        Message {
+            role: "user".into(),
+            content: Value::Array(blocks),
+        }
+    }
+
+    fn count_images(h: &[Message]) -> usize {
+        h.iter().map(|m| m.image_blocks().len()).sum()
+    }
+
+    #[test]
+    fn prune_images_caps_the_count_keeping_the_newest() {
+        let mut h: Vec<Message> = (0..5).map(|_| img_msg(1, 10)).collect();
+        assert_eq!(prune_images(&mut h, 3, usize::MAX), 2);
+        assert_eq!(count_images(&h), 3);
+        assert!(h[0].image_blocks().is_empty());
+        assert!(h[1].image_blocks().is_empty());
+        assert_eq!(h[4].image_blocks().len(), 1);
+    }
+
+    #[test]
+    fn prune_images_caps_the_base64_bytes() {
+        let mut h = vec![img_msg(1, 100), img_msg(1, 100), img_msg(1, 100)];
+        assert_eq!(prune_images(&mut h, 10, 250), 1);
+        assert!(h[0].image_blocks().is_empty());
+        assert_eq!(count_images(&h), 2);
+    }
+
+    #[test]
+    fn prune_images_drops_a_messages_oldest_images_first() {
+        let mut h = vec![img_msg(3, 10)];
+        assert_eq!(prune_images(&mut h, 2, usize::MAX), 1);
+        let blocks = h[0].content.as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], IMAGE_OMITTED);
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[2]["type"], "image");
+    }
+
+    #[test]
+    fn prune_images_is_idempotent() {
+        let mut h: Vec<Message> = (0..4).map(|_| img_msg(1, 10)).collect();
+        assert_eq!(prune_images(&mut h, 2, usize::MAX), 2);
+        assert_eq!(prune_images(&mut h, 2, usize::MAX), 0);
+        assert_eq!(count_images(&h), 2);
+    }
+
+    #[test]
+    fn placeholder_does_not_leak_into_text() {
+        let mut h = vec![img_msg(1, 10), img_msg(1, 10)];
+        prune_images(&mut h, 1, usize::MAX);
+        assert_eq!(h[0].text(), "look");
     }
 }

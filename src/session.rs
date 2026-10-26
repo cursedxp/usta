@@ -5,6 +5,12 @@
 use crate::anthropic::Message;
 use crate::image_attach::PastedImage;
 
+/// History image budget (spec A1): far under the API's 100-image cap and the
+/// ">20 images => <=2000 px" rule; 20 MB base64 leaves ~12 MB of the 32 MB request
+/// for text and the closing prompt.
+pub const HISTORY_MAX_IMAGES: usize = 20;
+pub const HISTORY_MAX_IMAGE_B64: usize = 20 * 1024 * 1024;
+
 /// A single learning session.
 pub struct Session {
     /// Active learning topic (e.g. "rust") — selects the progress file on close.
@@ -30,9 +36,11 @@ impl Session {
         self.history.push(Message::user(text));
     }
 
-    /// Add a user turn that carries images (`[Image #N]` tokens stay in `text`).
-    pub fn push_user_with_images(&mut self, text: &str, images: &[PastedImage]) {
+    /// Add a user turn that carries images (`[Image #N]` tokens stay in `text`), then
+    /// prune the oldest history images over budget. Returns how many were dropped.
+    pub fn push_user_with_images(&mut self, text: &str, images: &[PastedImage]) -> usize {
         self.history.push(Message::user_with_images(text, images));
+        crate::anthropic::prune_images(&mut self.history, HISTORY_MAX_IMAGES, HISTORY_MAX_IMAGE_B64)
     }
 
     /// Add the assistant's (Usta's) reply as plain text.
@@ -134,5 +142,31 @@ mod tests {
         assert!(h[0].content.is_array());
         assert_eq!(h[0].text(), "look [Image #1]");
         assert_eq!(h[1].content, serde_json::Value::String("no image".into()));
+    }
+
+    #[test]
+    fn push_user_with_images_keeps_the_history_under_budget() {
+        let img = crate::image_attach::PastedImage {
+            media_type: "image/png",
+            data: vec![1, 2, 3],
+            width: 1,
+            height: 1,
+        };
+        let mut s = Session::new("rust", "sys");
+        let mut dropped = 0;
+        for i in 0..25 {
+            dropped += s
+                .push_user_with_images(&format!("turn {i} [Image #1]"), std::slice::from_ref(&img));
+            s.push_assistant("ok".into());
+        }
+        assert_eq!(dropped, 5);
+        let req =
+            crate::anthropic::MessageRequest::new("m".into(), "s".into(), s.history().to_vec());
+        let body = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            body.matches("\"type\":\"image\"").count(),
+            HISTORY_MAX_IMAGES
+        );
+        assert_eq!(s.history()[0].text(), "turn 0 [Image #1]");
     }
 }

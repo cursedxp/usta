@@ -547,7 +547,10 @@ pub async fn run(
                             // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
                             crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, &mut monitor, line.clone()).await?
                         };
-                        session.push_user_with_images(&outgoing, &images);
+                        let dropped = session.push_user_with_images(&outgoing, &images);
+                        if dropped > 0 {
+                            crate::tui::page::page_notice(&mut tui, &format!("{dropped} older image(s) dropped from context (size limit)"))?;
+                        }
                         recorder.user(&outgoing);
                         match crate::tui::ask::ask_live(
                             &mut tui, &mut editor, &mut events, backend,
