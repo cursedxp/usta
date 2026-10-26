@@ -238,6 +238,9 @@ impl ChatBuffer {
         if width == 0 || height == 0 {
             return Vec::new();
         }
+        if width != self.width {
+            self.sel = None; // flat indices change with the wrap width
+        }
         self.width = width;
         self.pane_h = height;
         let h = height as usize;
@@ -263,8 +266,9 @@ impl ChatBuffer {
     pub fn view_top(&mut self) -> usize {
         let w = self.width;
         let total = self.flat(w).len();
-        let end = total.saturating_sub(self.offset);
-        end.saturating_sub(self.pane_h as usize)
+        let h = self.pane_h as usize;
+        let off = self.offset.min(total.saturating_sub(h));
+        (total - off).saturating_sub(h)
     }
 
     #[allow(dead_code)] // wired in by page.rs (next task)
@@ -280,11 +284,15 @@ impl ChatBuffer {
             return;
         }
         // Auto-scroll: terminals repeat drag events while the mouse moves.
-        if y < self.area.y {
+        if y <= self.area.y {
             self.scroll_up(1);
         } else if y >= self.area.y + self.area.height {
             self.scroll_down(1);
         }
+        self.set_head(x, y);
+    }
+
+    fn set_head(&mut self, x: u16, y: u16) {
         let top = self.view_top();
         let head = select::clamp_pos(self.area, top, x, y);
         if let Some(s) = self.sel.as_mut() {
@@ -295,8 +303,11 @@ impl ChatBuffer {
     /// Finish the drag: `Some(text)` when something was selected (flash set to "copied").
     #[allow(dead_code)] // wired in by page.rs (next task)
     pub fn mouse_up(&mut self, x: u16, y: u16) -> Option<String> {
-        self.mouse_drag(x, y);
+        self.set_head(x, y); // no auto-scroll on release
         let sel = self.sel.take()?;
+        if sel.anchor == sel.head {
+            return None; // a plain click selects nothing
+        }
         let w = self.width;
         self.flat(w);
         let (_, lines, soft) = self.cache.as_ref()?;
@@ -837,20 +848,42 @@ five six seven",
     fn dragging_past_the_pane_edges_scrolls() {
         let mut c = filled(40);
         pane(&mut c);
-        c.mouse_down(0, 2);
-        c.mouse_drag(0, 7); // below: already at the bottom, stays following
-        assert!(c.is_following());
-        c.mouse_drag(0, 0);
         c.scroll_up(5);
+        c.visible_in(Rect::new(0, 0, 80, 5));
+        c.mouse_down(0, 2);
         let off = c.offset;
         c.mouse_drag(0, 9); // below the pane -> scroll down one
         assert_eq!(c.offset, off - 1);
-        // above the pane: y is unsigned, so "above" means a pane that doesn't start at 0
-        let a = Rect::new(0, 3, 80, 5);
-        c.visible_in(a);
+        let top = c.view_top();
+        assert_eq!(c.selection().unwrap().head, (top + 4, 0));
+        c.mouse_drag(0, 0); // the top edge row scrolls up one
+        assert_eq!(c.offset, off);
+        let top = c.view_top();
+        assert_eq!(c.selection().unwrap().head, (top, 0));
+        c.scroll_up(100); // at the very top
         let off = c.offset;
-        c.mouse_drag(0, 1);
-        assert_eq!(c.offset, off + 1);
+        c.mouse_drag(0, 0);
+        assert_eq!(c.offset, off);
+    }
+
+    #[test]
+    fn a_click_on_a_character_copies_nothing() {
+        let mut c = filled(20);
+        pane(&mut c);
+        c.mouse_down(0, 0);
+        assert_eq!(c.mouse_up(0, 0), None);
+        assert!(c.flash().is_none());
+    }
+
+    #[test]
+    fn a_width_change_drops_the_selection() {
+        let mut c = filled(20);
+        pane(&mut c);
+        c.mouse_down(0, 1);
+        c.mouse_drag(1, 2);
+        assert!(c.selection().is_some());
+        c.visible_in(Rect::new(0, 0, 60, 5));
+        assert!(c.selection().is_none());
     }
 
     #[test]
