@@ -27,6 +27,7 @@ mod progress;
 mod reset;
 mod session;
 mod setup;
+mod shutdown;
 mod slash;
 mod tokens;
 mod topic;

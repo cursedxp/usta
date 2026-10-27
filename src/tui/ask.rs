@@ -52,6 +52,7 @@ pub(crate) async fn ask_live(
         )?;
         tokio::select! {
             r = &mut fut => return Ok(AskOutcome::Reply(r?)),
+            _ = crate::shutdown::requested() => return Ok(AskOutcome::Cancelled),
             Some(Ok(ev)) = events.next() => {
                 if crate::tui::page::handle_nav(tui, &ev) { continue; }
                 // Paste is still processed by the editor even while locked (doesn't submit).

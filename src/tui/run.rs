@@ -98,6 +98,9 @@ pub async fn run(
         crate::setup::mark_intro_done(global, "completed");
     }
 
+    // From here on SIGTERM / SIGHUP end the session through the normal save.
+    crate::shutdown::listen();
+
     let mut debouncer = watcher::Debouncer::new(std::time::Duration::from_millis(1000));
     let mut files = feedback::FileMemory::new();
     // Mentor docs are already in the system prompt — baseline them so an
@@ -230,6 +233,7 @@ pub async fn run(
             watching && monitor.is_failing(),
         )?;
         tokio::select! {
+            _ = crate::shutdown::requested() => break, // terminal closed / killed: save_live below
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else {
                     if maybe_ev.is_none() { break; } // stream ended = Eof (spec B4)

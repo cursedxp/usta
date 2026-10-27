@@ -165,6 +165,8 @@ pub(crate) async fn run_plain_loop(
     watch_rx: &mut tokio::sync::mpsc::UnboundedReceiver<PathBuf>,
     ctx: PlainLoopCtx<'_>,
 ) -> Result<()> {
+    // From here on SIGTERM / SIGHUP end the loop; main then flushes.
+    crate::shutdown::listen();
     // Input thread + debounce state — specific to the plain path (rustyline).
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     let mut input_rx = input::spawn("❯ ", ready_rx);
@@ -259,6 +261,7 @@ pub(crate) async fn run_plain_loop(
     let mut watching = true;
     loop {
         tokio::select! {
+            _ = crate::shutdown::requested() => break,
             maybe_ev = input_rx.recv() => match maybe_ev {
                 Some(input::InputEvent::Line(line)) => {
                     let line = line.trim().to_string();
