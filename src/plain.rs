@@ -27,7 +27,9 @@ use crate::slash::{
     parse_watch_command, set_game_pref, topic_has_goal, GameCmd,
 };
 use crate::tokens;
-use crate::topic::{finalize_slug, interpret_topic_input, slug_system, slugify_topic, TopicChoice};
+use crate::topic::{
+    finalize_slug, interpret_topic_input, slug_system, slugify_topic, topic_arg_slug, TopicChoice,
+};
 use crate::transcript;
 use crate::ui;
 use crate::visual;
@@ -47,7 +49,7 @@ pub(crate) async fn resolve_topic(
     // Return: (topic, intro) — intro = the user's raw topic input; for a new topic
     // it's carried into the introduction turn as the "first reply" (None on resume/pipe paths).
     if let Some(raw) = topic_arg {
-        let slug = slugify_topic(&raw);
+        let slug = topic_arg_slug(&raw);
         return Ok((slug, Some(raw)));
     }
     // Empty-stdin / pipe path is UNTOUCHED: falls straight to "general" instead of
@@ -96,7 +98,7 @@ pub(crate) async fn resolve_topic(
             Some(TopicChoice::New(raw)) => {
                 // Short input (≤2 words) → local slug, don't waste an LLM call.
                 let slug = if raw.split_whitespace().count() <= 2 {
-                    slugify_topic(&raw)
+                    topic_arg_slug(&raw)
                 } else {
                     // Sentence → let the model infer what's wanted and pick the slug (for local topics, K2).
                     derive_slug(backend, &raw, &local).await

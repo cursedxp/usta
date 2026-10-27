@@ -56,7 +56,7 @@ pub(crate) async fn resolve_topic(
     let topic = match topic_arg {
         Some(t) => {
             intro = Some(t.clone());
-            crate::topic::slugify_topic(&t)
+            crate::topic::topic_arg_slug(&t)
         }
         None => {
             // Topic lists are computed here and passed to ask_topic:
@@ -212,7 +212,7 @@ pub(crate) async fn resolve_topic(
                     Some(crate::topic::TopicChoice::New(raw)) => {
                         // New-topic flow: ≤2 words → local slug; a sentence → LLM slug (spinner).
                         let slug = if raw.split_whitespace().count() <= 2 {
-                            crate::topic::slugify_topic(&raw)
+                            crate::topic::topic_arg_slug(&raw)
                         } else {
                             let slug = match crate::tui::ask::ask_live(
                                 tui,

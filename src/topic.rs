@@ -203,6 +203,24 @@ fn hash_slug(input: &str) -> String {
 /// No ascii left but non-Latin letters present → `t-<hash>`; otherwise empty →
 /// `tokens::DEFAULT_TOPIC`.
 /// "temel Linux güvenliği" → `temel-linux-guvenligi`.
+/// A typed topic argument: a string already shaped like a slug (what
+/// `usta topics` prints) is used as-is, anything else is slugified.
+pub fn topic_arg_slug(input: &str) -> String {
+    let t = input.trim();
+    let is_slug = !t.is_empty()
+        && t.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        });
+    if is_slug {
+        t.to_string()
+    } else {
+        slugify_topic(input)
+    }
+}
+
 pub fn slugify_topic(input: &str) -> String {
     // Filler words, compared against their deasciified (ç→c…) form — kept out
     // of the slug, so "ben rust ile bir todo yapmak istiyorum" → "rust-todo".
@@ -494,5 +512,18 @@ mod tests {
         let (slug, display) = parse_topic_marker("TOPIC: golang-web").unwrap();
         assert_eq!(slug, "golang-web");
         assert_eq!(display, "");
+    }
+
+    #[test]
+    fn topic_arg_slug_keeps_an_existing_slug() {
+        assert_eq!(
+            topic_arg_slug("temel-linux-guvenligi"),
+            "temel-linux-guvenligi"
+        );
+        assert_eq!(topic_arg_slug("t-805f5ce7"), "t-805f5ce7");
+        assert_eq!(topic_arg_slug("  rust-async "), "rust-async");
+        assert_eq!(topic_arg_slug("C++"), "cpp");
+        assert_eq!(topic_arg_slug("Temel Linux"), "temel-linux");
+        assert_eq!(topic_arg_slug("a--b"), slugify_topic("a--b"));
     }
 }

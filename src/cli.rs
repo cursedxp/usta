@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 
-use crate::topic::slugify_topic;
+use crate::topic::topic_arg_slug;
 
 /// Reset scope.
 #[derive(Debug, PartialEq)]
@@ -44,7 +44,7 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
             Some("--factory") => Ok(Command::Reset(ResetTarget::Factory)),
             Some("--profile") | Some("--profil") => Ok(Command::Reset(ResetTarget::Profile)),
             Some(topic) if topic.trim().is_empty() => anyhow::bail!("topic name required"),
-            Some(topic) => Ok(Command::Reset(ResetTarget::Topic(slugify_topic(topic)))),
+            Some(topic) => Ok(Command::Reset(ResetTarget::Topic(topic_arg_slug(topic)))),
             None => anyhow::bail!("usage: usta reset <topic>  |  --factory  |  --profile"),
         },
         Some(other) => anyhow::bail!(

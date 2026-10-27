@@ -83,7 +83,11 @@ impl LockGuard {
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let mine = std::fs::read_to_string(&self.0)
+            .is_ok_and(|s| s.trim() == std::process::id().to_string());
+        if mine {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 }
 
@@ -114,6 +118,17 @@ mod tests {
         );
         drop(guard);
         assert!(!path.exists(), "every exit path drops the guard");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn guard_drop_leaves_a_lock_another_process_now_owns() {
+        let root = project("foreign");
+        let path = crate::lifecycle::lock_path(&root, "rust");
+        let guard = LockGuard::acquire(path.clone());
+        std::fs::write(&path, (std::process::id() + 1).to_string()).unwrap();
+        drop(guard);
+        assert!(path.exists(), "another session's lock stays");
         let _ = std::fs::remove_dir_all(&root);
     }
 

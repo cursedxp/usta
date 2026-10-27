@@ -19,6 +19,7 @@ pub(crate) fn run_reset_topic(topic: &str) -> Result<()> {
     };
     let global = config::global_root()?;
     run_migration(&global, Some(&root.join(".usta")));
+    ensure_not_live(&root, topic)?;
     let index_path = global.join("learner/index.md");
     let plan = plan_reset(&root, &index_path, topic);
     if plan.is_empty() {
@@ -38,6 +39,14 @@ pub(crate) fn run_reset_topic(topic: &str) -> Result<()> {
     }
     apply_reset(&plan, &index_path)?;
     println!("reset: {topic}");
+    Ok(())
+}
+
+/// A topic a running usta owns is not reset under it.
+fn ensure_not_live(root: &Path, topic: &str) -> Result<()> {
+    if let Some(pid) = crate::lock::live_owner(root, topic) {
+        anyhow::bail!("{topic} is open in a running usta (pid {pid}) — close it first");
+    }
     Ok(())
 }
 
@@ -227,5 +236,26 @@ mod tests {
             Some("rust-async")
         );
         assert_eq!(record_topic(&p("notes.txt")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reset_refuses_a_topic_a_running_usta_owns() {
+        let root = project("live");
+        std::fs::create_dir_all(root.join(".usta")).unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let lock = crate::lifecycle::lock_path(&root, "rust");
+        std::fs::write(&lock, child.id().to_string()).unwrap();
+        let err = ensure_not_live(&root, "rust").unwrap_err().to_string();
+        assert!(err.contains("rust is open in a running usta"), "{err}");
+        assert!(err.contains(&child.id().to_string()), "{err}");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(ensure_not_live(&root, "rust").is_ok(), "dead pid is fine");
+        assert!(ensure_not_live(&root, "other").is_ok(), "no lock is fine");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

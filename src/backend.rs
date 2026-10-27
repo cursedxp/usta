@@ -256,7 +256,7 @@ pub fn parse_cli_output(stdout: &str) -> Result<(String, Option<String>, Option<
     }
     match serde_json::from_str::<CliJson>(stdout) {
         Ok(j) if j.is_error == Some(true) => {
-            let why = j.result.or(j.subtype);
+            let why = j.result.filter(|s| !s.trim().is_empty()).or(j.subtype);
             bail!(
                 "claude CLI error: {}",
                 why.as_deref().unwrap_or("unknown error")
@@ -559,6 +559,9 @@ pub fn run_backend_wizard() -> Result<Backend> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::image_attach::PastedImage;
+
     #[test]
     fn should_retry_fresh_matches_only_gone_or_overgrown_sessions() {
         let e = |m: &str| anyhow::anyhow!("claude CLI error: {m}");
@@ -585,9 +588,6 @@ mod tests {
         assert!(prod.contains("Err(first) if resume.is_some() && should_retry_fresh(&first)"));
         assert!(!prod.contains("Err(_) if resume.is_some()"));
     }
-
-    use super::*;
-    use crate::image_attach::PastedImage;
 
     fn reply(text: &str) -> Reply {
         Reply {
@@ -713,6 +713,13 @@ mod tests {
         let out = r#"{"result":"m","session_id":"s1"}"#;
         let (_, _, tokens) = parse_cli_output(out).unwrap();
         assert_eq!(tokens, None);
+    }
+
+    #[test]
+    fn parse_cli_output_empty_result_falls_back_to_subtype() {
+        let out = r#"{"is_error":true,"subtype":"error_max_turns","result":"  "}"#;
+        let err = parse_cli_output(out).unwrap_err().to_string();
+        assert_eq!(err, "claude CLI error: error_max_turns");
     }
 
     #[test]

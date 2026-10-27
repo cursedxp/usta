@@ -12,6 +12,7 @@ use tokio::sync::watch;
 
 static STOP: OnceLock<watch::Receiver<bool>> = OnceLock::new();
 static SEEN: AtomicBool = AtomicBool::new(false);
+static TERM_SEEN: AtomicBool = AtomicBool::new(false);
 
 /// Which signal fired. Only a repeated SIGTERM escalates: closing a terminal
 /// window delivers SIGHUP twice a few ms apart (shell resend + kernel), and
@@ -23,17 +24,19 @@ enum Kind {
     Other,
 }
 
-fn escalates(kind: Kind, already_seen: bool) -> bool {
-    already_seen && kind == Kind::Term
+fn escalates(kind: Kind, seen: &AtomicBool) -> bool {
+    kind == Kind::Term && seen.swap(true, Ordering::SeqCst)
 }
 
 /// A loop that failed after a shutdown signal (dead terminal, killed CLI child)
 /// drops its error so the closing save still runs; otherwise it propagates.
 pub(crate) fn keep_going_to_save(res: anyhow::Result<()>, shutdown: bool) -> anyhow::Result<()> {
-    if shutdown {
-        Ok(())
-    } else {
-        res
+    match res {
+        Err(e) if shutdown => {
+            crate::ui::warn(&format!("session ended by signal: {e}"));
+            Ok(())
+        }
+        other => other,
     }
 }
 
@@ -50,7 +53,8 @@ pub(crate) fn listen() {
     STOP.get_or_init(|| {
         let (tx, rx) = watch::channel(false);
         let on_signal = move |kind: Kind| {
-            if escalates(kind, SEEN.swap(true, Ordering::SeqCst)) {
+            SEEN.store(true, Ordering::SeqCst);
+            if escalates(kind, &TERM_SEEN) {
                 // Second SIGTERM while the first is still being handled (e.g.
                 // the long closing save): stop now. exit runs no destructors
                 // (raw mode stays on); the lock may be left behind, a dead pid
@@ -162,10 +166,14 @@ mod tests {
 
     #[test]
     fn only_a_repeated_sigterm_escalates() {
-        assert!(!escalates(Kind::Term, false));
-        assert!(escalates(Kind::Term, true));
-        assert!(!escalates(Kind::Other, true));
-        assert!(!escalates(Kind::Other, false));
+        let t = AtomicBool::new(false);
+        assert!(!escalates(Kind::Other, &t), "hangup first");
+        assert!(!escalates(Kind::Term, &t), "first term after hangup");
+        assert!(escalates(Kind::Term, &t), "second term");
+        let t = AtomicBool::new(false);
+        assert!(!escalates(Kind::Term, &t));
+        assert!(!escalates(Kind::Other, &t), "hangup never escalates");
+        assert!(escalates(Kind::Term, &t));
     }
 
     #[test]
