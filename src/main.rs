@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Both paths produce `(Session, Recorder, PathBuf, flush result)`; the rest of closing
+    // Both paths produce `(Session, Recorder, LockGuard, flush result, loop result)`; the rest of closing
     // is shared. The TUI path runs the closing flush inside run() while the fullscreen UI
     // is still up (keys can't echo or leak to the shell); the plain path runs it here.
     // TUI path: topic entry + slug/confirmation + build_session all happen inside run() —

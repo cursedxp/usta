@@ -38,6 +38,11 @@ pub(crate) async fn ask_live(
     let mut frame = 0usize;
     let mut cancel_armed = false; // true after the first Ctrl-C — the counter doesn't reset (spec B2)
     loop {
+        // Terminal gone after a shutdown signal: draw would fail and the error
+        // path would skip the save.
+        if crate::shutdown::is_requested() {
+            return Ok(AskOutcome::Cancelled);
+        }
         crate::tui::page::draw(
             tui,
             editor,

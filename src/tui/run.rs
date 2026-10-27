@@ -204,7 +204,10 @@ pub async fn run(
             }
             Ok(crate::tui::ask::AskOutcome::Cancelled) => {
                 backend.reset_session();
-                crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
+                // After a shutdown signal the terminal is gone: no page writes.
+                if !crate::shutdown::is_requested() {
+                    crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
+                }
             }
             Err(e) => {
                 crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
@@ -223,6 +226,10 @@ pub async fn run(
     let mut pending = crate::tui::polite::PendingChanges::new();
     editor.set_allow_images(true);
     loop {
+        // Before any draw: after SIGHUP every terminal write fails.
+        if crate::shutdown::is_requested() {
+            break;
+        }
         crate::tui::page::draw(
             &mut tui,
             &editor,
@@ -233,6 +240,7 @@ pub async fn run(
             watching && monitor.is_failing(),
         )?;
         tokio::select! {
+            biased;
             _ = crate::shutdown::requested() => break, // terminal closed / killed: save_live below
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else {
@@ -362,6 +370,7 @@ pub async fn run(
                                 // session is half-done — don't resume it, the next call should go
                                 // with the full transcript.
                                 backend.reset_session();
+                                if crate::shutdown::is_requested() { break; } // terminal gone: save below
                                 crate::tui::page::page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
                             }
                             Err(e) => {

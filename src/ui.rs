@@ -4,7 +4,7 @@
 //! or NO_COLOR is set, plain output with no ANSI — doesn't break pipes/tests.
 //! Behavior doesn't live here — only appearance.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -127,9 +127,13 @@ pub fn notice(msg: &str) {
         return;
     }
     if is_plain() {
-        println!("({msg})");
+        let _ = writeln!(std::io::stdout(), "({msg})");
     } else {
-        println!("{DIM}{} {msg}{RESET}", crate::tui::theme::G_INFO);
+        let _ = writeln!(
+            std::io::stdout(),
+            "{DIM}{} {msg}{RESET}",
+            crate::tui::theme::G_INFO
+        );
     }
 }
 
@@ -143,9 +147,9 @@ pub fn warn(msg: &str) {
         return;
     }
     if is_plain() {
-        eprintln!("({msg})");
+        let _ = writeln!(std::io::stderr(), "({msg})");
     } else {
-        eprintln!("{AMBER}{} {msg}{RESET}", theme::G_WARN);
+        let _ = writeln!(std::io::stderr(), "{AMBER}{} {msg}{RESET}", theme::G_WARN);
     }
 }
 
@@ -254,6 +258,18 @@ fn skin() -> MadSkin {
 
 #[cfg(test)]
 mod tests {
+    /// Source pin: notice/warn must not panic on a dead terminal (closed
+    /// window, EIO) between a shutdown signal and `mark_done`.
+    #[test]
+    fn notice_and_warn_ignore_write_errors() {
+        let prod = include_str!("ui.rs").split("#[cfg(test)]").next().unwrap();
+        for f in ["pub fn notice(", "pub fn warn("] {
+            let body = prod.split(f).nth(1).unwrap().split("\n}\n").next().unwrap();
+            assert!(!body.contains("println!("), "{f}");
+            assert!(body.contains("writeln!("), "{f}");
+        }
+    }
+
     use super::*;
 
     #[test]

@@ -5,22 +5,37 @@
 //! Ctrl+C is a key.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use tokio::sync::watch;
 
 static STOP: OnceLock<watch::Receiver<bool>> = OnceLock::new();
+static SEEN: AtomicBool = AtomicBool::new(false);
+
+/// Non-blocking read of the flag: true once a shutdown signal was seen, false
+/// before `listen()`. Loops check it before any terminal write — after a
+/// SIGHUP the terminal is gone and every write fails.
+pub(crate) fn is_requested() -> bool {
+    SEEN.load(Ordering::SeqCst)
+}
 
 /// Register the handlers (once per process) and flip the flag when one fires.
 /// If registration fails the flag never flips; the session runs as before.
 pub(crate) fn listen() {
     STOP.get_or_init(|| {
         let (tx, rx) = watch::channel(false);
-        if let Ok(wait) = signals() {
-            tokio::spawn(async move {
-                wait.await;
-                let _ = tx.send(true);
-            });
+        let on_signal = move || {
+            if SEEN.swap(true, Ordering::SeqCst) {
+                // Second signal while the first is still being handled (e.g.
+                // the long closing save): stop now. The lock may be left
+                // behind; a dead pid no longer blocks recovery (P2-8).
+                std::process::exit(130);
+            }
+            let _ = tx.send(true);
+        };
+        if let Ok(wait) = signals(on_signal) {
+            tokio::spawn(wait);
         }
         rx
     });
@@ -30,37 +45,50 @@ pub(crate) fn listen() {
 /// or when registration failed. Re-created on every `select!` turn on purpose:
 /// the flag is state, so a signal that arrived meanwhile is not lost.
 pub(crate) async fn requested() {
-    if let Some(rx) = STOP.get() {
-        let mut rx = rx.clone();
-        if rx.wait_for(|stop| *stop).await.is_ok() {
-            return;
-        }
+    match STOP.get() {
+        Some(rx) => wait_flag(rx.clone()).await,
+        None => std::future::pending::<()>().await,
     }
-    std::future::pending::<()>().await
+}
+
+async fn wait_flag(mut rx: watch::Receiver<bool>) {
+    if rx.wait_for(|stop| *stop).await.is_err() {
+        std::future::pending::<()>().await
+    }
 }
 
 #[cfg(unix)]
-fn signals() -> std::io::Result<impl Future<Output = ()>> {
+fn signals(
+    mut on_signal: impl FnMut() + Send + 'static,
+) -> std::io::Result<impl Future<Output = ()>> {
     use tokio::signal::unix::{signal, SignalKind};
     let mut term = signal(SignalKind::terminate())?;
     let mut hup = signal(SignalKind::hangup())?;
     Ok(async move {
-        tokio::select! {
-            _ = term.recv() => {}
-            _ = hup.recv() => {}
+        loop {
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = hup.recv() => {}
+            }
+            on_signal();
         }
     })
 }
 
 #[cfg(windows)]
-fn signals() -> std::io::Result<impl Future<Output = ()>> {
+fn signals(
+    mut on_signal: impl FnMut() + Send + 'static,
+) -> std::io::Result<impl Future<Output = ()>> {
     use tokio::signal::windows::{ctrl_close, ctrl_shutdown};
     let mut close = ctrl_close()?;
     let mut shutdown = ctrl_shutdown()?;
     Ok(async move {
-        tokio::select! {
-            _ = close.recv() => {}
-            _ = shutdown.recv() => {}
+        loop {
+            tokio::select! {
+                _ = close.recv() => {}
+                _ = shutdown.recv() => {}
+            }
+            on_signal();
         }
     })
 }
@@ -69,21 +97,53 @@ fn signals() -> std::io::Result<impl Future<Output = ()>> {
 mod tests {
     use super::*;
 
-    /// Handler registered first, then SIGHUP to ourselves: the future resolves.
+    /// Handler registered first, then SIGHUP to ourselves: the callback runs.
     /// (Once tokio owns SIGHUP the default "terminate" action is gone for the
     /// whole test process, so the signal can't kill the test run.)
+    /// Note: this leaves SIGTERM/SIGHUP handlers installed for the test process.
     #[cfg(unix)]
     #[tokio::test]
-    async fn sighup_to_self_resolves_the_signal_future() {
-        let wait = signals().expect("handlers register");
+    async fn sighup_to_self_runs_the_callback() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let wait = signals(move || {
+            let _ = tx.send(());
+        })
+        .expect("handlers register");
+        tokio::spawn(wait);
         let sent = std::process::Command::new("kill")
             .args(["-HUP", &std::process::id().to_string()])
             .status()
             .unwrap();
         assert!(sent.success());
-        tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
             .await
-            .expect("SIGHUP reaches the future");
+            .expect("SIGHUP reaches the callback");
+    }
+
+    #[test]
+    fn is_requested_is_false_before_listen() {
+        assert!(!is_requested());
+    }
+
+    /// The flag is state: a signal that arrived before the wait began still
+    /// resolves it at once.
+    #[tokio::test]
+    async fn wait_flag_resolves_immediately_once_set() {
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), wait_flag(rx))
+            .await
+            .expect("resolves");
+    }
+
+    /// Source pin: a second signal stops the process.
+    #[test]
+    fn second_signal_exits() {
+        let prod = include_str!("shutdown.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(prod.contains("std::process::exit(130)"));
     }
 
     /// Source pin: every session select! loop watches the flag, and listening
