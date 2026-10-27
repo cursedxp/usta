@@ -140,8 +140,8 @@ mod tests {
     #[test]
     fn run_saves_after_the_loop_before_returning() {
         let src = prod(include_str!("run.rs"));
-        let tail = src.rsplit("\n    loop {\n").next().unwrap();
-        let close = tail.find("\n    }\n").expect("main loop close");
+        let tail = src.rsplit("\n        loop {\n").next().unwrap();
+        let close = tail.find("\n        }\n").expect("main loop close");
         let save = tail
             .find("crate::tui::closing::save_live(")
             .expect("save_live call");

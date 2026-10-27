@@ -168,52 +168,58 @@ pub async fn run(
         )?),
     };
     if let Some(opening) = opening {
-        let mark = session.history().len();
-        session.push_user(&opening);
-        recorder.user(&opening);
-        match crate::tui::ask::ask_live(
-            &mut tui,
-            &mut editor,
-            &mut events,
-            backend,
-            &session.system,
-            session.history(),
-            last_tokens,
-        )
-        .await
-        {
-            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
-                last_tokens = reply.context_tokens;
-                let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-                let w = crate::tui::page::current_width(&tui);
-                crate::tui::page::page_reply(&mut tui, &clean, w)?;
-                recorder.assistant(&clean);
-                session.push_assistant(clean);
-                crate::tui::entry::trigger_auto_visual(
-                    &mut tui,
-                    &mut editor,
-                    &mut events,
-                    backend,
-                    &session,
-                    project_root,
-                    &topic,
-                    show_topic,
-                    last_tokens,
-                )
-                .await?;
-            }
-            Ok(crate::tui::ask::AskOutcome::Cancelled) => {
-                backend.reset_session();
-                // After a shutdown signal the terminal is gone: no page writes.
-                if !crate::shutdown::is_requested() {
-                    crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
+        let opened: Result<()> = async {
+            let mark = session.history().len();
+            session.push_user(&opening);
+            recorder.user(&opening);
+            match crate::tui::ask::ask_live(
+                &mut tui,
+                &mut editor,
+                &mut events,
+                backend,
+                &session.system,
+                session.history(),
+                last_tokens,
+            )
+            .await
+            {
+                Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
+                    last_tokens = reply.context_tokens;
+                    let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
+                    let w = crate::tui::page::current_width(&tui);
+                    crate::tui::page::page_reply(&mut tui, &clean, w)?;
+                    recorder.assistant(&clean);
+                    session.push_assistant(clean);
+                    crate::tui::entry::trigger_auto_visual(
+                        &mut tui,
+                        &mut editor,
+                        &mut events,
+                        backend,
+                        &session,
+                        project_root,
+                        &topic,
+                        show_topic,
+                        last_tokens,
+                    )
+                    .await?;
+                }
+                Ok(crate::tui::ask::AskOutcome::Cancelled) => {
+                    backend.reset_session();
+                    // After a shutdown signal the terminal is gone: no page writes.
+                    if !crate::shutdown::is_requested() {
+                        crate::tui::page::page_notice(&mut tui, "opening turn cancelled")?;
+                    }
+                }
+                Err(e) => {
+                    crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
+                    crate::tui::page::page_error(&mut tui, &format!("opening turn skipped: {e}"))?
                 }
             }
-            Err(e) => {
-                crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
-                crate::tui::page::page_error(&mut tui, &format!("opening turn skipped: {e}"))?
-            }
+            Ok::<(), anyhow::Error>(())
         }
+        .await;
+        // Shutdown mid-turn: the terminal/child died, the save below still runs.
+        crate::shutdown::keep_going_to_save(opened, crate::shutdown::is_requested())?;
     }
 
     let mut watching = true;
@@ -225,175 +231,181 @@ pub async fn run(
     let mut live = crate::tui::polite::live_from_approach(&approach);
     let mut pending = crate::tui::polite::PendingChanges::new();
     editor.set_allow_images(true);
-    loop {
-        // Before any draw: after SIGHUP every terminal write fails.
-        if crate::shutdown::is_requested() {
-            break;
-        }
-        crate::tui::page::draw(
-            &mut tui,
-            &editor,
-            &Status::Idle,
-            last_tokens,
-            window,
-            Some((watching, live, pending.len())),
-            watching && monitor.is_failing(),
-        )?;
-        tokio::select! {
-            biased;
-            _ = crate::shutdown::requested() => break, // terminal closed / killed: save_live below
-            maybe_ev = events.next() => {
-                let Some(Ok(ev)) = maybe_ev else {
-                    if maybe_ev.is_none() { break; } // stream ended = Eof (spec B4)
-                    continue; // single event error — ignore
-                };
-                if crate::tui::page::handle_nav(&mut tui, &ev) { continue; }
-                let k = match ev {
-                    Event::Key(k) => k,
-                    // Bracketed paste: single event, Enter isn't triggered, structure is preserved.
-                    Event::Paste(s) => { editor.paste(&s); continue }
-                    Event::Resize(_, _) => { crate::tui::page::handle_resize(&mut tui)?; continue }
-                    _ => continue,
-                };
-                match editor.handle_key(k) {
-                    Action::None => {}
-                    Action::Exit => break,
-                    Action::Submit(line) => {
-                        if let Some(cmd) = crate::slash::parse_watch_command(&line) {
-                            crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            // Toggle handling + queue drop live in polite::handle_watch_command (600-line budget displacement).
-                            for n in crate::tui::polite::handle_watch_command(cmd, &mut watching, &mut live, &mut pending) { crate::tui::page::page_notice(&mut tui, &n)?; }
-                            continue;
-                        }
-                        if crate::help::is_help_command(&line) {
-                            crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            crate::tui::page::page_notice(&mut tui, crate::help::help_text())?;
-                            continue;
-                        }
-                        if crate::slash::is_context_command(&line) {
-                            crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            // Deterministic breakdown — shell-only, no LLM call (spec F1).
-                            crate::tui::page::page_notice(&mut tui, &crate::context_report::build(&session.system, session.history(), last_tokens, window))?;
-                            continue;
-                        }
-                        if let Some(arg) = crate::visual::parse_show_command(&line) {
-                            crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
-                            // Borrow care: read the last reply BEFORE any &mut session borrow.
-                            let last = crate::visual::last_assistant_text(&session);
-                            match crate::visual::show_request(arg, last.as_deref()) {
-                                None => crate::tui::page::page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
-                                Some(req) => {
-                                    crate::tui::entry::run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
-                                }
-                            }
-                            continue;
-                        }
-                        if line.eq_ignore_ascii_case("/quit") { break; }
-                        // /game: toggle persists to USER.md. Status is a local notice (never
-                        // reaches the LLM). On/Off flip the pref + inject a mode-switch turn
-                        // (swapped below) that flows through the normal ask — same shape as /exam.
-                        let game_cmd = crate::slash::parse_game_command(&line);
-                        if let Some(cmd) = &game_cmd {
-                            crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            match cmd {
-                                crate::slash::GameCmd::Status => {
-                                    crate::tui::page::page_notice(&mut tui, if crate::slash::game_pref(global) {
-                                        "gamification is on"
-                                    } else {
-                                        "gamification is off"
-                                    })?;
-                                    continue;
-                                }
-                                crate::slash::GameCmd::On | crate::slash::GameCmd::Off => {
-                                    let on = matches!(cmd, crate::slash::GameCmd::On);
-                                    if let Err(e) = crate::slash::set_game_pref(global, on) {
-                                        crate::tui::page::page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
-                                        continue;
-                                    }
-                                    crate::tui::page::page_notice(&mut tui, if on {
-                                        "gamification on — XP, levels and badges are live"
-                                    } else {
-                                        "gamification off — back to quiet mode"
-                                    })?;
-                                }
-                            }
-                        }
-                        // /exam: echo the literal command, gate on goal presence, then swap the
-                        // outgoing text and fall through to the normal ask flow below.
-                        let images = if crate::slash::is_exam_command(&line) || game_cmd.is_some() { Vec::new() } else { editor.take_images() };
-                        let outgoing = if crate::slash::is_exam_command(&line) {
-                            crate::tui::page::page_user_echo(&mut tui, "/exam")?;
-                            if !crate::slash::topic_has_goal(project_root, global, &topic) {
-                                crate::tui::page::page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
+    let looped: Result<()> = async {
+        loop {
+            // Before any draw: after SIGHUP every terminal write fails.
+            if crate::shutdown::is_requested() {
+                break;
+            }
+            crate::tui::page::draw(
+                &mut tui,
+                &editor,
+                &Status::Idle,
+                last_tokens,
+                window,
+                Some((watching, live, pending.len())),
+                watching && monitor.is_failing(),
+            )?;
+            tokio::select! {
+                biased;
+                _ = crate::shutdown::requested() => break, // terminal closed / killed: save_live below
+                maybe_ev = events.next() => {
+                    let Some(Ok(ev)) = maybe_ev else {
+                        if maybe_ev.is_none() { break; } // stream ended = Eof (spec B4)
+                        continue; // single event error — ignore
+                    };
+                    if crate::tui::page::handle_nav(&mut tui, &ev) { continue; }
+                    let k = match ev {
+                        Event::Key(k) => k,
+                        // Bracketed paste: single event, Enter isn't triggered, structure is preserved.
+                        Event::Paste(s) => { editor.paste(&s); continue }
+                        Event::Resize(_, _) => { crate::tui::page::handle_resize(&mut tui)?; continue }
+                        _ => continue,
+                    };
+                    match editor.handle_key(k) {
+                        Action::None => {}
+                        Action::Exit => break,
+                        Action::Submit(line) => {
+                            if let Some(cmd) = crate::slash::parse_watch_command(&line) {
+                                crate::tui::page::page_user_echo(&mut tui, &line)?;
+                                // Toggle handling + queue drop live in polite::handle_watch_command (600-line budget displacement).
+                                for n in crate::tui::polite::handle_watch_command(cmd, &mut watching, &mut live, &mut pending) { crate::tui::page::page_notice(&mut tui, &n)?; }
                                 continue;
                             }
-                            progress::exam_prompt(&topic)
-                        } else if let Some(cmd) = game_cmd {
-                            // literal command already echoed in the /game block above
-                            match cmd {
-                                crate::slash::GameCmd::On => crate::slash::game_on_turn(
-                                    &std::fs::read_to_string(global.join("GAMIFICATION.md")).unwrap_or_default(),
-                                ),
-                                crate::slash::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
-                                crate::slash::GameCmd::Status => line.clone(), // unreachable: Status returns above
+                            if crate::help::is_help_command(&line) {
+                                crate::tui::page::page_user_echo(&mut tui, &line)?;
+                                crate::tui::page::page_notice(&mut tui, crate::help::help_text())?;
+                                continue;
                             }
-                        } else {
-                            // Push the submitted line to scrollback as a distinct user block.
-                            crate::tui::page::page_user_echo(&mut tui, &line)?;
-                            crate::tui::page::page_image_echo(&mut tui, &images)?;
-                            // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
-                            crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, &mut monitor, line.clone()).await?
-                        };
-                        let mark = session.history().len();
-                        let dropped = session.push_user_with_images(&outgoing, &images);
-                        if dropped > 0 {
-                            crate::tui::page::page_notice(&mut tui, &format!("{dropped} older image(s) dropped from context (size limit)"))?;
-                        }
-                        recorder.user(&outgoing);
-                        match crate::tui::ask::ask_live(
-                            &mut tui, &mut editor, &mut events, backend,
-                            &session.system, session.history(), last_tokens,
-                        ).await {
-                            Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
-                                last_tokens = reply.context_tokens;
-                                let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
-                                let w = crate::tui::page::current_width(&tui);
-                                crate::tui::page::page_reply(&mut tui, &clean, w)?;
-                                recorder.assistant(&clean);
-                                session.push_assistant(clean);
-                                if crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await { crate::file_feedback::seed_mentor_baseline(&mut files, project_root); }
-                                crate::tui::entry::trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
+                            if crate::slash::is_context_command(&line) {
+                                crate::tui::page::page_user_echo(&mut tui, &line)?;
+                                // Deterministic breakdown — shell-only, no LLM call (spec F1).
+                                crate::tui::page::page_notice(&mut tui, &crate::context_report::build(&session.system, session.history(), last_tokens, window))?;
+                                continue;
                             }
-                            Ok(crate::tui::ask::AskOutcome::Cancelled) => {
-                                // The user turn stays in history (intentional — spec B2); the CLI
-                                // session is half-done — don't resume it, the next call should go
-                                // with the full transcript.
-                                backend.reset_session();
-                                if crate::shutdown::is_requested() { break; } // terminal gone: save below
-                                crate::tui::page::page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
+                            if let Some(arg) = crate::visual::parse_show_command(&line) {
+                                crate::tui::page::page_user_echo(&mut tui, &line)?;
+                                let concept = arg.clone().unwrap_or_else(|| "visual".to_string());
+                                // Borrow care: read the last reply BEFORE any &mut session borrow.
+                                let last = crate::visual::last_assistant_text(&session);
+                                match crate::visual::show_request(arg, last.as_deref()) {
+                                    None => crate::tui::page::page_notice(&mut tui, "nothing to visualize yet — explain something first, or use /show [topic]")?,
+                                    Some(req) => {
+                                        crate::tui::entry::run_visual_generation(&mut tui, &mut editor, &mut events, backend, project_root, &topic, &concept, &req, last_tokens).await?;
+                                    }
+                                }
+                                continue;
                             }
-                            Err(e) => {
-                                crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
-                                crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?;
-                                crate::tui::page::page_notice(
-                                    &mut tui,
-                                    "your message was not kept — press Up to bring it back",
-                                )?;
+                            if line.eq_ignore_ascii_case("/quit") { break; }
+                            // /game: toggle persists to USER.md. Status is a local notice (never
+                            // reaches the LLM). On/Off flip the pref + inject a mode-switch turn
+                            // (swapped below) that flows through the normal ask — same shape as /exam.
+                            let game_cmd = crate::slash::parse_game_command(&line);
+                            if let Some(cmd) = &game_cmd {
+                                crate::tui::page::page_user_echo(&mut tui, &line)?;
+                                match cmd {
+                                    crate::slash::GameCmd::Status => {
+                                        crate::tui::page::page_notice(&mut tui, if crate::slash::game_pref(global) {
+                                            "gamification is on"
+                                        } else {
+                                            "gamification is off"
+                                        })?;
+                                        continue;
+                                    }
+                                    crate::slash::GameCmd::On | crate::slash::GameCmd::Off => {
+                                        let on = matches!(cmd, crate::slash::GameCmd::On);
+                                        if let Err(e) = crate::slash::set_game_pref(global, on) {
+                                            crate::tui::page::page_notice(&mut tui, &format!("could not save game preference: {e}"))?;
+                                            continue;
+                                        }
+                                        crate::tui::page::page_notice(&mut tui, if on {
+                                            "gamification on — XP, levels and badges are live"
+                                        } else {
+                                            "gamification off — back to quiet mode"
+                                        })?;
+                                    }
+                                }
+                            }
+                            // /exam: echo the literal command, gate on goal presence, then swap the
+                            // outgoing text and fall through to the normal ask flow below.
+                            let images = if crate::slash::is_exam_command(&line) || game_cmd.is_some() { Vec::new() } else { editor.take_images() };
+                            let outgoing = if crate::slash::is_exam_command(&line) {
+                                crate::tui::page::page_user_echo(&mut tui, "/exam")?;
+                                if !crate::slash::topic_has_goal(project_root, global, &topic) {
+                                    crate::tui::page::page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
+                                    continue;
+                                }
+                                progress::exam_prompt(&topic)
+                            } else if let Some(cmd) = game_cmd {
+                                // literal command already echoed in the /game block above
+                                match cmd {
+                                    crate::slash::GameCmd::On => crate::slash::game_on_turn(
+                                        &std::fs::read_to_string(global.join("GAMIFICATION.md")).unwrap_or_default(),
+                                    ),
+                                    crate::slash::GameCmd::Off => "[GAME MODE OFF] Gamification is now OFF — stop all game narration.".to_string(),
+                                    crate::slash::GameCmd::Status => line.clone(), // unreachable: Status returns above
+                                }
+                            } else {
+                                // Push the submitted line to scrollback as a distinct user block.
+                                crate::tui::page::page_user_echo(&mut tui, &line)?;
+                                crate::tui::page::page_image_echo(&mut tui, &images)?;
+                                // Ride-along (spec K2): pending changes join THIS turn — payload first, the user's words last. Only genuine user text carries them; /exam and /game synthesize operational directives, so those branches leave the queue untouched for the next real message.
+                                crate::tui::polite::attach_pending(&mut tui, watching, &mut pending, &mut files, project_root, &mut monitor, line.clone()).await?
+                            };
+                            let mark = session.history().len();
+                            let dropped = session.push_user_with_images(&outgoing, &images);
+                            if dropped > 0 {
+                                crate::tui::page::page_notice(&mut tui, &format!("{dropped} older image(s) dropped from context (size limit)"))?;
+                            }
+                            recorder.user(&outgoing);
+                            match crate::tui::ask::ask_live(
+                                &mut tui, &mut editor, &mut events, backend,
+                                &session.system, session.history(), last_tokens,
+                            ).await {
+                                Ok(crate::tui::ask::AskOutcome::Reply(reply)) => {
+                                    last_tokens = reply.context_tokens;
+                                    let (clean, show_topic) = crate::visual::extract_show_marker(&reply.text);
+                                    let w = crate::tui::page::current_width(&tui);
+                                    crate::tui::page::page_reply(&mut tui, &clean, w)?;
+                                    recorder.assistant(&clean);
+                                    session.push_assistant(clean);
+                                    if crate::lifecycle::maybe_compact(backend, &mut session, project_root, last_tokens).await { crate::file_feedback::seed_mentor_baseline(&mut files, project_root); }
+                                    crate::tui::entry::trigger_auto_visual(&mut tui, &mut editor, &mut events, backend, &session, project_root, &topic, show_topic, last_tokens).await?;
+                                }
+                                Ok(crate::tui::ask::AskOutcome::Cancelled) => {
+                                    // The user turn stays in history (intentional — spec B2); the CLI
+                                    // session is half-done — don't resume it, the next call should go
+                                    // with the full transcript.
+                                    backend.reset_session();
+                                    if crate::shutdown::is_requested() { break; } // terminal gone: save below
+                                    crate::tui::page::page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
+                                }
+                                Err(e) => {
+                                    crate::lifecycle::rollback_turn(&mut session, &recorder, mark);
+                                    crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?;
+                                    crate::tui::page::page_notice(
+                                        &mut tui,
+                                        "your message was not kept — press Up to bring it back",
+                                    )?;
+                                }
                             }
                         }
                     }
                 }
-            }
-            Some(path) = watch_rx.recv() => {
-                debouncer.push(path, tokio::time::Instant::now());
-            }
-            _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
-                // Watcher flush: routing + action live in polite::dispatch_flush (spec K1/K2) — run.rs keeps the call site only.
-                crate::tui::polite::dispatch_flush(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, debouncer.flush(), max_feedback_batch, watching, live, &mut pending, &mut tracker, &mut monitor).await?;
+                Some(path) = watch_rx.recv() => {
+                    debouncer.push(path, tokio::time::Instant::now());
+                }
+                _ = crate::lifecycle::sleep_until_deadline(debouncer.deadline()), if debouncer.deadline().is_some() => {
+                    // Watcher flush: routing + action live in polite::dispatch_flush (spec K1/K2) — run.rs keeps the call site only.
+                    crate::tui::polite::dispatch_flush(&mut tui, &mut editor, &mut events, backend, &mut session, &mut files, &recorder, project_root, &topic, &mut last_tokens, debouncer.flush(), max_feedback_batch, watching, live, &mut pending, &mut tracker, &mut monitor).await?;
+                }
             }
         }
+        Ok::<(), anyhow::Error>(())
     }
+    .await;
+    // An Err after a shutdown signal (dead terminal) must not skip the save.
+    crate::shutdown::keep_going_to_save(looped, crate::shutdown::is_requested())?;
     // Closing save while the TUI is still up (keys dropped, status line busy);
     // main does the remaining closing steps with the result.
     let flushed = crate::tui::closing::save_live(

@@ -56,8 +56,10 @@ pub(crate) async fn ask_live(
             false,
         )?;
         tokio::select! {
-            r = &mut fut => return Ok(AskOutcome::Reply(r?)),
+            biased;
+            // First: a child killed by the same SIGHUP resolves `fut` with Err.
             _ = crate::shutdown::requested() => return Ok(AskOutcome::Cancelled),
+            r = &mut fut => return Ok(AskOutcome::Reply(r?)),
             Some(Ok(ev)) = events.next() => {
                 if crate::tui::page::handle_nav(tui, &ev) { continue; }
                 // Paste is still processed by the editor even while locked (doesn't submit).

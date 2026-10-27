@@ -1177,7 +1177,7 @@ mod tests {
     fn run_enables_images_before_the_main_loop() {
         let src = include_str!("run.rs");
         let production = src.split("#[cfg(test)]").next().unwrap();
-        let before_loop = production.split("\n    loop {").next().unwrap();
+        let before_loop = production.split("\n        loop {").next().unwrap();
         assert!(before_loop.contains("editor.set_allow_images(true);"));
     }
 
