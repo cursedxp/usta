@@ -100,6 +100,9 @@ pub fn scan(project_root: &Path) -> Vec<Material> {
         if root.join(rel).exists() {
             continue; // a sibling .txt now speaks for this PDF
         }
+        if !source_pdf_exists(&root, rel) {
+            continue; // the PDF was deleted: its cached text is stale
+        }
         let Ok(content) = std::fs::read_to_string(&p) else {
             continue;
         };
@@ -113,6 +116,22 @@ pub fn scan(project_root: &Path) -> Vec<Material> {
     }
     mats.sort_by(|a, b| a.name.cmp(&b.name));
     mats
+}
+
+/// Is there a PDF (any extension case) in `materials/` whose path matches `rel` (a
+/// `.converted` entry) apart from the extension?
+fn source_pdf_exists(materials: &Path, rel: &Path) -> bool {
+    let dir = rel
+        .parent()
+        .map_or_else(|| materials.to_path_buf(), |d| materials.join(d));
+    let Some(stem) = rel.file_stem() else {
+        return false;
+    };
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| is_pdf(&e.path()) && e.path().file_stem() == Some(stem))
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -227,6 +246,15 @@ fn convert_one(tool: &str, pdf: &Path, txt: &Path, timeout: Duration) -> String 
         Ok(c) => c,
         Err(e) => return failed_note(pdf, &format!(" ({e})")),
     };
+    // Drain stderr concurrently: a chatty child would otherwise fill the pipe and block.
+    let drain = child.stderr.take().map(|mut s| {
+        std::thread::spawn(move || {
+            let mut err = String::new();
+            let _ = s.read_to_string(&mut err);
+            err
+        })
+    });
+    let collect = move || drain.and_then(|h| h.join().ok()).unwrap_or_default();
     let start = Instant::now();
     let exited = loop {
         match child.try_wait() {
@@ -238,14 +266,12 @@ fn convert_one(tool: &str, pdf: &Path, txt: &Path, timeout: Duration) -> String 
     let Some(exit) = exited else {
         let _ = child.kill();
         let _ = child.wait();
+        let _ = collect();
         let _ = std::fs::remove_file(txt);
         return format!("pdftotext timed out on {}", pdf.display());
     };
     if !exit.success() {
-        let mut err = String::new();
-        if let Some(mut s) = child.stderr.take() {
-            let _ = s.read_to_string(&mut err);
-        }
+        let err = collect();
         let _ = std::fs::remove_file(txt);
         let why = err
             .lines()
@@ -474,6 +500,36 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("timed out"), "{notes:?}");
         assert!(!dir.join(".converted/kitap.txt").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn convert_pdfs_survives_a_noisy_stderr() {
+        let base = pdf_project("pdf_noisy");
+        let dir = base.join("materials");
+        std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
+        let tool = fake_tool(
+            &base,
+            "head -c 200000 /dev/zero | tr '\\0' 'e' >&2\nprintf 'hello' > \"$3\"",
+        );
+        let notes = convert_pdfs_with(&base, &tool, Duration::from_secs(3));
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].starts_with("converted:"), "{notes:?}");
+        assert!(dir.join(".converted/kitap.txt").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_skips_a_conversion_whose_pdf_is_gone() {
+        let base = pdf_project("scan_orphan");
+        let dir = base.join("materials");
+        std::fs::create_dir_all(dir.join(".converted")).unwrap();
+        std::fs::write(dir.join(".converted/gone.txt"), "stale text").unwrap();
+        std::fs::write(dir.join(".converted/kept.txt"), "live text").unwrap();
+        std::fs::write(dir.join("kept.PDF"), "%PDF").unwrap();
+        let names: Vec<String> = scan(&base).into_iter().map(|m| m.name).collect();
+        assert_eq!(names, vec!["kept.pdf".to_string()]);
         let _ = std::fs::remove_dir_all(&base);
     }
 
