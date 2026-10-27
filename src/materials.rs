@@ -3,7 +3,10 @@
 //! injected into the NEW-TOPIC introduction turn. Usta anchors the curriculum
 //! to the material; the USER does the reading. No LLM here, no persistence.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 pub const PER_FILE_CAP: usize = 8_000;
 pub const TOTAL_CAP: usize = 16_000;
@@ -65,15 +68,15 @@ pub struct Material {
     pub digest: String, // PER_FILE_CAP'li digest
 }
 
-/// Recursively collect .md/.txt under `materials/`, digest each. A .pdf with a
-/// sibling .txt is represented by the .txt alone (no double counting).
-/// Deterministic: sorted by relative name.
+/// Recursively collect .md/.txt under `materials/`, digest each, plus the PDF
+/// conversions in `materials/.converted/` (named after their PDF). A .pdf with a
+/// sibling .txt is represented by the .txt alone (no double counting); a blank
+/// conversion (scanned PDF) adds nothing. Deterministic: sorted by name.
 pub fn scan(project_root: &Path) -> Vec<Material> {
     let root = project_root.join("materials");
     let mut files: Vec<PathBuf> = Vec::new();
     collect_files(&root, &mut files);
-    files.sort();
-    files
+    let mut mats: Vec<Material> = files
         .iter()
         .filter_map(|p| {
             let name = p.strip_prefix(&root).ok()?.to_string_lossy().to_string();
@@ -86,7 +89,30 @@ pub fn scan(project_root: &Path) -> Vec<Material> {
             };
             Some(Material { name, digest })
         })
-        .collect()
+        .collect();
+    let conv = root.join(".converted");
+    let mut converted: Vec<PathBuf> = Vec::new();
+    collect_files(&conv, &mut converted);
+    for p in converted {
+        let Ok(rel) = p.strip_prefix(&conv) else {
+            continue;
+        };
+        if root.join(rel).exists() {
+            continue; // a sibling .txt now speaks for this PDF
+        }
+        let Ok(content) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+        mats.push(Material {
+            name: rel.with_extension("pdf").to_string_lossy().to_string(),
+            digest: digest_txt(&content, PER_FILE_CAP),
+        });
+    }
+    mats.sort_by(|a, b| a.name.cmp(&b.name));
+    mats
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -136,26 +162,34 @@ pub fn combined_digests(mats: &[Material]) -> Option<String> {
     Some(cap_str(&joined, TOTAL_CAP))
 }
 
-/// Convert each materials/*.pdf to a sibling .txt via pdftotext when available.
-/// Returns user-facing notice lines; never fails the session.
+/// Per-PDF time cap: a huge or hung PDF can't freeze the session.
+const PDF_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Convert each materials/**/*.pdf (any case) to text in `materials/.converted/`
+/// via pdftotext when available. Returns user-facing notice lines; never fails
+/// the session.
 pub fn convert_pdfs(project_root: &Path) -> Vec<String> {
+    convert_pdfs_with(project_root, "pdftotext", PDF_TIMEOUT)
+}
+
+/// `convert_pdfs` with the tool and time cap injectable (tests: a missing or fake tool).
+fn convert_pdfs_with(project_root: &Path, tool: &str, timeout: Duration) -> Vec<String> {
     let root = project_root.join("materials");
     let mut files: Vec<PathBuf> = Vec::new();
     collect_files(&root, &mut files);
-    let pdfs: Vec<&PathBuf> = files
-        .iter()
-        .filter(|p| p.extension().is_some_and(|e| e == "pdf"))
-        .collect();
+    let pdfs: Vec<&PathBuf> = files.iter().filter(|p| is_pdf(p)).collect();
     if pdfs.is_empty() {
         return Vec::new();
     }
-    let have_tool = std::process::Command::new("pdftotext")
-        .arg("-v")
-        .output()
-        .is_ok();
+    let have_tool = std::process::Command::new(tool).arg("-v").output().is_ok();
     let mut notes = Vec::new();
     for pdf in pdfs {
-        let txt = pdf.with_extension("txt");
+        if pdf.with_extension("txt").exists() {
+            continue; // a hand-written (or older usta's) text wins — never overwritten
+        }
+        let Some(txt) = converted_path(&root, pdf) else {
+            continue;
+        };
         let fresh = match (std::fs::metadata(&txt), std::fs::metadata(pdf)) {
             (Ok(t), Ok(p)) => t.modified().ok() >= p.modified().ok(),
             _ => false,
@@ -170,37 +204,82 @@ pub fn convert_pdfs(project_root: &Path) -> Vec<String> {
             ));
             continue;
         }
-        let out = std::process::Command::new("pdftotext")
-            .arg("-layout")
-            .arg(pdf)
-            .arg(&txt)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output();
-        notes.push(match out {
-            Ok(o) if o.status.success() => {
-                format!("converted: {} → {}", pdf.display(), txt.display())
-            }
-            other => {
-                let why = other
-                    .ok()
-                    .and_then(|o| {
-                        String::from_utf8_lossy(&o.stderr)
-                            .lines()
-                            .next()
-                            .map(str::to_string)
-                    })
-                    .filter(|l| !l.trim().is_empty())
-                    .map(|l| format!(" ({})", l.trim()))
-                    .unwrap_or_default();
-                format!(
-                    "pdftotext failed on {}{why} — convert it to text yourself",
-                    pdf.display()
-                )
-            }
-        });
+        notes.push(convert_one(tool, pdf, &txt, timeout));
     }
     notes
+}
+
+/// Run the tool on one PDF under a time cap. On failure or timeout no partial
+/// output is left (it would read as a fresh conversion next time).
+fn convert_one(tool: &str, pdf: &Path, txt: &Path, timeout: Duration) -> String {
+    if let Some(dir) = txt.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let spawned = std::process::Command::new(tool)
+        .arg("-layout")
+        .arg(pdf)
+        .arg(txt)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => return failed_note(pdf, &format!(" ({e})")),
+    };
+    let start = Instant::now();
+    let exited = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(50)),
+            _ => break None,
+        }
+    };
+    let Some(exit) = exited else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(txt);
+        return format!("pdftotext timed out on {}", pdf.display());
+    };
+    if !exit.success() {
+        let mut err = String::new();
+        if let Some(mut s) = child.stderr.take() {
+            let _ = s.read_to_string(&mut err);
+        }
+        let _ = std::fs::remove_file(txt);
+        let why = err
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|l| format!(" ({l})"))
+            .unwrap_or_default();
+        return failed_note(pdf, &why);
+    }
+    match std::fs::read_to_string(txt) {
+        Ok(t) if t.trim().is_empty() => {
+            format!("no text found in {} (scanned PDF?)", pdf.display())
+        }
+        _ => format!("converted: {} → {}", pdf.display(), txt.display()),
+    }
+}
+
+fn failed_note(pdf: &Path, why: &str) -> String {
+    format!(
+        "pdftotext failed on {}{why} — convert it to text yourself",
+        pdf.display()
+    )
+}
+
+/// `materials/<rel>.pdf` → `materials/.converted/<rel>.txt` (hidden: the watcher
+/// and `collect_files` skip it, so usta's own output is never fed back).
+fn converted_path(materials: &Path, pdf: &Path) -> Option<PathBuf> {
+    let rel = pdf.strip_prefix(materials).ok()?;
+    Some(materials.join(".converted").join(rel).with_extension("txt"))
+}
+
+fn is_pdf(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
 
 #[cfg(test)]
@@ -327,8 +406,6 @@ mod tests {
 
     #[test]
     fn convert_pdfs_missing_tool_reports_notice_and_no_txt() {
-        // Deterministic only while pdftotext is absent from PATH (true in CI here).
-        // If a CI image adds poppler-utils, this exercises the real-conversion path instead.
         let base = std::env::temp_dir().join(format!(
             "usta_materials_pdftotext_missing_{}",
             std::process::id()
@@ -338,11 +415,119 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
 
-        let notes = convert_pdfs(&base);
+        let notes = convert_pdfs_with(&base, "usta-no-such-pdftotext", PDF_TIMEOUT);
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("pdftotext missing"));
         assert!(!dir.join("kitap.txt").exists());
+        assert!(!dir.join(".converted").exists());
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn pdf_project(tag: &str) -> PathBuf {
+        let base =
+            std::env::temp_dir().join(format!("usta_materials_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("materials")).unwrap();
+        base
+    }
+
+    /// A stand-in for pdftotext: answers `-v`, otherwise runs `body` with
+    /// `$1=-layout $2=<pdf> $3=<out>`. Lives outside materials/.
+    #[cfg(unix)]
+    fn fake_tool(base: &Path, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let p = base.join("fake-pdftotext");
+        std::fs::write(
+            &p,
+            format!("#!/bin/sh\n[ \"$1\" = \"-v\" ] && exit 0\n{body}\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn convert_pdfs_never_touches_a_handwritten_sibling_txt() {
+        let base = pdf_project("pdf_sibling");
+        let dir = base.join("materials");
+        std::fs::write(dir.join("kitap.txt"), "my own notes").unwrap();
+        std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
+        let notes = convert_pdfs_with(&base, "usta-no-such-pdftotext", PDF_TIMEOUT);
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("kitap.txt")).unwrap(),
+            "my own notes"
+        );
+        assert!(!dir.join(".converted").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn convert_pdfs_times_out_and_leaves_no_partial_output() {
+        let base = pdf_project("pdf_timeout");
+        let dir = base.join("materials");
+        std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
+        let tool = fake_tool(&base, "printf partial > \"$3\"\nsleep 5");
+        let notes = convert_pdfs_with(&base, &tool, Duration::from_secs(1));
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("timed out"), "{notes:?}");
+        assert!(!dir.join(".converted/kitap.txt").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn convert_pdfs_notes_blank_output_once_as_scanned() {
+        let base = pdf_project("pdf_blank");
+        let dir = base.join("materials");
+        std::fs::write(dir.join("kitap.pdf"), "%PDF").unwrap();
+        let tool = fake_tool(&base, "printf '\\f\\n' > \"$3\"");
+        let notes = convert_pdfs_with(&base, &tool, PDF_TIMEOUT);
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].contains("no text found") && notes[0].contains("scanned PDF?"),
+            "{notes:?}"
+        );
+        assert!(
+            dir.join(".converted/kitap.txt").exists(),
+            "freshness marker stays"
+        );
+        assert!(
+            convert_pdfs_with(&base, &tool, PDF_TIMEOUT).is_empty(),
+            "reported once"
+        );
+        assert!(
+            scan(&base).is_empty(),
+            "a blank conversion adds no material"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn convert_pdfs_matches_extension_case_insensitively_and_scan_reads_it() {
+        let base = pdf_project("pdf_case");
+        let dir = base.join("materials");
+        std::fs::write(dir.join("KITAP.PDF"), "%PDF").unwrap();
+        let tool = fake_tool(&base, "printf 'hello world\\n' > \"$3\"");
+        let notes = convert_pdfs_with(&base, &tool, PDF_TIMEOUT);
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].starts_with("converted:"), "{notes:?}");
+        assert!(dir.join(".converted/KITAP.txt").is_file());
+        assert!(
+            !dir.join("KITAP.txt").exists(),
+            "nothing written next to the PDF"
+        );
+        let mats = scan(&base);
+        assert_eq!(mats.len(), 1);
+        assert_eq!(mats[0].name, "KITAP.pdf");
+        assert!(mats[0].digest.contains("hello world"));
+        assert!(
+            convert_pdfs_with(&base, &tool, PDF_TIMEOUT).is_empty(),
+            "fresh → skipped"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
