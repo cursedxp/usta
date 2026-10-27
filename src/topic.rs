@@ -137,10 +137,71 @@ fn deasciify(c: char) -> char {
     }
 }
 
+/// Latin letters beyond Turkish, folded to ascii (review P2-10). `c` is already
+/// lowercase.
+fn latin_fold(c: char) -> Option<&'static str> {
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ą' => "a",
+        'æ' => "ae",
+        'ć' | 'č' => "c",
+        'ď' | 'đ' | 'ð' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ę' | 'ě' => "e",
+        'ì' | 'í' | 'î' | 'ï' | 'ī' => "i",
+        'ł' => "l",
+        'ñ' | 'ń' | 'ň' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ø' | 'ō' | 'ő' => "o",
+        'œ' => "oe",
+        'ř' => "r",
+        'ś' | 'š' => "s",
+        'ß' => "ss",
+        'ť' => "t",
+        'þ' => "th",
+        'ù' | 'ú' | 'û' | 'ū' | 'ů' | 'ű' => "u",
+        'ý' | 'ÿ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        _ => return None,
+    })
+}
+
+/// One word's slug part: the Turkish mapping first (unchanged), then Latin
+/// diacritics; `+` becomes `p` and `#` becomes `sharp` once the word has
+/// started (`c++` -> `cpp`, `c#` -> `csharp`); anything else is dropped.
+fn slug_word(word: &str) -> String {
+    let mut out = String::new();
+    for c in word.chars().map(deasciify) {
+        match c {
+            '+' if !out.is_empty() => out.push('p'),
+            '#' if !out.is_empty() => out.push_str("sharp"),
+            c if c.is_ascii_alphanumeric() => out.push(c),
+            c => {
+                for l in c.to_lowercase() {
+                    if let Some(s) = latin_fold(l) {
+                        out.push_str(s);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Stable slug for a topic written without Latin letters: `t-` + FNV-1a 32-bit
+/// of the trimmed, lowercased input. Inline on purpose: `DefaultHasher` may
+/// change between Rust versions and the slug names files on disk.
+fn hash_slug(input: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in input.trim().to_lowercase().bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("t-{h:08x}")
+}
+
 /// Turn free text into a topic slug — pure function, testable.
-/// Rule: simplify Turkish characters, lowercase, take at most the FIRST 3
-/// words, keep only ascii alphanumeric characters in each word, join words
-/// with hyphens. Empty result → `tokens::DEFAULT_TOPIC`.
+/// Rule: fold Turkish and Latin letters to ascii, spell out `+`/`#` inside a
+/// word, lowercase, take at most the FIRST 3 content words, join with hyphens.
+/// No ascii left but non-Latin letters present → `t-<hash>`; otherwise empty →
+/// `tokens::DEFAULT_TOPIC`.
 /// "temel Linux güvenliği" → `temel-linux-guvenligi`.
 pub fn slugify_topic(input: &str) -> String {
     // Filler words, compared against their deasciified (ç→c…) form — kept out
@@ -173,19 +234,20 @@ pub fn slugify_topic(input: &str) -> String {
     ];
     let words: Vec<String> = input
         .split_whitespace()
-        .map(|w| {
-            w.chars()
-                .map(deasciify)
-                .filter(|c| c.is_ascii_alphanumeric())
-                .collect::<String>()
-        })
+        .map(slug_word)
         .filter(|w| !w.is_empty() && !STOPWORDS.contains(&w.as_str()))
         .take(3)
         .collect();
-    if words.is_empty() {
-        tokens::DEFAULT_TOPIC.to_string()
+    if !words.is_empty() {
+        return words.join("-");
+    }
+    // Only non-Latin letters: a stable per-topic slug, so two such topics never
+    // share `general`'s progress file. Symbol-only / ascii-stopword-only input
+    // stays `general`.
+    if input.chars().any(|c| c.is_alphanumeric() && !c.is_ascii()) {
+        hash_slug(input)
     } else {
-        words.join("-")
+        tokens::DEFAULT_TOPIC.to_string()
     }
 }
 
@@ -208,8 +270,40 @@ mod tests {
     }
 
     #[test]
-    fn slugify_drops_non_alnum_chars() {
-        assert_eq!(slugify_topic("C++"), "c");
+    fn slugify_spells_out_plus_and_sharp() {
+        assert_eq!(slugify_topic("C++"), "cpp");
+        assert_eq!(slugify_topic("C#"), "csharp");
+        assert_eq!(slugify_topic("F#"), "fsharp");
+        assert_eq!(slugify_topic("C"), "c");
+        assert_eq!(slugify_topic("#rust"), "rust");
+    }
+
+    #[test]
+    fn slugify_folds_latin_diacritics() {
+        assert_eq!(slugify_topic("straße"), "strasse");
+        assert_eq!(slugify_topic("café"), "cafe");
+        assert_eq!(slugify_topic("Ñandú"), "nandu");
+        assert_eq!(slugify_topic("Œuvre Æsir"), "oeuvre-aesir");
+        // Turkish results unchanged.
+        assert_eq!(
+            slugify_topic("temel Linux güvenliği"),
+            "temel-linux-guvenligi"
+        );
+        assert_eq!(slugify_topic("İstanbul Işık"), "istanbul-isik");
+    }
+
+    #[test]
+    fn slugify_non_latin_topics_get_a_stable_hash_slug() {
+        // FNV-1a 32 of the trimmed, lowercased input: pinned values, so a slug
+        // naming files on disk never changes between builds.
+        assert_eq!(slugify_topic("日本語"), "t-805f5ce7");
+        assert_eq!(slugify_topic("Привет мир"), "t-8113ba70");
+    }
+
+    #[test]
+    fn slugify_symbols_and_ascii_stopwords_only_stay_general() {
+        assert_eq!(slugify_topic("!!!"), "general");
+        assert_eq!(slugify_topic("the learn"), "general");
     }
 
     #[test]

@@ -43,6 +43,7 @@ pub fn parse_command(args: &[String]) -> Result<Command> {
         Some("reset") => match rest.next().map(String::as_str) {
             Some("--factory") => Ok(Command::Reset(ResetTarget::Factory)),
             Some("--profile") | Some("--profil") => Ok(Command::Reset(ResetTarget::Profile)),
+            Some(topic) if topic.trim().is_empty() => anyhow::bail!("topic name required"),
             Some(topic) => Ok(Command::Reset(ResetTarget::Topic(slugify_topic(topic)))),
             None => anyhow::bail!("usage: usta reset <topic>  |  --factory  |  --profile"),
         },
@@ -107,8 +108,14 @@ mod tests {
         let args = vec!["usta".into(), "reset".into(), "C++".into()];
         assert_eq!(
             parse_command(&args).unwrap(),
-            Command::Reset(ResetTarget::Topic("c".to_string()))
+            Command::Reset(ResetTarget::Topic("cpp".to_string()))
         );
+    }
+
+    #[test]
+    fn parse_reset_blank_topic_errors() {
+        let err = parse_command(&["usta".into(), "reset".into(), "  ".into()]).unwrap_err();
+        assert_eq!(err.to_string(), "topic name required");
     }
 
     #[test]
