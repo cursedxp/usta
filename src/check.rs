@@ -5,6 +5,7 @@
 //! feedback flow is never blocked.
 
 use std::path::Path;
+use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::process::Command;
@@ -43,6 +44,10 @@ pub async fn run_check(root: &Path) -> Option<String> {
         .arg("check")
         .arg("--message-format=short")
         .current_dir(root)
+        .stdin(Stdio::null())
+        // On timeout this future is dropped: kill cargo with it, or it keeps
+        // running and holds the build lock for every later check.
+        .kill_on_drop(true)
         .output();
     let output = tokio::time::timeout(CHECK_TIMEOUT, fut).await.ok()?.ok()?;
     if output.status.success() {
@@ -153,6 +158,25 @@ pub(crate) const NOTE_PREFIX: &str = "[build state:";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Source pin: on timeout the `output()` future is dropped — cargo must die
+    /// with it, or it keeps running and holds the build lock.
+    #[test]
+    fn run_check_kills_cargo_when_the_timeout_drops_it() {
+        let prod = include_str!("check.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let body = prod
+            .split("pub async fn run_check(")
+            .nth(1)
+            .expect("run_check")
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        assert!(body.contains(".kill_on_drop(true)"));
+        assert!(body.contains(".stdin(Stdio::null())"));
+    }
 
     #[test]
     fn is_cargo_project_true_when_manifest_exists() {
