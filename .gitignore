@@ -1,3 +1,8 @@
 /target
 .superpowers/
 .DS_Store
+
+# secrets
+.env
+.env.*
+!.env.example
