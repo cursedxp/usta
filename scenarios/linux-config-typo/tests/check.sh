@@ -7,7 +7,11 @@ case "$port" in
     echo "listen_port is not a number: '$port'"
     exit 1 ;;
 esac
-if [ "$port" -lt 1024 ] || [ "$port" -gt 65535 ]; then
+if [ "${#port}" -gt 5 ]; then
+  echo "listen_port is out of range"
+  exit 1
+fi
+if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
   echo "listen_port is out of range"
   exit 1
 fi
