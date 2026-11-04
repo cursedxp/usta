@@ -28,6 +28,14 @@ fn closing_prompt_embeds_topic_and_existing() {
 }
 
 #[test]
+fn closing_prompt_caps_a_rubric_pass_at_seen() {
+    // The mentor turn says this once; after compaction only the closing prompt remains.
+    let s = closing_prompt("rust", None, None, None, None, None, None);
+    assert!(s.contains("passed by a rubric"), "{s}");
+    assert!(s.contains("`seen` at most"), "{s}");
+}
+
+#[test]
 fn closing_prompt_marks_missing_file() {
     let s = closing_prompt("rust", None, None, None, None, None, None);
     assert!(s.contains("(dosya henüz yok)"));

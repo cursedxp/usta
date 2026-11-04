@@ -72,6 +72,8 @@ pub fn is_ignored(path: &Path) -> bool {
             let s = s.to_string_lossy().to_ascii_lowercase();
             s == "target"
                 || s == "node_modules"
+                // The learner's folder tasks: their own work, not a signal for the mentor.
+                || s == crate::scenario::folder::TASKS_DIR
                 // Machine-written lockfile (`cargo run` side effect) — never
                 // the user's work, never worth a turn (spec K6).
                 || s == "cargo.lock"
@@ -248,6 +250,13 @@ mod tests {
     /// Root for the pre-P1-4 tests: their paths all live under temp_dir().
     fn tmp_root() -> WatchRoot {
         WatchRoot::new(&std::env::temp_dir())
+    }
+
+    #[test]
+    fn is_ignored_flags_the_task_folder() {
+        assert!(is_ignored(Path::new("usta-tasks/run-1/plan.md")));
+        assert!(is_ignored(Path::new("usta-tasks/done/run-1/plan.md")));
+        assert!(!is_ignored(Path::new("tasks/run-1/plan.md")));
     }
 
     #[test]

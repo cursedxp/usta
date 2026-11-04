@@ -53,7 +53,7 @@ pub(crate) fn gone_error(run_id: &str) -> anyhow::Error {
     )
 }
 
-fn valid_run_id(id: &str) -> bool {
+pub(crate) fn valid_run_id(id: &str) -> bool {
     !id.is_empty()
         && id != DONE_DIR
         && id

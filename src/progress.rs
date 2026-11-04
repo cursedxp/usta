@@ -172,6 +172,8 @@ pub fn closing_prompt(
          oldest into a one-line period summary; in `{errlog}`, remove resolved \
          entries not seen in a long time; keep curriculum sections that haven't changed \
          as-is (don't regenerate them).\n\
+         - A task passed by a rubric (Usta's judgment, not a script) moves a skill to \
+         `seen` at most, never to settled.\n\
          - Don't add anything without evidence from this session; keep the valid \
          information already in the existing files (the user may have hand-edited them \
          — don't overwrite their edits).\n\

@@ -7,9 +7,10 @@ use std::path::Path;
 use chrono::NaiveDate;
 
 use crate::scenario::container::{list_labeled, Found};
-use crate::scenario::docker::{probe, Docker, RealDocker, Runtime};
+use crate::scenario::docker::{probe, Docker, Out, RealDocker, Runtime};
 use crate::scenario::engine::{self, Tick};
-use crate::scenario::env::{Environment, CONTAINER};
+use crate::scenario::env::{Environment, CONTAINER, FOLDER};
+use crate::scenario::folder::valid_run_id;
 use crate::scenario::route::Router;
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::ui;
@@ -52,6 +53,28 @@ fn prefix(tag: &str) -> String {
     format!("usta-{tag}-")
 }
 
+/// True when the owner of a record is a running process.
+pub(crate) fn owner_alive(r: &RunRecord, alive: &dyn Fn(u32) -> bool) -> bool {
+    r.owner_pid != 0 && alive(r.owner_pid)
+}
+
+/// A `chk-<run>` helper belongs to the run it checks; a `bld-<package>` helper to a
+/// proof of that package (its `val-` record is written before the build starts). With
+/// no record of a live owner it is a leftover, and a second session may remove it.
+fn helper_has_live_owner(run_id: &str, records: &[RunRecord], alive: &dyn Fn(u32) -> bool) -> bool {
+    if let Some(run) = run_id.strip_prefix("chk-") {
+        records
+            .iter()
+            .any(|r| r.run_id == run && owner_alive(r, alive))
+    } else if let Some(package) = run_id.strip_prefix("bld-") {
+        records
+            .iter()
+            .any(|r| r.package == package && owner_alive(r, alive))
+    } else {
+        false
+    }
+}
+
 pub(crate) fn plan(
     records: &[RunRecord],
     containers: &[Found],
@@ -64,6 +87,9 @@ pub(crate) fn plan(
     let find = |run_id: &str| containers.iter().find(|c| c.run_id == run_id);
     let foreign = |r: &RunRecord| !r.reference.is_empty() && !r.reference.starts_with(&mine);
     for c in containers {
+        if helper_has_live_owner(&c.run_id, records, alive) {
+            continue;
+        }
         match records.iter().find(|r| r.run_id == c.run_id) {
             None => acts.push(Action::RemoveContainer(c.name.clone())),
             Some(r) if foreign(r) => {}
@@ -124,6 +150,13 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
         && std::io::IsTerminal::is_terminal(&std::io::stdout());
     let ask = |prompt: &str| crate::setup::confirm(prompt, &["y", "yes"]).unwrap_or(false);
     let asker: Option<&dyn Fn(&str) -> bool> = if interactive { Some(&ask) } else { None };
+    sweep_records(
+        project_root,
+        today,
+        &RealDocker,
+        &crate::lock::pid_alive,
+        asker,
+    );
     docker_sweep(
         project_root,
         today,
@@ -131,6 +164,19 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
         &crate::lock::pid_alive,
         asker,
     );
+    if let Ok(global) = crate::config::global_root() {
+        let store = Store::new(project_root);
+        if store.exists() {
+            let idle = std::time::SystemTime::now() - crate::scenario::leftovers::DRAFT_IDLE;
+            crate::scenario::leftovers::sweep_leftovers(
+                &store,
+                &global,
+                &RealDocker,
+                &crate::lock::pid_alive,
+                idle,
+            );
+        }
+    }
 }
 
 /// Record-only sweep, no Docker: unfinished records that point outside this
@@ -149,32 +195,56 @@ pub(crate) fn drop_foreign(project_root: &Path, today: &str) {
     }
 }
 
-/// Parks what needs no runtime to park. A folder or conversation run of a dead owner
-/// has no server, and with no runtime installed no server can be running, so a stale
-/// container record goes too. Otherwise either would block the learner on a computer
-/// with no Docker. Record-only.
-pub(crate) fn park_serverless(
-    store: &Store,
+/// A runtime that is not there: the record pass provably never calls Docker.
+struct NoRuntime;
+
+impl Docker for NoRuntime {
+    fn run(&self, _: &[&str]) -> anyhow::Result<Out> {
+        anyhow::bail!("no runtime on this path")
+    }
+}
+
+/// The part of the sweep that needs no runtime: folder and conversation runs, and
+/// container records parked when Docker is not installed (no runtime, so no server can
+/// be running). Otherwise either would block the learner on a computer with no Docker.
+/// `docker` is used for one probe only, and only when a container run looks active.
+/// The one place a stale task may be asked about is a launch, where `ask` is `Some`.
+pub(crate) fn sweep_records(
+    project_root: &Path,
     today: &str,
     docker: &dyn Docker,
     alive: &dyn Fn(u32) -> bool,
+    ask: Option<&dyn Fn(&str) -> bool>,
 ) {
-    let runs: Vec<RunRecord> = store
-        .all()
-        .into_iter()
-        .filter(|r| r.state == RunState::Active)
-        .collect();
-    let boxed = runs.iter().any(|r| r.env == CONTAINER);
-    let no_runtime = boxed && matches!(probe(docker), Runtime::NotInstalled);
-    for mut r in runs {
-        let dead = r.owner_pid == 0 || !alive(r.owner_pid);
-        if if r.env == CONTAINER { no_runtime } else { dead } {
+    let store = Store::new(project_root);
+    if !store.exists() {
+        return;
+    }
+    let boxed = |r: &RunRecord| r.env == CONTAINER && r.state == RunState::Active;
+    if store.all().iter().any(boxed) && matches!(probe(docker), Runtime::NotInstalled) {
+        for mut r in store.all().into_iter().filter(boxed) {
             r.state = RunState::Paused;
             r.owner_pid = 0;
             r.updated = today.to_string();
             let _ = store.save(&r);
         }
     }
+    let tag = project_tag(project_root);
+    let own: Vec<RunRecord> = store
+        .all()
+        .into_iter()
+        .filter(|r| r.env != CONTAINER)
+        .collect();
+    let s = Sweeper {
+        store: &store,
+        docker: &NoRuntime,
+        tag: &tag,
+        containers: &[],
+        alive,
+        today,
+        ask,
+    };
+    execute_on(&own, &s);
 }
 
 /// Docker-side sweep for use INSIDE a session (call right after `ensure_ready`
@@ -242,6 +312,16 @@ fn has_unreadable_record(store: &Store, run_id: &str) -> bool {
         && store.load(run_id).is_err()
 }
 
+struct Sweeper<'a> {
+    store: &'a Store,
+    docker: &'a dyn Docker,
+    tag: &'a str,
+    containers: &'a [Found],
+    alive: &'a dyn Fn(u32) -> bool,
+    today: &'a str,
+    ask: Option<&'a dyn Fn(&str) -> bool>,
+}
+
 /// Apply the plan. `ask` is `None` when there is no terminal: stale tasks are then left alone.
 pub(crate) fn execute(
     store: &Store,
@@ -252,7 +332,46 @@ pub(crate) fn execute(
     today: &str,
     ask: Option<&dyn Fn(&str) -> bool>,
 ) {
-    let records = store.all();
+    let s = Sweeper {
+        store,
+        docker,
+        tag,
+        containers,
+        alive,
+        today,
+        ask,
+    };
+    execute_on(&store.all(), &s);
+}
+
+/// Moves a finished or dropped folder run that a failed or crashed `clean` left in
+/// place to `done/`. Never deletes: it is the learner's work.
+fn retry_folder_clean(records: &[RunRecord], env: &mut Router) {
+    for r in records
+        .iter()
+        .filter(|r| r.env == FOLDER && matches!(r.state, RunState::Finished | RunState::Dropped))
+    {
+        let h = r.handle();
+        if env
+            .folder
+            .dir(&h)
+            .is_ok_and(|d| d.symlink_metadata().is_ok())
+        {
+            let _ = env.clean(&h);
+        }
+    }
+}
+
+fn execute_on(records: &[RunRecord], s: &Sweeper) {
+    let Sweeper {
+        store,
+        docker,
+        tag,
+        containers,
+        alive,
+        today,
+        ask,
+    } = *s;
     let mine = prefix(tag);
     let mut env = Router::new(
         docker,
@@ -261,7 +380,8 @@ pub(crate) fn execute(
         &crate::scenario::model::NoModel,
         &[],
     );
-    for a in plan(&records, containers, alive, today, tag) {
+    retry_folder_clean(records, &mut env);
+    for a in plan(records, containers, alive, today, tag) {
         match a {
             Action::RemoveContainer(name) => {
                 let run_id = containers
@@ -303,6 +423,12 @@ pub(crate) fn execute(
                 }
             }
             Action::DeleteRecord(id) => {
+                // A folder prepare that never returned: the learner never had its folder,
+                // so it holds no work. Only a valid id of a folder run reaches the disk.
+                let folder_run = records.iter().any(|r| r.run_id == id && r.env == FOLDER);
+                if folder_run && valid_run_id(&id) {
+                    let _ = std::fs::remove_dir_all(store.tasks_dir().join(&id));
+                }
                 let _ = store.remove(&id);
             }
             Action::PauseRecord { run_id, container } => {
@@ -864,5 +990,261 @@ mod tests {
         assert_eq!(d.calls(), vec!["stop -t 2 usta-aaaa1111-p"]);
         assert_eq!(store.load("p").unwrap(), r);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    // ---- Task 13: the sweep without a runtime -------------------------------------
+
+    fn project_with_tag(name: &str, tag: &str) -> (std::path::PathBuf, Store) {
+        let root = tmp(name);
+        let here = std::fs::canonicalize(&root).unwrap();
+        let file = root.join(".usta/scenarios/tag");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, format!("{tag}\n{}\n", here.display())).unwrap();
+        assert_eq!(project_tag(&root), tag);
+        let store = Store::new(&root);
+        (root, store)
+    }
+
+    fn folder_rec(id: &str, state: RunState, owner: u32, updated: &str) -> RunRecord {
+        let mut r = rec(id, state, owner, updated);
+        r.env = "folder".into();
+        r
+    }
+
+    fn missing() -> FakeDocker {
+        FakeDocker::missing()
+    }
+
+    #[test]
+    fn with_no_runtime_a_dead_folder_run_and_a_stale_container_run_are_parked() {
+        let (p, store) = project_with_tag("sw_records", TAG);
+        store
+            .save(&folder_rec("f", RunState::Active, 999_999, TODAY))
+            .unwrap();
+        let mut c = rec("c", RunState::Active, 999_999, TODAY);
+        c.env = "container".into();
+        store.save(&c).unwrap();
+        let d = missing();
+        sweep_records(&p, TODAY, &d, DEAD, None);
+        assert_eq!(store.load("f").unwrap().state, RunState::Paused);
+        let c = store.load("c").unwrap();
+        assert_eq!((c.state, c.owner_pid), (RunState::Paused, 0));
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn with_a_runtime_present_the_record_pass_leaves_a_container_run_to_the_docker_sweep() {
+        let (p, store) = project_with_tag("sw_records_up", TAG);
+        store
+            .save(&folder_rec("f", RunState::Active, 999_999, TODAY))
+            .unwrap();
+        store
+            .save(&rec("c", RunState::Active, 999_999, TODAY))
+            .unwrap();
+        let d = fake();
+        sweep_records(&p, TODAY, &d, DEAD, None);
+        assert_eq!(store.load("f").unwrap().state, RunState::Paused);
+        assert_eq!(store.load("c").unwrap().state, RunState::Active);
+        assert!(
+            d.calls().iter().all(|c| c.starts_with("version")),
+            "{:?}",
+            d.calls()
+        );
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn a_live_folder_owner_is_not_parked_and_a_record_pass_on_no_project_does_nothing() {
+        let (p, store) = project_with_tag("sw_live", TAG);
+        store
+            .save(&folder_rec("f", RunState::Active, 4242, TODAY))
+            .unwrap();
+        sweep_records(&p, TODAY, &missing(), &|pid| pid == 4242, None);
+        assert_eq!(store.load("f").unwrap().state, RunState::Active);
+        let none = tmp("sw_none");
+        sweep_records(&none, TODAY, &missing(), DEAD, None);
+        assert!(!none.join(".usta").exists(), "nothing is created");
+        let _ = std::fs::remove_dir_all(p);
+        let _ = std::fs::remove_dir_all(none);
+    }
+
+    #[test]
+    fn an_interrupted_folder_prepare_leaves_no_folder_behind() {
+        let (p, store) = project_with_tag("sw_prep", TAG);
+        store
+            .save(&folder_rec("f", RunState::Preparing, 999_999, TODAY))
+            .unwrap();
+        std::fs::create_dir_all(store.tasks_dir().join("f")).unwrap();
+        std::fs::write(store.tasks_dir().join("f/half.md"), "x").unwrap();
+        sweep_records(&p, TODAY, &missing(), DEAD, None);
+        assert!(!store.tasks_dir().join("f").exists());
+        assert!(!store.has_file("f"));
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn a_prepare_record_with_an_odd_id_never_deletes_anything_outside_its_folder() {
+        let (p, store) = project_with_tag("sw_prep_odd", TAG);
+        std::fs::write(p.join("keep.txt"), "mine").unwrap();
+        std::fs::create_dir_all(store.tasks_dir()).unwrap();
+        store
+            .save(&folder_rec("..", RunState::Preparing, 999_999, TODAY))
+            .unwrap();
+        sweep_records(&p, TODAY, &missing(), DEAD, None);
+        assert!(p.join("keep.txt").is_file());
+        assert!(store.tasks_dir().is_dir());
+        // A container record's prepare never owns a task folder either.
+        store
+            .save(&rec("c", RunState::Preparing, 999_999, TODAY))
+            .unwrap();
+        std::fs::create_dir_all(store.tasks_dir().join("c")).unwrap();
+        let d = fake();
+        execute(&store, &d, TAG, &[], DEAD, TODAY, None);
+        assert!(store.tasks_dir().join("c").is_dir());
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn the_real_sweep_keeps_a_folder_run_and_asks_before_removing_a_stale_one() {
+        let (p, store) = project_with_tag("sw_stale", TAG);
+        store
+            .save(&folder_rec("f", RunState::Paused, 0, "2026-01-01"))
+            .unwrap();
+        std::fs::create_dir_all(store.tasks_dir().join("f")).unwrap();
+        std::fs::write(store.tasks_dir().join("f/plan.md"), "my work").unwrap();
+        sweep_records(&p, TODAY, &missing(), DEAD, None);
+        assert!(
+            store.tasks_dir().join("f").is_dir(),
+            "never decided silently"
+        );
+        sweep_records(&p, TODAY, &missing(), DEAD, Some(&|_| true));
+        assert!(!store.tasks_dir().join("f").exists());
+        assert_eq!(
+            std::fs::read_to_string(store.tasks_dir().join("done/f/plan.md")).unwrap(),
+            "my work",
+            "a stale task's work is kept too"
+        );
+        assert_eq!(store.load("f").unwrap().state, RunState::Dropped);
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn a_full_sweep_treats_folder_records_like_any_other_and_never_marks_them_foreign() {
+        let (p, store) = project_with_tag("sw_foreign", TAG);
+        store
+            .save(&folder_rec("f", RunState::Paused, 0, TODAY))
+            .unwrap();
+        let d = fake();
+        execute(&store, &d, TAG, &[], DEAD, TODAY, None);
+        assert_eq!(store.load("f").unwrap().state, RunState::Paused);
+        assert!(d.calls().is_empty());
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn a_finished_or_dropped_folder_run_still_in_place_moves_to_done_on_the_next_sweep() {
+        let (p, store) = project_with_tag("sw_retry_clean", TAG);
+        for (id, state) in [("a", RunState::Finished), ("b", RunState::Dropped)] {
+            store.save(&folder_rec(id, state, 0, TODAY)).unwrap();
+            std::fs::create_dir_all(store.tasks_dir().join(id)).unwrap();
+            std::fs::write(store.tasks_dir().join(id).join("plan.md"), id).unwrap();
+        }
+        // Earlier work already sits at done/a: nothing is overwritten.
+        std::fs::create_dir_all(store.tasks_dir().join("done/a")).unwrap();
+        std::fs::write(store.tasks_dir().join("done/a/plan.md"), "older").unwrap();
+        // A paused run is the learner's live work.
+        store
+            .save(&folder_rec("c", RunState::Paused, 0, TODAY))
+            .unwrap();
+        std::fs::create_dir_all(store.tasks_dir().join("c")).unwrap();
+        let d = missing();
+        sweep_records(&p, TODAY, &d, DEAD, None);
+        let t = store.tasks_dir();
+        assert!(!t.join("a").exists() && !t.join("b").exists());
+        assert_eq!(
+            std::fs::read_to_string(t.join("done/b/plan.md")).unwrap(),
+            "b"
+        );
+        assert_eq!(
+            std::fs::read_to_string(t.join("done/a/plan.md")).unwrap(),
+            "older"
+        );
+        assert_eq!(
+            std::fs::read_to_string(t.join("done/a-2/plan.md")).unwrap(),
+            "a"
+        );
+        assert!(t.join("c").is_dir());
+        // Nothing left to move: a second sweep changes nothing.
+        sweep_records(&p, TODAY, &d, DEAD, None);
+        assert!(t.join("done/a-2").is_dir() && !t.join("done/a-3").exists());
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn a_foreign_dropped_folder_record_never_moves_a_folder() {
+        let (p, store) = project_with_tag("sw_retry_foreign", TAG);
+        let mut r = folder_rec("x", RunState::Dropped, 0, TODAY);
+        r.reference = "usta-bbbb2222-x".into();
+        store.save(&r).unwrap();
+        std::fs::create_dir_all(store.tasks_dir().join("x")).unwrap();
+        sweep_records(&p, TODAY, &missing(), DEAD, None);
+        assert!(store.tasks_dir().join("x").is_dir());
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    fn helper(kind: &str, id: &str) -> Found {
+        Found {
+            name: format!("usta-aaaa1111-{kind}-{id}"),
+            state: "running".into(),
+            run_id: format!("{kind}-{id}"),
+        }
+    }
+
+    #[test]
+    fn a_leftover_helper_of_a_check_or_build_has_no_record_and_is_removed() {
+        let acts = p(&[], &[helper("chk", "r1")], DEAD);
+        assert_eq!(
+            acts,
+            vec![Action::RemoveContainer("usta-aaaa1111-chk-r1".into())]
+        );
+        let acts = p(&[], &[helper("bld", "gen-x-1")], DEAD);
+        assert_eq!(
+            acts,
+            vec![Action::RemoveContainer("usta-aaaa1111-bld-gen-x-1".into())]
+        );
+    }
+
+    #[test]
+    fn a_helper_of_a_live_session_is_left_alone_and_one_of_a_dead_session_is_removed() {
+        let live: &dyn Fn(u32) -> bool = &|p| p == 4242;
+        let check_run = rec("r1", RunState::Active, 4242, TODAY);
+        assert_eq!(
+            p(
+                std::slice::from_ref(&check_run),
+                &[helper("chk", "r1")],
+                live
+            ),
+            vec![]
+        );
+        let dead_acts = p(&[check_run], &[helper("chk", "r1")], DEAD);
+        assert!(dead_acts.contains(&Action::RemoveContainer("usta-aaaa1111-chk-r1".into())));
+        // A build belongs to the proof record of its package, `val-<package>-rN`.
+        let mut proof = rec("val-gen-x-1-r1", RunState::Preparing, 4242, TODAY);
+        proof.package = "gen-x-1".into();
+        assert_eq!(
+            p(&[proof.clone()], &[helper("bld", "gen-x-1")], live),
+            vec![]
+        );
+        // The same helper of ANOTHER package is nobody's.
+        assert_eq!(
+            p(&[proof], &[helper("bld", "gen-y-1")], live),
+            vec![Action::RemoveContainer("usta-aaaa1111-bld-gen-y-1".into())]
+        );
+        // A helper whose run record belongs to nobody alive but is itself paused (owner 0).
+        let parked = rec("r2", RunState::Paused, 0, TODAY);
+        assert_eq!(
+            p(&[parked], &[helper("chk", "r2")], live),
+            vec![Action::RemoveContainer("usta-aaaa1111-chk-r2".into())]
+        );
     }
 }

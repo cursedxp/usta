@@ -344,8 +344,10 @@ impl World {
     fn relaunch(&self) {
         self.pid.set(self.pid.get() + 1);
         let pid = self.pid.clone();
+        let alive = move |p: u32| p == pid.get();
         sweep::drop_foreign(&self.project, TODAY);
-        sweep::sweep_docker(&self.project, TODAY, &self.docker, &move |p| p == pid.get());
+        sweep::sweep_records(&self.project, TODAY, &self.docker, &alive, None);
+        sweep::sweep_docker(&self.project, TODAY, &self.docker, &alive);
     }
 
     fn runs(&self) -> Vec<RunRecord> {
@@ -1254,8 +1256,8 @@ fn a_crashed_session_leaves_a_folder_task_resumable_without_docker() {
     w.relaunch();
     assert_eq!(
         w.only_run().state,
-        RunState::Active,
-        "no sweep without a runtime"
+        RunState::Paused,
+        "the record pass parks the dead owner's run without a runtime"
     );
     let back = w.cmd(ScenarioCmd::Resume(None));
     assert!(turn(&back).starts_with("[SCENARIO RESUME]"));
@@ -1511,7 +1513,11 @@ fn a_stale_server_record_does_not_block_talk_once_docker_is_gone() {
     w.start(Some(BACKUP));
     w.docker_missing();
     w.relaunch();
-    assert_eq!(w.only_run().state, RunState::Active);
+    assert_eq!(
+        w.only_run().state,
+        RunState::Paused,
+        "no runtime: the record pass parks the server record at launch"
+    );
     w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
     let r = w.cmd(ScenarioCmd::Talk(None));
     assert!(says(&r, "Who is it for?"), "{:?}", r.notices);

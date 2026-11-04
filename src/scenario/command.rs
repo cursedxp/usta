@@ -322,7 +322,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
     }
 
     let docker = seams.docker;
-    sweep::park_serverless(&store, &today, docker, seams.alive);
+    sweep::sweep_records(&ctx.project_root, &today, docker, seams.alive, None);
     let mut env = Router::new(
         docker,
         &project_tag(&ctx.project_root),
