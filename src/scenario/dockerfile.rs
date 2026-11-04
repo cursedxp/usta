@@ -23,7 +23,7 @@ pub(crate) struct Recipe {
 /// a local image or a registry path is never on this list. Images that declare a
 /// VOLUME (postgres, mysql, redis, ...) are left out: the volume would be created
 /// anonymously and live outside the limits.
-const BASES: [&str; 8] = [
+pub(crate) const BASES: [&str; 8] = [
     "debian", "ubuntu", "alpine", "python", "node", "rust", "golang", "nginx",
 ];
 

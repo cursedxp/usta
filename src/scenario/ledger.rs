@@ -186,6 +186,30 @@ impl Ledger {
         }
         out.trim_end().to_string()
     }
+
+    /// What the generator must stay consistent with. Unlike `summary`, this carries thread ids.
+    #[allow(dead_code)] // consumed by Task 11
+    pub fn for_generation(&self) -> String {
+        let mut out = Vec::new();
+        if let Some(c) = &self.company {
+            out.push(format!("company: {c}"));
+        }
+        for c in &self.characters {
+            out.push(format!("person: {} ({})", c.name, c.role));
+        }
+        let events: Vec<&Event> = self.events.iter().filter(|e| !e.text.is_empty()).collect();
+        let skip = events.len().saturating_sub(SUMMARY_EVENTS);
+        for e in events.iter().skip(skip) {
+            out.push(format!("past: {}", e.text));
+        }
+        for t in self.threads.iter().filter(|t| t.open) {
+            out.push(format!("open thread {}: {}", t.id, t.text));
+        }
+        if out.is_empty() {
+            return "the world is empty; invent a small company".into();
+        }
+        out.join("\n")
+    }
 }
 
 /// Apply finished runs the ledger has not seen yet (oldest first). A crash
@@ -405,5 +429,29 @@ mod tests {
             [0xff, 0xfe, 0x00]
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn generation_sees_company_people_events_and_thread_ids() {
+        let mut l = Ledger {
+            company: Some("Shopwell".into()),
+            ..Ledger::default()
+        };
+        l.threads.push(Thread {
+            id: "t-1".into(),
+            text: "Open matter".into(),
+            open: true,
+        });
+        l.threads.push(Thread {
+            id: "t-2".into(),
+            text: "Closed".into(),
+            open: false,
+        });
+        let g = l.for_generation();
+        assert!(g.contains("Shopwell") && g.contains("t-1: Open matter") && !g.contains("t-2"));
+        assert_eq!(
+            Ledger::default().for_generation(),
+            "the world is empty; invent a small company"
+        );
     }
 }
