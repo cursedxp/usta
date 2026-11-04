@@ -17,12 +17,15 @@ pub(crate) mod lint;
 pub(crate) mod model;
 pub(crate) mod package;
 pub(crate) mod pick;
+pub(crate) mod prompt;
 pub(crate) mod route;
+pub(crate) mod rubric;
 pub(crate) mod select;
 pub(crate) mod slot;
 pub(crate) mod steps;
 pub(crate) mod store;
 pub(crate) mod sweep;
+pub(crate) mod talk;
 pub(crate) mod terminal;
 pub(crate) mod turns;
 

@@ -126,6 +126,8 @@ impl Drop for Slot {
             &docker,
             &project_tag(&self.ctx.project_root),
             store.tasks_dir(),
+            &crate::scenario::model::NoModel,
+            &[],
         );
         let today = crate::lifecycle::today();
         let alive: &dyn Fn(u32) -> bool = &crate::lock::pid_alive;

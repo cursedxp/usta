@@ -14,7 +14,9 @@ use crate::scenario::docker::Docker;
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, FOLDER};
 use crate::scenario::limited_build::ensure_image;
 use crate::scenario::lint::walk;
+use crate::scenario::model::Model;
 use crate::scenario::package::Package;
+use crate::scenario::rubric::{panel, read_work};
 
 pub(crate) const TASKS_DIR: &str = "usta-tasks";
 /// The learner's work is theirs: `clean` moves a task here and never deletes it.
@@ -27,6 +29,7 @@ pub(crate) struct FolderEnv<'a> {
     pub docker: &'a dyn Docker,
     pub project_tag: String,
     pub tasks: PathBuf,
+    pub model: &'a dyn Model,
 }
 
 /// Copy regular files as plain data: bytes only, so no mode or link survives.
@@ -183,6 +186,12 @@ impl Environment for FolderEnv<'_> {
         if !dir.is_dir() {
             return Err(gone_error(run_id));
         }
+        if pkg.is_rubric() {
+            return Ok(match read_work(&dir, &pkg.check.deliverables)? {
+                Err(missing) => CheckOutcome::Fail { output: missing },
+                Ok(work) => panel(self.model, pkg, &work)?,
+            });
+        }
         self.check_script(pkg, run_id, &dir)
     }
 
@@ -205,6 +214,8 @@ mod tests {
     use super::*;
     use crate::scenario::docker::fake::{fail, ok, FakeDocker};
     use crate::scenario::env::Internal;
+    use crate::scenario::model::fake::FakeModel;
+    use crate::scenario::model::NoModel;
     use crate::scenario::package::tests::tmp;
 
     fn setup(name: &str) -> (PathBuf, Package) {
@@ -218,6 +229,7 @@ mod tests {
             docker: d,
             project_tag: "aaaa1111".into(),
             tasks: root.join("usta-tasks"),
+            model: &NoModel,
         }
     }
 
@@ -399,6 +411,31 @@ mod tests {
         assert!(e.prepare(&pkg, "r1").is_err());
         assert!(root.join("usta-tasks/r1/mine.md").is_file());
         assert!(!root.join("usta-tasks/r1/brief.md").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_rubric_check_fails_on_a_missing_deliverable_and_then_asks_the_judge_twice() {
+        let (root, pkg) = setup("fold_rubric");
+        let d = FakeDocker::new(|_| ok(""));
+        let pass = r#"{"criteria":[{"id":"names-audience","met":true,"note":""},{"id":"gives-reason","met":true,"note":""}]}"#;
+        let model = FakeModel::with(&[pass, pass]);
+        let mut e = env(&d, &root);
+        e.model = &model;
+        let h = e.prepare(&pkg, "r1").unwrap();
+        let CheckOutcome::Fail { output } = e.check(&pkg, &h).unwrap() else {
+            panic!()
+        };
+        assert!(output.contains("plan.md"), "{output}");
+        assert!(model.prompts.lock().unwrap().is_empty());
+        std::fs::write(
+            root.join("usta-tasks/r1/plan.md"),
+            "Bakers, because a is cheap.\n",
+        )
+        .unwrap();
+        assert_eq!(e.check(&pkg, &h).unwrap(), CheckOutcome::Pass);
+        assert_eq!(model.prompts.lock().unwrap().len(), 2);
+        assert!(d.calls().is_empty(), "a rubric check needs no runtime");
         let _ = std::fs::remove_dir_all(root);
     }
 }

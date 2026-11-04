@@ -226,7 +226,13 @@ pub(crate) fn execute(
 ) {
     let records = store.all();
     let mine = prefix(tag);
-    let mut env = Router::new(docker, tag, store.tasks_dir());
+    let mut env = Router::new(
+        docker,
+        tag,
+        store.tasks_dir(),
+        &crate::scenario::model::NoModel,
+        &[],
+    );
     for a in plan(&records, containers, alive, today, tag) {
         match a {
             Action::RemoveContainer(name) => {

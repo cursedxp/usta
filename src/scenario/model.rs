@@ -66,6 +66,24 @@ impl Model for BackendModel {
     }
 }
 
+/// The model could not be reached or did not answer. Its own type, not `Internal`:
+/// an outage is not a bad reply, so no retry or feedback round may treat it as one.
+/// The command layer logs the text and shows the learner one plain sentence.
+#[derive(Debug)]
+pub(crate) struct ModelFailed(pub String);
+
+impl std::fmt::Display for ModelFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ModelFailed {}
+
+pub(crate) fn model_failed(e: anyhow::Error) -> anyhow::Error {
+    anyhow::Error::new(ModelFailed(format!("{e:#}")))
+}
+
 /// For paths that never reach a model (session end, the sweep).
 pub(crate) struct NoModel;
 
