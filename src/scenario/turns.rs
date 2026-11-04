@@ -6,7 +6,7 @@ use crate::scenario::env::{CONTAINER, FOLDER};
 use crate::scenario::package::{Package, Tone};
 
 /// How much of the conversation a conversation task's judge reads.
-const SAID_LIMIT: usize = 60;
+pub(crate) const SAID_LIMIT: usize = 60;
 
 /// The conversation since the task opened or resumed, labelled, newest last. A
 /// compacted history may have lost the marker; then it is simply the latest lines.
@@ -16,6 +16,7 @@ fn synthesized(text: &str) -> bool {
         || text.starts_with("[SCENARIO")
         || text.starts_with("[GAME MODE")
         || text.starts_with("[EXAM MODE")
+        || text.starts_with("[SESSION OPENING")
         || crate::file_feedback::is_delivery_turn(text)
 }
 
@@ -125,7 +126,7 @@ pub(crate) fn resume_turn(
         FOLDER => "Their files in the task folder are as they left them",
         CONTAINER if restarted => "Their work on the server survived; its services were restarted",
         CONTAINER => "Their work on the server survived; its services did not come back up, possibly because of their unfinished work; they are on the server and can look into it",
-        _ => "Their answers so far are in this conversation",
+        _ => "Usta saved their answers so far and the check will read them, even those this conversation no longer shows",
     };
     format!(
         "[SCENARIO RESUME] The learner came back to the unfinished task \"{}\" ({}). Task: {instruction} \
@@ -186,6 +187,7 @@ mod tests {
             Message::user("[GAME MODE ON] go"),
             Message::user("[EXAM MODE — MOCK EXAM]\nx"),
             Message::user("[SCENARIO DONE] y"),
+            Message::user("[SESSION OPENING — RECALL DRILL]\nx"),
             Message::user("I think it is the port"),
         ];
         assert_eq!(conversation(&h), vec!["learner: I think it is the port"]);

@@ -391,6 +391,7 @@ pub(crate) async fn run_plain_loop(
                                 let tokens = reply.context_tokens;
                                 ctx.recorder.assistant(&clean);
                                 session.push_assistant(clean);
+                                scn.save_said(session.history());
                                 if maybe_compact(backend, session, ctx.project_root, tokens).await { seed_mentor_baseline(&mut files, ctx.project_root); }
                                 trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic).await;
                             }

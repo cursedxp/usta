@@ -130,6 +130,12 @@ fn run_bounded(program: &str, args: &[&str], limit: Duration) -> Result<Out> {
     })
 }
 
+/// `run` for everything but `probe`, the one reader of the difference between "cannot
+/// start the tool" and "the tool failed". Elsewhere it is tool text, for the log only.
+pub(crate) fn run_tool(d: &dyn Docker, args: &[&str]) -> Result<Out> {
+    d.run(args).map_err(|e| internal(format!("{e:#}")))
+}
+
 pub(crate) enum Runtime {
     Ready,
     /// The CLI exists but the engine does not answer.

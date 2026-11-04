@@ -38,6 +38,8 @@ struct Daemon {
     /// The runtime stops answering the moment a check has run.
     dies_at_check: bool,
     stop_fails: bool,
+    /// The runtime stops answering after this many calls.
+    answers_left: Option<u32>,
 }
 
 fn word_after<'a>(line: &'a str, key: &str) -> &'a str {
@@ -51,6 +53,11 @@ fn word_after<'a>(line: &'a str, key: &str) -> &'a str {
 
 impl Daemon {
     fn answer(&mut self, l: &str) -> Out {
+        match self.answers_left {
+            Some(0) => self.up = false,
+            Some(n) => self.answers_left = Some(n - 1),
+            None => {}
+        }
         if !self.up {
             return fail(1, "Cannot connect to the Docker daemon");
         }
@@ -347,7 +354,7 @@ impl World {
         let alive = move |p: u32| p == pid.get();
         sweep::drop_foreign(&self.project, TODAY);
         sweep::sweep_records(&self.project, TODAY, &self.docker, &alive, None);
-        sweep::sweep_docker(&self.project, TODAY, &self.docker, &alive);
+        sweep::sweep_docker(&self.project, &self.global, TODAY, &self.docker, &alive);
     }
 
     fn runs(&self) -> Vec<RunRecord> {
@@ -1660,4 +1667,269 @@ fn another_live_usta_is_refused_before_any_model_call() {
         assert!(e.contains("another usta"), "{e}");
     }
     assert_eq!(w.model_calls_since_mark(), 0);
+}
+
+fn parked(w: &World) -> RunRecord {
+    let r = w
+        .runs()
+        .into_iter()
+        .find(|r| r.package == BACKUP)
+        .expect("the server task");
+    assert_eq!((r.state, r.owner_pid), (RunState::Paused, 0), "{r:?}");
+    r
+}
+
+#[test]
+fn a_dead_runtime_parks_this_sessions_server_task_before_a_talk_is_paid_for() {
+    let w = World::new("flow_dead_talk");
+    w.start(Some(BACKUP));
+    w.docker_off();
+    w.starter.stuck.set(true);
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.cmd(ScenarioCmd::Talk(None));
+    assert!(turn(&r).starts_with("[SCENARIO START]"), "{:?}", r.notices);
+    assert!(says(&r, "paused now"), "{:?}", r.notices);
+    parked(&w);
+}
+
+#[test]
+fn a_missing_runtime_parks_the_server_task_and_no_tool_text_reaches_the_learner() {
+    let w = World::new("flow_missing_talk");
+    w.start(Some(BACKUP));
+    w.docker_missing();
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.cmd(ScenarioCmd::Talk(Some("x".into())));
+    assert!(turn(&r).starts_with("[SCENARIO START]"), "{:?}", r.notices);
+    assert!(!says(&r, "command not found"), "{:?}", r.notices);
+    parked(&w);
+}
+
+#[test]
+fn a_server_that_outlived_its_runtime_is_stopped_by_a_later_sweep() {
+    let w = World::new("flow_dead_survivor");
+    w.start(Some(BACKUP));
+    w.daemon.borrow_mut().up = false; // the runtime stops answering, the server still runs
+    w.starter.stuck.set(true);
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.cmd(ScenarioCmd::Talk(None));
+    parked(&w);
+    assert_eq!(w.running().len(), 1);
+    w.daemon.borrow_mut().up = true;
+    w.relaunch();
+    assert!(w.running().is_empty(), "{:?}", w.docker.calls());
+}
+
+#[test]
+fn resuming_a_conversation_or_folder_task_is_not_blocked_by_a_dead_runtime() {
+    let w = World::new("flow_dead_resume_talk");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.cmd(ScenarioCmd::Talk(None));
+    let talk = w.only_run().run_id;
+    w.cmd(ScenarioCmd::Pause);
+    w.start(Some(BACKUP));
+    w.docker_off();
+    w.starter.stuck.set(true);
+    let r = w.cmd(ScenarioCmd::Resume(Some(talk)));
+    assert!(turn(&r).starts_with("[SCENARIO RESUME]"), "{:?}", r.notices);
+    assert!(says(&r, "paused now"), "{:?}", r.notices);
+    parked(&w);
+
+    let w = World::new("flow_dead_resume_folder");
+    w.model_says(&[
+        &folder_rubric_reply(),
+        REVIEW_OK,
+        &met(&["a", "b"]),
+        &met(&["a", "b"]),
+    ]);
+    w.cmd(ScenarioCmd::Start(Some("a plan".into())));
+    let folder = w.only_run().run_id;
+    w.cmd(ScenarioCmd::Pause);
+    w.start(Some(BACKUP));
+    w.docker_missing();
+    let r = w.cmd(ScenarioCmd::Resume(Some(folder)));
+    assert!(turn(&r).starts_with("[SCENARIO RESUME]"), "{:?}", r.notices);
+    assert!(!says(&r, "command not found"), "{:?}", r.notices);
+    parked(&w);
+}
+
+#[test]
+fn a_runtime_that_dies_during_generation_blocks_nothing_either() {
+    let w = World::new("flow_dead_mid");
+    w.start(Some(BACKUP));
+    w.starter.stuck.set(true);
+    w.daemon.borrow_mut().answers_left = Some(1); // once, before generation
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.cmd(ScenarioCmd::Talk(None));
+    assert!(turn(&r).starts_with("[SCENARIO START]"), "{:?}", r.notices);
+    parked(&w);
+}
+
+#[test]
+fn a_word_check_never_reads_outside_the_package() {
+    let w = World::new("flow_word_path");
+    let dir = crate::scenario::lint::tests::folder_pkg(&w.base.join("src"));
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::write(w.base.join("host-secret.txt"), "docker").unwrap();
+    let mut p = crate::scenario::package::Package::load(&dir).unwrap();
+    p.check.kind = "script".into();
+    p.check.script = "../../../host-secret.txt".into();
+    assert!(dir.join("tests").join(&p.check.script).exists());
+    assert!(!p.lint().is_empty());
+    assert_eq!(
+        crate::scenario::lint::learner_word_problems(&p, "x"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_proof_that_passes_during_shutdown_starts_nothing() {
+    let mut w = World::new("flow_stop_begin");
+    w.topic_is("pottery");
+    w.stopping.set(true);
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(None);
+    assert!(r.turn.is_none(), "{:?}", r.notices);
+    assert!(w.runs().is_empty(), "{:?}", w.runs());
+}
+
+fn crashed_proof(w: &World) {
+    let s = Store::new(&w.project);
+    let mut r = w.only_run();
+    r.run_id = "val-gen-x-1-r0".into();
+    r.package = "gen-x-1".into();
+    r.state = RunState::Preparing;
+    r.owner_pid = 999;
+    r.reference = String::new();
+    s.save(&r).unwrap();
+}
+
+fn rmis(w: &World) -> Vec<String> {
+    let calls = w.docker.calls();
+    calls.into_iter().filter(|c| c.starts_with("rmi")).collect()
+}
+
+#[test]
+fn a_dead_proof_record_outlives_a_launch_without_docker_and_goes_after_its_image() {
+    let w = World::new("flow_proof_docker_off");
+    w.start(Some(BACKUP));
+    crashed_proof(&w);
+    let s = Store::new(&w.project);
+    w.docker_off();
+    w.relaunch();
+    assert!(s.load("val-gen-x-1-r0").is_ok(), "the evidence is kept");
+    assert!(rmis(&w).is_empty());
+    w.daemon.borrow_mut().up = true;
+    w.relaunch();
+    assert_eq!(
+        rmis(&w),
+        vec![
+            "rmi -f usta-scn-gen-x-1:v1-bld",
+            "rmi -f usta-scn-gen-x-1:v1"
+        ]
+    );
+    assert!(s.load("val-gen-x-1-r0").is_err(), "its image pass ran");
+}
+
+#[test]
+fn an_in_session_sweep_runs_the_image_pass_before_it_deletes_a_proof_record() {
+    let w = World::new("flow_proof_in_session");
+    w.start(Some(BACKUP));
+    crashed_proof(&w);
+    w.cmd(ScenarioCmd::Pause);
+    w.cmd(ScenarioCmd::Resume(None));
+    assert_eq!(rmis(&w).len(), 2, "{:?}", w.docker.calls());
+    assert!(Store::new(&w.project).load("val-gen-x-1-r0").is_err());
+}
+
+#[test]
+fn a_conversation_answer_survives_pause_close_relaunch_resume_and_check() {
+    let mut w = World::new("flow_said_pause");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.start(None);
+    w.say("My whole careful answer.");
+    w.cmd(ScenarioCmd::Pause);
+    w.conversation.borrow_mut().clear(); // a new session starts empty
+    w.relaunch();
+    let back = w.cmd(ScenarioCmd::Resume(None));
+    assert!(
+        !turn(&back).contains("are in this conversation"),
+        "{back:?}"
+    );
+    w.say("And one more thing.");
+    w.model_says(&[&met(&["a", "b"]), &met(&["a", "b"])]);
+    let seen = w.model.prompts.lock().unwrap().len();
+    let c = w.cmd(ScenarioCmd::Check);
+    assert!(turn(&c).starts_with("[SCENARIO DONE]"), "{:?}", c.notices);
+    let judged = w.model_prompt(seen).1;
+    assert!(judged.contains("My whole careful answer."), "{judged}");
+    assert!(judged.contains("And one more thing."), "{judged}");
+    assert_eq!(judged.matches("My whole careful answer.").count(), 1);
+}
+
+#[test]
+fn the_learners_own_session_never_repeats_a_saved_line() {
+    let mut w = World::new("flow_said_same_session");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.start(None);
+    w.say("First answer.");
+    w.cmd(ScenarioCmd::Pause);
+    w.cmd(ScenarioCmd::Resume(None));
+    w.say("Second answer.");
+    w.model_says(&[&met(&["a", "b"]), &met(&["a", "b"])]);
+    let seen = w.model.prompts.lock().unwrap().len();
+    w.cmd(ScenarioCmd::Check);
+    let judged = w.model_prompt(seen).1;
+    assert_eq!(judged.matches("First answer.").count(), 1, "{judged}");
+    assert_eq!(judged.matches("Second answer.").count(), 1, "{judged}");
+}
+
+#[test]
+fn a_bare_start_that_lands_on_a_library_task_without_a_server_says_why_once() {
+    let mut w = World::new("flow_no_server_library");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let first = w.start(None);
+    assert!(!says(&first, "needs none"), "{:?}", first.notices);
+    let drop_it = || {
+        w.cmd(ScenarioCmd::Drop {
+            id: None,
+            confirmed: true,
+        })
+    };
+    drop_it();
+    w.docker_missing();
+    let r = w.start(None);
+    assert!(says(&r, "needs none"), "{:?}", r.notices);
+    drop_it();
+    let again = w.start(None);
+    assert!(!says(&again, "needs none"), "{:?}", again.notices);
+}
+
+#[test]
+fn a_bare_start_passing_over_a_server_task_for_a_library_task_says_why() {
+    let w = World::new("flow_no_server_passed_over");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.cmd(ScenarioCmd::Talk(None));
+    let generated = w.only_run().package;
+    w.cmd(ScenarioCmd::Drop {
+        id: None,
+        confirmed: true,
+    });
+    // Sorted after the server tasks, so the bare start meets those first.
+    let lib = library::library_root(&w.global);
+    let moved = lib.join("linux-zz-talk");
+    std::fs::rename(lib.join(&generated), &moved).unwrap();
+    let task = std::fs::read_to_string(moved.join("task.toml")).unwrap();
+    std::fs::write(
+        moved.join("task.toml"),
+        task.replace(&generated, "linux-zz-talk"),
+    )
+    .unwrap();
+    w.docker_off();
+    w.starter.stuck.set(true);
+    let r = w.start(None);
+    assert_eq!(w.runs().last().unwrap().package, "linux-zz-talk");
+    assert!(says(&r, "needs none"), "{:?}", r.notices);
 }

@@ -171,6 +171,7 @@ pub(crate) fn check(
             rec.state = RunState::Finished;
             rec.owner_pid = 0;
             store.save(rec)?;
+            let _ = std::fs::remove_file(store.said_path(&rec.run_id));
             clean_warning = env.clean(&rec.handle()).err().map(|e| e.to_string());
         }
         CheckOutcome::Fail { .. } => {
@@ -211,6 +212,7 @@ pub(crate) fn drop_run(
     rec.owner_pid = 0;
     rec.updated = t.today.into();
     store.save(rec)?;
+    let _ = std::fs::remove_file(store.said_path(&rec.run_id));
     if rec.reference.is_empty() {
         return Ok(None); // interrupted before anything existed
     }

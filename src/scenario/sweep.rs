@@ -53,6 +53,15 @@ fn prefix(tag: &str) -> String {
     format!("usta-{tag}-")
 }
 
+/// Takes a record out of use without the runtime. The work stays; a server that is
+/// still running is stopped by a later sweep, because the record is now `Paused`.
+pub(crate) fn park(store: &Store, r: &mut RunRecord, today: &str) -> anyhow::Result<()> {
+    r.state = RunState::Paused;
+    r.owner_pid = 0;
+    r.updated = today.to_string();
+    store.save(r)
+}
+
 /// True when the owner of a record is a running process.
 pub(crate) fn owner_alive(r: &RunRecord, alive: &dyn Fn(u32) -> bool) -> bool {
     r.owner_pid != 0 && alive(r.owner_pid)
@@ -150,16 +159,14 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
         && std::io::IsTerminal::is_terminal(&std::io::stdout());
     let ask = |prompt: &str| crate::setup::confirm(prompt, &["y", "yes"]).unwrap_or(false);
     let asker: Option<&dyn Fn(&str) -> bool> = if interactive { Some(&ask) } else { None };
-    // Leftovers first: a cut-short proof's record is what names its image, and the
-    // record pass below deletes that record.
-    if let Ok(global) = crate::config::global_root() {
+    let global = crate::config::global_root().ok();
+    if let Some(global) = &global {
         let store = Store::new(project_root);
         if store.exists() {
             let idle = std::time::SystemTime::now() - crate::scenario::leftovers::DRAFT_IDLE;
             crate::scenario::leftovers::sweep_leftovers(
                 &store,
-                &global,
-                &RealDocker,
+                global,
                 &crate::lock::pid_alive,
                 idle,
             );
@@ -172,13 +179,17 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
         &crate::lock::pid_alive,
         asker,
     );
-    docker_sweep(
-        project_root,
-        today,
-        &RealDocker,
-        &crate::lock::pid_alive,
-        asker,
-    );
+    // Without the global folder a proof's image cannot be judged, so its record stays.
+    if let Some(global) = &global {
+        docker_sweep(
+            project_root,
+            global,
+            today,
+            &RealDocker,
+            &crate::lock::pid_alive,
+            asker,
+        );
+    }
 }
 
 /// Record-only sweep, no Docker: unfinished records that point outside this
@@ -229,10 +240,7 @@ pub(crate) fn sweep_records(
         |r: &RunRecord| r.env == CONTAINER && r.state == RunState::Active && !owner_alive(r, alive);
     if store.all().iter().any(stale) && !matches!(probe(docker), Runtime::Ready) {
         for mut r in store.all().into_iter().filter(stale) {
-            r.state = RunState::Paused;
-            r.owner_pid = 0;
-            r.updated = today.to_string();
-            let _ = store.save(&r);
+            let _ = park(&store, &mut r, today);
         }
     }
     let tag = project_tag(project_root);
@@ -260,15 +268,17 @@ pub(crate) fn sweep_records(
 /// cannot block starting. Failures are warnings, never fatal.
 pub(crate) fn sweep_docker(
     project_root: &Path,
+    global: &Path,
     today: &str,
     docker: &dyn Docker,
     alive: &dyn Fn(u32) -> bool,
 ) {
-    docker_sweep(project_root, today, docker, alive, None);
+    docker_sweep(project_root, global, today, docker, alive, None);
 }
 
 fn docker_sweep(
     project_root: &Path,
+    global: &Path,
     today: &str,
     docker: &dyn Docker,
     alive: &dyn Fn(u32) -> bool,
@@ -277,11 +287,12 @@ fn docker_sweep(
     if !Store::new(project_root).exists() || !matches!(probe(docker), Runtime::Ready) {
         return;
     }
-    sweep_with(project_root, today, docker, alive, ask);
+    sweep_with(project_root, global, today, docker, alive, ask);
 }
 
 fn sweep_with(
     project_root: &Path,
+    global: &Path,
     today: &str,
     docker: &dyn Docker,
     alive: &dyn Fn(u32) -> bool,
@@ -289,6 +300,9 @@ fn sweep_with(
 ) {
     let store = Store::new(project_root);
     let tag = project_tag(project_root);
+    // Before the record pass: a cut-short proof's record is what names its image, and
+    // that pass deletes the record.
+    crate::scenario::leftovers::sweep_images(global, docker, &store.all(), alive);
     let Ok(containers) = list_labeled(docker, &tag) else {
         return;
     };
@@ -451,10 +465,7 @@ fn execute_on(records: &[RunRecord], s: &Sweeper) {
                     engine::pause(&mut env, store, &mut rec, &t)
                 } else {
                     // The container is gone: nothing to stop. Park the record so it cannot block a new start.
-                    rec.state = RunState::Paused;
-                    rec.owner_pid = 0;
-                    rec.updated = today.to_string();
-                    store.save(&rec)
+                    park(store, &mut rec, today)
                 };
                 match result {
                     Ok(()) => ui::notice(&format!(
@@ -764,7 +775,7 @@ mod tests {
         r.reference = format!("usta-{tag}-old");
         store.save(&r).unwrap();
         let d = fake();
-        sweep_with(&root, TODAY, &d, DEAD, None);
+        sweep_with(&root, Path::new("/nonexistent-g"), TODAY, &d, DEAD, None);
         assert_eq!(store.load("old").unwrap().state, RunState::Paused);
         assert!(
             d.calls().iter().all(|c| c.starts_with("ps")),
@@ -777,7 +788,14 @@ mod tests {
             asked.set(asked.get() + 1);
             false
         };
-        sweep_with(&root, TODAY, &d, DEAD, Some(&counting));
+        sweep_with(
+            &root,
+            Path::new("/nonexistent-g"),
+            TODAY,
+            &d,
+            DEAD,
+            Some(&counting),
+        );
         assert_eq!(asked.get(), 1);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -964,7 +982,7 @@ mod tests {
                 ok("")
             }
         });
-        sweep_with(&new, TODAY, &d, DEAD, None);
+        sweep_with(&new, Path::new("/nonexistent-g"), TODAY, &d, DEAD, None);
         assert_eq!(Store::new(&new).load("t").unwrap().state, RunState::Paused);
         let filter = format!("label=usta.project={tag}");
         assert!(d.calls()[0].contains(&filter), "{:?}", d.calls());

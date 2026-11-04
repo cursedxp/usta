@@ -109,7 +109,7 @@ pub(crate) fn start(
 ) -> Result<Reply> {
     let ctx = s.ctx;
     engine::refuse_other_owner(s.store, s.tick, None)?;
-    ready_to_release(s, None);
+    notices.extend(ready_to_release(s, None));
     sync_ledger(ctx, s.store, s.pkgs, s.tick.today);
     let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
     let offered: Vec<Package> = s
@@ -124,7 +124,8 @@ pub(crate) fn start(
         select::resolve(&offered, sel.as_deref(), &map, &finished, &open, runtime)
             .map_err(|m| anyhow!(m))
     };
-    let mut pick = resolve(!matches!(probe(s.seams.docker), Runtime::NotInstalled))?;
+    let installed = !matches!(probe(s.seams.docker), Runtime::NotInstalled);
+    let mut pick = resolve(installed)?;
     // Only a learner who named a task hears why it cannot run; a bare start moves on.
     let mut blocked = None;
     if sel.is_none() && matches!(pick, Pick::Package(p) if p.needs_runtime()) {
@@ -141,13 +142,20 @@ pub(crate) fn start(
             }
             sweep::sweep_docker(
                 &ctx.project_root,
+                &ctx.global,
                 s.tick.today,
                 s.seams.docker,
                 s.seams.alive,
             );
             begin(s, env, pkg, &ledger, notices)
         }
-        Pick::Package(pkg) => begin(s, env, pkg, &ledger, notices),
+        Pick::Package(pkg) => {
+            let absent = !installed || matches!(blocked, Some(NoServer::Absent(_)));
+            if sel.is_none() && absent && s.store.note_once("no-runtime") {
+                notices.push(NO_RUNTIME.into());
+            }
+            begin(s, env, pkg, &ledger, notices)
+        }
         Pick::Generate { request } => {
             generate_and_begin(s, env, &ledger, request, blocked, notices)
         }
@@ -166,7 +174,10 @@ fn generate_and_begin(
 ) -> Result<Reply> {
     let ctx = s.ctx;
     let docker = s.seams.docker;
-    let sweep = || sweep::sweep_docker(&ctx.project_root, s.tick.today, docker, s.seams.alive);
+    let sweep = || {
+        let alive = s.seams.alive;
+        sweep::sweep_docker(&ctx.project_root, &ctx.global, s.tick.today, docker, alive)
+    };
     let mut up = false;
     if blocked.is_none() {
         match probe(docker) {
@@ -309,11 +320,11 @@ pub(crate) fn talk(
     s: &Step,
     env: &mut Router,
     skill: Option<String>,
-    notices: Vec<String>,
+    mut notices: Vec<String>,
 ) -> Result<Reply> {
     let ctx = s.ctx;
     engine::refuse_other_owner(s.store, s.tick, None)?;
-    ready_to_release(s, None);
+    notices.extend(ready_to_release(s, None));
     sync_ledger(ctx, s.store, s.pkgs, s.tick.today);
     let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
     let b = brief(s, &ledger, skill.clone(), false, true);
@@ -337,6 +348,10 @@ fn begin(
     ledger: &Ledger,
     mut notices: Vec<String>,
 ) -> Result<Reply> {
+    // A proof can pass after the signal: nothing new starts on the learner's behalf.
+    if (s.seams.stopping)() {
+        return Ok(with_notices(Reply::default(), notices));
+    }
     let unfinished = open_runs(s.store, &s.ctx.topic, s.ctx.pid)
         .into_iter()
         .filter(|r| r.package == pkg.id)
@@ -348,6 +363,8 @@ fn begin(
         ));
         return Ok(with_notices(resume_run(s, env, pkg, rec)?, notices));
     }
+    // Generation takes minutes, and the runtime may have died since `start` looked.
+    notices.extend(ready_to_release(s, None));
     let tone = s.store.tone();
     if pkg.needs_runtime() {
         notices.extend(runc_warning(s.seams.docker));

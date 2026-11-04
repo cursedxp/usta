@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::scenario::container::ContainerEnv;
+use crate::scenario::container::{ContainerEnv, FILE_LIMIT};
 use crate::scenario::docker::Docker;
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, FOLDER};
 use crate::scenario::limited_build::ensure_image;
@@ -133,6 +133,8 @@ impl FolderEnv<'_> {
                 "none",
                 "--security-opt",
                 "no-new-privileges",
+                "--ulimit",
+                FILE_LIMIT,
                 "--mount",
                 &mount,
                 "--workdir",
@@ -352,6 +354,7 @@ mod tests {
             create.contains("--network none")
                 && create.contains("--memory")
                 && create.contains("--pids-limit")
+                && create.contains("--ulimit fsize=")
         );
         assert!(create.contains(",target=/task,readonly"), "{create}");
         assert!(create.contains("label usta.project=aaaa1111") && create.contains(CHECK_IMAGE));

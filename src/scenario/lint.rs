@@ -259,8 +259,10 @@ pub(crate) fn learner_word_problems(p: &Package, allow: &str) -> Vec<String> {
         p.dir.join("instruction.md"),
         p.dir.join("tone/adventure.md"),
     ];
-    if !p.check.script.is_empty() {
-        files.push(p.dir.join("tests").join(&p.check.script));
+    // An unsafe name is reported by `lint`; never read through it.
+    let script = &p.check.script;
+    if !p.is_rubric() && !script.contains('/') && safe_rel(script) {
+        files.push(p.dir.join("tests").join(script));
     }
     let mut out = Vec::new();
     // A Docker lesson may also say container.

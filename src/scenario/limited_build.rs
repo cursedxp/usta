@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::scenario::container::FILE_LIMIT;
-use crate::scenario::docker::{Docker, Out};
+use crate::scenario::docker::{run_tool, Docker, Out};
 use crate::scenario::dockerfile::{self, Step};
 use crate::scenario::env::internal;
 use crate::scenario::package::Package;
@@ -21,7 +21,7 @@ const BUILD_BUDGET: Duration = Duration::from_secs(600);
 const MAX_IMAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 fn must(d: &dyn Docker, args: &[&str]) -> Result<Out> {
-    let o = d.run(args)?;
+    let o = run_tool(d, args)?;
     if o.ok() {
         Ok(o)
     } else {
@@ -35,7 +35,7 @@ fn must(d: &dyn Docker, args: &[&str]) -> Result<Out> {
 
 /// Fetch `image` unless it is here. `create` is bounded at 60 s, too short for a pull.
 pub(crate) fn ensure_image(d: &dyn Docker, image: &str) -> Result<()> {
-    if d.run(&["image", "inspect", image])?.ok() {
+    if run_tool(d, &["image", "inspect", image])?.ok() {
         return Ok(());
     }
     must(d, &["pull", image]).map(|_| ())

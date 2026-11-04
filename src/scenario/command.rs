@@ -323,12 +323,14 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
 
     let docker = seams.docker;
     sweep::sweep_records(&ctx.project_root, &today, docker, seams.alive, None);
+    // Before the command, which may pause the task these lines belong to.
+    let said = crate::scenario::talk::remember(&store, ctx.pid, &seams.live.said);
     let mut env = Router::new(
         docker,
         &project_tag(&ctx.project_root),
         store.tasks_dir(),
         seams.live.model.as_ref(),
-        &seams.live.said,
+        &said,
     );
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     let tick = Tick {
@@ -377,7 +379,13 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                         ready(&step)?;
                         // Never prompts or reads stdin, so it is safe inside the session UI.
                         // It is what parks an active run whose owner died, so it comes before the pick.
-                        sweep::sweep_docker(&ctx.project_root, &today, docker, seams.alive);
+                        sweep::sweep_docker(
+                            &ctx.project_root,
+                            &ctx.global,
+                            &today,
+                            docker,
+                            seams.alive,
+                        );
                         pick()?
                     }
                 }

@@ -93,7 +93,10 @@ fn static_problems(p: &Package, job: &Job) -> Vec<String> {
     let b = job.brief;
     let allow = format!("{} {}", b.topic, b.request.as_deref().unwrap_or(""));
     let mut out = p.lint();
-    out.extend(learner_word_problems(p, &allow));
+    // The word check opens files by name: only names that lint has cleared.
+    if out.is_empty() {
+        out.extend(learner_word_problems(p, &allow));
+    }
     out.extend(story_problems(p, job.ledger));
     if p.needs_runtime() && !b.runtime {
         out.push(
@@ -170,21 +173,29 @@ fn attempt(
     }
 }
 
-/// The stamp has one-second resolution, and an install must never meet an existing package.
-fn free_id(global: &Path, base: String) -> String {
-    let taken = |id: &str| library::library_root(global).join(id).exists();
-    if !taken(&base) {
-        return base;
+/// The stamp has one-second resolution, and an install must never meet an existing
+/// package. `create_dir` claims the staging folder: only one generation can win a name.
+fn free_id(global: &Path, base: String) -> Result<String> {
+    let staging = library::staging_root(global);
+    let cannot = |e: std::io::Error| internal(format!("cannot stage a task: {e}"));
+    std::fs::create_dir_all(&staging).map_err(cannot)?;
+    let numbered = (2..).map(|n| format!("{base}-{n}"));
+    for id in std::iter::once(base.clone()).chain(numbered) {
+        if library::library_root(global).join(&id).exists() {
+            continue;
+        }
+        match std::fs::create_dir(staging.join(&id)) {
+            Ok(()) => return Ok(id),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(cannot(e)),
+        }
     }
-    (2..)
-        .map(|n| format!("{base}-{n}"))
-        .find(|id| !taken(id))
-        .expect("an unused number")
+    unreachable!("an endless list of names")
 }
 
 /// `Err` = the model could not be reached (or the prover broke); no round is spent on it.
 pub(crate) fn run(job: &Job, prover: &mut dyn Prover) -> Result<Outcome> {
-    let id = free_id(job.global, format!("gen-{}-{}", job.brief.topic, job.stamp));
+    let id = free_id(job.global, format!("gen-{}-{}", job.brief.topic, job.stamp))?;
     let staged = library::staging_root(job.global).join(&id);
     let _open = job.cancel.open();
     let out = rounds(job, prover, &id, BUDGET);
@@ -247,7 +258,7 @@ pub(crate) fn fallback_talk(
     topic: &str,
     skill: &str,
 ) -> Result<Package> {
-    let id = free_id(global, format!("gen-{topic}-talk-{stamp}"));
+    let id = free_id(global, format!("gen-{topic}-talk-{stamp}"))?;
     let staged = library::staging_root(global).join(&id);
     let line = skill.split_whitespace().collect::<Vec<_>>().join(" ");
     let line = if line.is_empty() {
@@ -260,7 +271,6 @@ pub(crate) fn fallback_talk(
     let task = format!(
         "id = \"{id}\"\ntopic = \"{topic}\"\ntitle = {title}\nversion = 1\nskills = [{keyword}]\n\n[environment]\nkind = \"conversation\"\n\n[check]\nkind = \"rubric\"\nwhy_rubric = \"no task could be proven, so this is a conversation about the skill\"\n\n[[check.rubric]]\nid = \"approach\"\ntext = \"Describes concrete steps for this skill in their own words\"\n\n[[check.rubric]]\nid = \"reason\"\ntext = \"Gives a reason for at least one choice\"\n"
     );
-    let _ = std::fs::remove_dir_all(&staged);
     let write = || -> Result<Package> {
         for (rel, text) in [
             ("task.toml", task),
@@ -702,6 +712,28 @@ mod tests {
             panic!()
         };
         assert_eq!(w, "nginx must run");
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn two_generations_in_one_second_never_share_an_id() {
+        let g = tmp("gen_claim");
+        let ids: Vec<String> = std::thread::scope(|s| {
+            let claims: Vec<_> = (0..8)
+                .map(|_| s.spawn(|| free_id(&g, "gen-x-1".to_string()).unwrap()))
+                .collect();
+            claims.into_iter().map(|c| c.join().unwrap()).collect()
+        });
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
+        for id in &ids {
+            assert!(
+                library::staging_root(&g).join(id).is_dir(),
+                "{id} is claimed"
+            );
+        }
         let _ = std::fs::remove_dir_all(g);
     }
 

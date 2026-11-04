@@ -17,6 +17,7 @@ use crate::scenario::prompt::{judge_system, WORK_TAG};
 const WORK_LIMIT: usize = 40_000;
 const TOTAL_LIMIT: usize = 60_000;
 const CUT_MARK: &str = "[cut: the rest of this text is not shown]";
+const CUT_OLDEST: &str = "[cut: the oldest lines of this conversation are not shown]";
 
 #[derive(Deserialize)]
 struct Mark {
@@ -86,6 +87,29 @@ fn capped(text: &str, limit: usize) -> String {
         end -= 1;
     }
     format!("{}\n{CUT_MARK}", &text[..end])
+}
+
+/// A conversation for the judge: the newest whole lines that fit, because a cut through
+/// a line could leave text that reads as a `learner:` line. Only the very last line
+/// may be longer than everything allowed; `capped` then cuts it like any text.
+pub(crate) fn newest_lines(lines: &[String]) -> String {
+    let room = TOTAL_LIMIT - CUT_OLDEST.len() - 1;
+    let mut used = 0;
+    let keep = lines
+        .iter()
+        .rev()
+        .take_while(|l| {
+            used += l.len() + 1;
+            used <= room
+        })
+        .count()
+        .max(1);
+    let newest = lines[lines.len().saturating_sub(keep)..].join("\n");
+    if keep < lines.len() {
+        format!("{CUT_OLDEST}\n{newest}")
+    } else {
+        newest
+    }
 }
 
 fn prompt(pkg: &Package, work: &str) -> Result<String> {

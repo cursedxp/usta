@@ -1,12 +1,13 @@
 //! What a crash or a quit mid-proof leaves outside the run records: `val-` proof
-//! images, `-bld` temporary tags, drafts in `scenarios/staging`, and `validate/`
+//! images, `-bld` temporary tags (`sweep_images`, run by the sweep right before it may
+//! delete the record naming them), drafts in `scenarios/staging`, and `validate/`
 //! scratch. Only `usta-` names and Usta's own folders are touched, and nothing with a
 //! live owner: a second session's sweep must not pull the floor from under a proof.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use crate::scenario::docker::{probe, Docker, Runtime};
+use crate::scenario::docker::Docker;
 use crate::scenario::library;
 use crate::scenario::store::{RunRecord, Store};
 use crate::scenario::sweep::owner_alive;
@@ -21,12 +22,11 @@ const GENERATED: &str = "gen-";
 const IMAGE_PREFIX: &str = "usta-scn-";
 const BUILD_SUFFIX: &str = "-bld";
 
-/// The folders always, the images only when the runtime answers. Never asks, never
-/// reads stdin. `idle_since`: drafts last touched before it have no one waiting on them.
+/// The folders. Never asks, never reads stdin. `idle_since`: drafts last touched before
+/// it have no one waiting on them.
 pub(crate) fn sweep_leftovers(
     store: &Store,
     global: &Path,
-    docker: &dyn Docker,
     alive: &dyn Fn(u32) -> bool,
     idle_since: SystemTime,
 ) {
@@ -39,9 +39,6 @@ pub(crate) fn sweep_leftovers(
     };
     sweep_staging(global, &owned, idle_since);
     sweep_scratch(store, &records, alive);
-    if matches!(probe(docker), Runtime::Ready) {
-        sweep_images(global, docker, &records, alive);
-    }
 }
 
 fn sweep_staging(global: &Path, owned: &dyn Fn(&str) -> bool, idle_since: SystemTime) {
@@ -80,7 +77,8 @@ fn sweep_scratch(store: &Store, records: &[RunRecord], alive: &dyn Fn(u32) -> bo
 /// from an image's absence from them: no scan, and no record means no removal. A package
 /// that reached the library keeps its image; an unreadable library answers nothing.
 /// Accepted: a crash after a pass and before the install orphans one image.
-fn sweep_images(
+/// Only with a runtime that answers: the record is the only evidence, so it stays until then.
+pub(crate) fn sweep_images(
     global: &Path,
     docker: &dyn Docker,
     records: &[RunRecord],
@@ -182,7 +180,7 @@ usta-scn-gen-other:v1-bld\nusta-scn-linux:v2\nkiln-db:1\n";
         let (root, g, store) = world("lo_images");
         store.save(&proof_rec("gen-a", 999_999)).unwrap();
         let d = listing(IMAGES);
-        sweep_leftovers(&store, &g, &d, DEAD, never());
+        sweep_images(&g, &d, &store.all(), DEAD);
         assert_eq!(
             rmis(&d),
             vec!["rmi -f usta-scn-gen-a:v2-bld", "rmi -f usta-scn-gen-a:v2"],
@@ -202,12 +200,12 @@ usta-scn-gen-other:v1-bld\nusta-scn-linux:v2\nkiln-db:1\n";
         // A dead proof of a package that was installed since: its image is the library's.
         store.save(&proof_rec("gen-lib", 999_999)).unwrap();
         let d = listing(IMAGES);
-        sweep_leftovers(&store, &g, &d, DEAD, never());
+        sweep_images(&g, &d, &store.all(), DEAD);
         assert!(rmis(&d).is_empty(), "{:?}", d.calls());
         // No record of ours at all: another project's `-bld` tag is none of our business.
         let (root2, g2, store2) = world("lo_images_none");
         let d2 = listing(IMAGES);
-        sweep_leftovers(&store2, &g2, &d2, DEAD, never());
+        sweep_images(&g2, &d2, &store2.all(), DEAD);
         assert!(rmis(&d2).is_empty(), "{:?}", d2.calls());
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(root2);
@@ -220,7 +218,7 @@ usta-scn-gen-other:v1-bld\nusta-scn-linux:v2\nkiln-db:1\n";
         std::fs::write(g.join("scenarios/library"), "a file where a folder belongs").unwrap();
         store.save(&proof_rec("gen-a", 999_999)).unwrap();
         let d = listing(IMAGES);
-        sweep_leftovers(&store, &g, &d, DEAD, never());
+        sweep_images(&g, &d, &store.all(), DEAD);
         assert!(
             rmis(&d).is_empty(),
             "an I/O error is not an answer: {:?}",
@@ -234,16 +232,15 @@ usta-scn-gen-other:v1-bld\nusta-scn-linux:v2\nkiln-db:1\n";
         let (root, g, store) = world("lo_images_live");
         store.save(&proof_rec("gen-a", 4242)).unwrap();
         let d = listing(IMAGES);
-        sweep_leftovers(&store, &g, &d, &|p| p == 4242, never());
+        sweep_images(&g, &d, &store.all(), &|p| p == 4242);
         assert!(rmis(&d).is_empty(), "{:?}", d.calls());
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn with_no_runtime_the_images_are_not_asked_about_but_the_folders_are_cleaned() {
+    fn the_folders_are_cleaned_with_no_runtime_at_all() {
         let (root, g, store) = world("lo_nodocker");
-        let d = FakeDocker::missing();
-        sweep_leftovers(&store, &g, &d, DEAD, long_ago());
+        sweep_leftovers(&store, &g, DEAD, long_ago());
         assert!(!g.join("scenarios/staging/gen-stage").exists());
         assert!(g.join("scenarios/library/gen-lib").is_dir());
         let _ = std::fs::remove_dir_all(root);
@@ -256,13 +253,12 @@ usta-scn-gen-other:v1-bld\nusta-scn-linux:v2\nkiln-db:1\n";
         std::fs::create_dir_all(st.join("gen-owned")).unwrap();
         std::fs::create_dir_all(st.join("notes")).unwrap();
         store.save(&proof_rec("gen-owned", 4242)).unwrap();
-        let d = listing("");
-        sweep_leftovers(&store, &g, &d, &|p| p == 4242, long_ago());
+        sweep_leftovers(&store, &g, &|p| p == 4242, long_ago());
         assert!(!st.join("gen-stage").exists(), "old and ownerless");
         assert!(st.join("gen-owned").is_dir(), "a live proof's draft");
         assert!(st.join("notes").is_dir(), "not a name Usta gives");
         let (root2, g2, store2) = world("lo_staging_fresh");
-        sweep_leftovers(&store2, &g2, &listing(""), DEAD, never());
+        sweep_leftovers(&store2, &g2, DEAD, never());
         assert!(
             g2.join("scenarios/staging/gen-stage").is_dir(),
             "fresh: maybe another project's draft"
@@ -277,12 +273,12 @@ usta-scn-gen-other:v1-bld\nusta-scn-linux:v2\nkiln-db:1\n";
         let scratch = store.scratch_dir();
         std::fs::create_dir_all(scratch.join("val-gen-a-r1")).unwrap();
         store.save(&proof_rec("gen-a", 4242)).unwrap();
-        sweep_leftovers(&store, &g, &listing(""), &|p| p == 4242, never());
+        sweep_leftovers(&store, &g, &|p| p == 4242, never());
         assert!(
             scratch.join("val-gen-a-r1").is_dir(),
             "a live proof is using it"
         );
-        sweep_leftovers(&store, &g, &listing(""), DEAD, never());
+        sweep_leftovers(&store, &g, DEAD, never());
         assert!(!scratch.exists());
         // The learner's folder next to it is never part of this.
         assert!(store.tasks_dir().parent().unwrap().exists());

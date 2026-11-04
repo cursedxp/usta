@@ -5,12 +5,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::anthropic::Message;
 use crate::scenario::command::{execute, Ctx, Reply, ScenarioCmd};
 use crate::scenario::docker::RealDocker;
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::model::{Cancel, Live, Model, Progress};
 use crate::scenario::route::Router;
 use crate::scenario::store::{project_tag, RunState, Store};
+use crate::scenario::talk::remember;
+use crate::scenario::turns::conversation;
 
 /// Holds the session's identity; pauses runs this process owns when dropped
 /// (normal close, `?` error, unwind). A hard kill is handled by the startup sweep.
@@ -47,6 +50,13 @@ impl Slot {
             model,
             cancel: Arc::default(),
         }
+    }
+
+    /// After every turn, so a crash or a quit loses at most the turn under way: a
+    /// conversation task's answers are its evidence, and no later step sees this history.
+    pub fn save_said(&self, history: &[Message]) {
+        let store = Store::new(&self.ctx.project_root);
+        remember(&store, self.ctx.pid, &conversation(history));
     }
 
     /// True when generation is running, so this Esc stops it. Any other step keeps its wait.
@@ -184,6 +194,44 @@ mod tests {
             s.busy.load(Ordering::SeqCst),
             "the running step's flag stays set"
         );
+    }
+
+    #[test]
+    fn each_turn_of_a_conversation_task_reaches_the_disk_and_no_other_task_does() {
+        let root = crate::scenario::package::tests::tmp("slot_said");
+        let s = Slot::new(
+            Path::new("/nonexistent-g"),
+            &root,
+            "linux",
+            Arc::new(NoModel),
+        );
+        let store = Store::new(&root);
+        let mut rec = crate::scenario::store::RunRecord {
+            run_id: "r1".into(),
+            package: "p".into(),
+            topic: "linux".into(),
+            tone: "plain".into(),
+            state: RunState::Active,
+            owner_pid: s.ctx.pid,
+            started: "2026-11-04".into(),
+            updated: "2026-11-04".into(),
+            reference: "usta-aaaa1111-r1".into(),
+            access: String::new(),
+            env: "container".into(),
+            last_check: None,
+        };
+        store.save(&rec).unwrap();
+        s.save_said(&[Message::user("about the server")]);
+        assert!(!store.said_path("r1").exists());
+        rec.env = "conversation".into();
+        store.save(&rec).unwrap();
+        s.save_said(&[Message::user("my answer")]);
+        // The crash: the next session's history is empty, the line is on disk.
+        assert_eq!(
+            remember(&store, s.ctx.pid, &[]),
+            vec!["learner: my answer".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

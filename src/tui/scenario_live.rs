@@ -20,7 +20,9 @@ use crate::tui::status::Status;
 use crate::tui::term::Tui;
 
 const BUSY: &str = "finishing this step, one moment";
-const STOPPED: &str = "Stopped. The new task was thrown away and nothing was started.";
+/// Said when Esc lands, while the current stage still runs to its end.
+const STOPPED: &str =
+    "Stopping after this step. The new task will be thrown away and nothing will be started.";
 
 /// Esc stops generation; any other step must finish, and says so once.
 fn on_cancel_key(slot: &Slot, stopped: &mut bool, nudged: &mut bool) -> Option<&'static str> {

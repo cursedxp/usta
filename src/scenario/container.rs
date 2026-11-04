@@ -5,7 +5,7 @@
 
 use anyhow::{bail, Result};
 
-use crate::scenario::docker::{Docker, Out};
+use crate::scenario::docker::{run_tool, Docker, Out};
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, CONTAINER};
 use crate::scenario::package::Package;
 
@@ -42,7 +42,7 @@ impl ContainerEnv<'_> {
     }
 
     pub(crate) fn must(&self, args: &[&str]) -> Result<Out> {
-        let o = self.docker.run(args)?;
+        let o = run_tool(self.docker, args)?;
         if o.ok() {
             Ok(o)
         } else {
@@ -134,9 +134,7 @@ impl ContainerEnv<'_> {
 
     /// Like `is_running`, but a runtime that does not answer stays an error.
     fn running(&self, name: &str) -> Result<bool> {
-        let o = self
-            .docker
-            .run(&["inspect", "-f", "{{.State.Running}}", name])?;
+        let o = run_tool(self.docker, &["inspect", "-f", "{{.State.Running}}", name])?;
         Ok(o.ok() && o.stdout.trim() == "true")
     }
 
@@ -161,7 +159,7 @@ impl ContainerEnv<'_> {
         let secs = pkg.check.timeout_secs.to_string();
         let mut exec = exec_prefix(pkg, name);
         exec.extend(["timeout", &secs, "sh", &script]);
-        let run = self.docker.run(&exec);
+        let run = run_tool(self.docker, &exec);
         // Asked before cleanup so cleanup stays the last call; only needed on a plain failure.
         let stopped = matches!(&run, Ok(o) if o.code == 1 && !self.is_running(name));
         let mut rm = exec_prefix(pkg, name);
@@ -204,7 +202,7 @@ impl Environment for ContainerEnv<'_> {
     fn prepare(&mut self, pkg: &Package, run_id: &str) -> Result<EnvHandle> {
         self.guard_single()?;
         let image = Self::image(pkg);
-        if !self.docker.run(&["image", "inspect", &image])?.ok() {
+        if !run_tool(self.docker, &["image", "inspect", &image])?.ok() {
             if pkg.is_generated() {
                 crate::scenario::limited_build::build(self.docker, pkg, &image, &self.project_tag)?;
             } else {
@@ -287,7 +285,7 @@ impl Environment for ContainerEnv<'_> {
 
     fn clean(&mut self, h: &EnvHandle) -> Result<()> {
         self.owned(h)?;
-        let o = self.docker.run(&["rm", "-f", &h.reference])?;
+        let o = run_tool(self.docker, &["rm", "-f", &h.reference])?;
         if o.ok() || o.text().contains("No such container") {
             Ok(())
         } else {
@@ -813,6 +811,24 @@ mod tests {
         };
         let e = env.check(&pkg(), &handle()).unwrap_err();
         assert!(e.downcast_ref::<Internal>().is_some(), "{e:?}");
+    }
+
+    #[test]
+    fn a_tool_that_cannot_even_start_is_an_internal_error() {
+        let d = FakeDocker::missing();
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        for e in [
+            env.pause(&handle()).unwrap_err(),
+            env.check(&pkg(), &handle()).unwrap_err(),
+            env.clean(&handle()).unwrap_err(),
+            env.prepare(&pkg(), "r1").unwrap_err(),
+            env.guard_single().unwrap_err(),
+        ] {
+            assert!(e.downcast_ref::<Internal>().is_some(), "{e:?}");
+        }
     }
 
     #[test]

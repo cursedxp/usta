@@ -14,6 +14,7 @@ use crate::scenario::ledger;
 use crate::scenario::package::Package;
 use crate::scenario::route::Router;
 use crate::scenario::store::{RunRecord, RunState, Store};
+use crate::scenario::sweep::{owner_alive, park};
 use crate::scenario::terminal::{window_notice, WindowReq};
 use crate::scenario::turns::resume_turn;
 
@@ -94,15 +95,29 @@ pub(crate) fn ready_unless(s: &Step, stop: &dyn Fn() -> bool) -> Result<()> {
 
 /// Starting or waking any task pauses a running server task, and only the runtime can
 /// stop that server, whatever the new task needs. A runtime that will not come up is
-/// no reason to stop here: a task that needs no server goes on, and one that does says
-/// so itself when it asks for the runtime.
-pub(crate) fn ready_to_release(s: &Step, except: Option<&str>) {
-    let running = s.store.all().into_iter().any(|r| {
-        r.state == RunState::Active && r.env == CONTAINER && Some(r.run_id.as_str()) != except
-    });
-    if running {
-        let _ = ready(s);
+/// no reason to stop here: the record is parked, as `sweep_records` does, and a later
+/// sweep stops a server that survived. A task that needs no server goes on, and one
+/// that does says so itself when it asks for the runtime. Returns what the learner is
+/// owed for a parked task. Another live Usta's run is never touched.
+pub(crate) fn ready_to_release(s: &Step, except: Option<&str>) -> Vec<String> {
+    let running: Vec<RunRecord> = s
+        .store
+        .all()
+        .into_iter()
+        .filter(|r| {
+            r.state == RunState::Active
+                && r.env == CONTAINER
+                && Some(r.run_id.as_str()) != except
+                && (r.owner_pid == s.tick.pid || !owner_alive(r, s.tick.alive))
+        })
+        .collect();
+    if running.is_empty() || ready(s).is_ok() {
+        return Vec::new();
     }
+    for r in &running {
+        let _ = park(s.store, &mut r.clone(), s.tick.today);
+    }
+    pause_notices(s, &running)
 }
 
 pub(crate) fn title_of(pkgs: &[Package], package: &str) -> String {
@@ -225,10 +240,10 @@ pub(crate) fn resume_run(
     let mut restarted = true;
     let mut paused = Vec::new();
     if woke {
-        ready_to_release(s, Some(&rec.run_id));
+        paused = ready_to_release(s, Some(&rec.run_id));
         let before = running_now(s);
         let woken = engine::resume(env, s.store, pkg, &mut rec, s.tick);
-        paused = pause_notices(s, &before);
+        paused.extend(pause_notices(s, &before));
         match woken {
             Ok(None) => {}
             Ok(Some(w)) => {

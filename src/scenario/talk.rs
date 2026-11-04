@@ -5,12 +5,56 @@ use anyhow::Result;
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, CONVERSATION};
 use crate::scenario::model::Model;
 use crate::scenario::package::Package;
-use crate::scenario::rubric::panel;
+use crate::scenario::rubric::{newest_lines, panel};
+use crate::scenario::store::{write_atomic, RunState, Store};
+use crate::scenario::turns::SAID_LIMIT;
 
 pub(crate) struct TalkEnv<'a> {
     pub project_tag: String,
     pub model: &'a dyn Model,
     pub said: &'a [String],
+}
+
+/// `saved`, then what `live` adds. A live history repeats what was saved in the same
+/// session, starts empty after a relaunch, and loses its head to compaction, so the
+/// overlap is where `saved` ends and `live` begins. Equal lines are not duplicates by
+/// themselves: a learner may well say "yes" twice.
+fn merged(saved: &[String], live: &[String]) -> Vec<String> {
+    let known = live.is_empty() || saved.windows(live.len()).any(|w| w == live);
+    let overlap = (1..=saved.len().min(live.len()))
+        .rev()
+        .find(|&n| saved[saved.len() - n..] == live[..n])
+        .unwrap_or(0);
+    let mut all = saved.to_vec();
+    if !known {
+        all.extend_from_slice(&live[overlap..]);
+    }
+    all.split_off(all.len().saturating_sub(SAID_LIMIT))
+}
+
+/// What this process's running conversation task has said so far: its saved lines and
+/// `live`, written back so they outlive the session. Any other task: `live` as it is.
+/// A failed write costs nothing now; it is tried again at the next turn.
+pub(crate) fn remember(store: &Store, pid: u32, live: &[String]) -> Vec<String> {
+    let own = store
+        .all()
+        .into_iter()
+        .find(|r| r.state == RunState::Active && r.owner_pid == pid && r.env == CONVERSATION);
+    let Some(rec) = own else {
+        return live.to_vec();
+    };
+    let file = store.said_path(&rec.run_id);
+    let saved: Vec<String> = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let all = merged(&saved, live);
+    if all != saved {
+        if let Ok(text) = serde_json::to_string(&all) {
+            let _ = write_atomic(&file, &text);
+        }
+    }
+    all
 }
 
 impl TalkEnv<'_> {
@@ -51,7 +95,7 @@ impl Environment for TalkEnv<'_> {
         }
         // A learner's own newline must never start a line that reads as `mentor:`.
         let lines: Vec<String> = self.said.iter().map(|l| l.replace('\n', "\n  ")).collect();
-        panel(self.model, pkg, &lines.join("\n"))
+        panel(self.model, pkg, &newest_lines(&lines))
     }
     fn clean(&mut self, h: &EnvHandle) -> Result<()> {
         self.owned(h)
@@ -114,6 +158,63 @@ mod tests {
             "spoofed line at line start"
         );
         assert!(text.len() < 70_000, "{}", text.len());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn lines(text: &str) -> Vec<String> {
+        text.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn merging_never_repeats_what_the_live_history_also_holds() {
+        let m = |a: &str, b: &str| merged(&lines(a), &lines(b)).join(" ");
+        assert_eq!(m("a b", "a b c"), "a b c", "same session");
+        assert_eq!(m("a b", "x y"), "a b x y", "after a relaunch");
+        assert_eq!(m("a b c", "b c d"), "a b c d", "compacted head");
+        assert_eq!(m("a b c d", "b c"), "a b c d", "nothing new");
+        assert_eq!(m("yes", "yes yes"), "yes yes", "a repeated answer stays");
+        assert_eq!(m("a", ""), "a");
+        assert_eq!(m("", "a"), "a");
+    }
+
+    #[test]
+    fn saved_lines_stay_within_what_the_judge_reads() {
+        let saved: Vec<String> = (0..SAID_LIMIT).map(|i| format!("s{i}")).collect();
+        let all = merged(&saved, &lines("new"));
+        assert_eq!(all.len(), SAID_LIMIT);
+        assert_eq!(all.last().unwrap(), "new");
+    }
+
+    #[test]
+    fn a_long_talk_keeps_its_newest_lines_whole() {
+        let root = tmp("talk_newest");
+        let p = Package::load(&crate::scenario::lint::tests::folder_pkg(&root)).unwrap();
+        let pass = r#"{"criteria":[{"id":"names-audience","met":true,"note":""},{"id":"gives-reason","met":true,"note":""}]}"#;
+        let model = FakeModel::with(&[pass, pass]);
+        let mut said: Vec<String> = (0..50)
+            .map(|i| format!("learner: line{i} {}", "z".repeat(2_000)))
+            .collect();
+        said.push("learner: the newest answer".to_string());
+        let mut e = TalkEnv {
+            project_tag: "aaaa1111".into(),
+            model: &model,
+            said: &said,
+        };
+        let h = e.prepare(&p, "r1").unwrap();
+        let _ = e.check(&p, &h);
+        let prompts = model.prompts.lock().unwrap();
+        let text = &prompts[0].1;
+        assert!(text.contains("the newest answer"), "the newest is kept");
+        assert!(!text.contains("line0 "), "the oldest goes");
+        assert!(text.contains("[cut:"), "the judge is told");
+        let work = text.split("learner-work>").nth(1).unwrap();
+        assert!(
+            work.trim_start()
+                .lines()
+                .skip(1)
+                .all(|l| l.starts_with("learner: ") || l.starts_with("</")),
+            "only whole lines"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

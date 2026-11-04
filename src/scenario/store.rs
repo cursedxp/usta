@@ -85,6 +85,11 @@ impl Store {
         self.root.join("validate")
     }
 
+    /// A conversation task's lines, kept so they outlive the session.
+    pub fn said_path(&self, run_id: &str) -> PathBuf {
+        self.root.join("said").join(format!("{run_id}.json"))
+    }
+
     /// True once any run was ever recorded in this project (gates all Docker work at startup).
     pub fn exists(&self) -> bool {
         self.root.is_dir()

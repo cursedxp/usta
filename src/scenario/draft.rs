@@ -72,6 +72,18 @@ fn stamped(toml_text: &str, id: &str, topic: &str, version: u32) -> Result<Strin
     toml::to_string(&t).map_err(|e| e.to_string())
 }
 
+/// Empties `dir` and keeps it: the folder itself is this generation's claim on its id.
+fn empty(dir: &Path) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let real_dir = e.file_type().is_ok_and(|t| t.is_dir());
+        let _ = if real_dir {
+            std::fs::remove_dir_all(e.path())
+        } else {
+            std::fs::remove_file(e.path())
+        };
+    }
+}
+
 /// Write the package to `dir`, a scratch folder Usta built. Nothing is written
 /// unless every path, size and the task text pass; a failed write removes `dir`.
 pub(crate) fn stage(
@@ -118,7 +130,7 @@ pub(crate) fn stage(
         return Err(problems);
     }
     let write = || -> std::io::Result<()> {
-        let _ = std::fs::remove_dir_all(dir);
+        empty(dir);
         std::fs::create_dir_all(dir)?;
         std::fs::write(dir.join("task.toml"), task.as_deref().unwrap_or_default())?;
         for f in &r.files {
