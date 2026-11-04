@@ -202,7 +202,8 @@ Hand-written packages are examples, not the product. A person can ask for any su
 Model-written content is untrusted.
 
 - A generated script runs only inside a container, never on the host.
-- The folder environment writes data files only, inside the project's task folder. Its check is a rubric, not a script.
+- Any subject may use a container when the task needs one. Usta decides per scenario, not per subject: a marketing task with a script check or a tool to run gets a container like a Linux task does.
+- The folder environment writes data files only, inside the project's task folder. If its check needs a script, the script runs in a throwaway container with the task folder mounted read-only. Otherwise the check is a rubric.
 - Package paths cannot leave the package. `lint` runs at load, for every package, and a failed package is reported, not silently skipped.
 - Generated containers keep every limit in Container lifecycle. Network is off at run time unless declared.
 
