@@ -12,6 +12,7 @@ pub mod page;
 pub mod paint;
 pub mod polite;
 pub mod run;
+pub mod scenario_live;
 pub mod select;
 pub mod status;
 pub mod term;

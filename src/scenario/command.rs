@@ -1,6 +1,6 @@
 //! `/scenario ...`: parsing, execution (blocking, run off the UI task via
-//! `spawn_blocking`), the synthesized mentor turns, and the `Slot` that pauses
-//! this process's runs when the session ends.
+//! `spawn_blocking`) and the synthesized mentor turns. The session's `Slot`
+//! (which pauses this process's runs on exit) lives in `slot.rs`.
 //!
 //! Conventions copied from `/game`: slash lines never reach the model; notices
 //! are shell-only; at most one synthesized `[SCENARIO ...]` turn per command
@@ -397,14 +397,17 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
                 resume_notice(&pkg.title, woke),
                 window_notice(&SystemLauncher, &req),
             ];
-            Ok(Reply {
-                notices,
-                turn: Some(resume_turn(
+            // The mentor turn says the services restarted: only true when we woke them.
+            let turn = if woke {
+                Some(resume_turn(
                     pkg,
                     &pkg.instruction()?,
                     rec.last_check.as_deref(),
-                )),
-            })
+                ))
+            } else {
+                None
+            };
+            Ok(Reply { notices, turn })
         }
         ScenarioCmd::Check => {
             let mut rec = own_active(&store, ctx.pid)?;

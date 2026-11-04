@@ -200,6 +200,8 @@ mod tests {
         for (name, src) in [
             ("tui/run.rs", include_str!("tui/run.rs")),
             ("tui/ask.rs", include_str!("tui/ask.rs")),
+            ("tui/scenario_live.rs", include_str!("tui/scenario_live.rs")),
+            ("scenario/slot.rs", include_str!("scenario/slot.rs")),
             ("plain.rs", include_str!("plain.rs")),
         ] {
             let prod = src.split("#[cfg(test)]").next().unwrap();

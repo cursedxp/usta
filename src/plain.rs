@@ -295,18 +295,17 @@ pub(crate) async fn run_plain_loop(
                     if line.eq_ignore_ascii_case("/quit") {
                         break;
                     }
-                    // /game: toggle persists to USER.md (shell-managed). Status is a local
-                    // notice that never reaches the LLM. On/Off flip the pref + inject a
-                    // mode-switch turn (swapped below) that flows through the normal ask so
-                    // Usta applies the TEACHING.md Gamification rules from here on — same
-                    // swap-and-fall-through shape as /exam.
+                    // /scenario: shell-only notices; start, resume and a passing check also yield one turn, swapped in below.
                     let scenario_turn = match crate::scenario::command::parse(&line) {
                         None => None,
                         Some(cmd) => {
                             if let Some(b) = crate::scenario::command::busy_note(&cmd) {
                                 ui::notice(b);
                             }
-                            let reply = scn.handle(cmd).await;
+                            let reply = match scn.handle_until_shutdown(cmd).await {
+                                Some(r) => r,
+                                None => break,
+                            };
                             for n in &reply.notices {
                                 ui::notice(n);
                             }
@@ -319,6 +318,11 @@ pub(crate) async fn run_plain_loop(
                             }
                         }
                     };
+                    // /game: toggle persists to USER.md (shell-managed). Status is a local
+                    // notice that never reaches the LLM. On/Off flip the pref + inject a
+                    // mode-switch turn (swapped below) that flows through the normal ask so
+                    // Usta applies the TEACHING.md Gamification rules from here on — same
+                    // swap-and-fall-through shape as /exam.
                     let game_cmd = parse_game_command(&line);
                     if let Some(cmd) = &game_cmd {
                         match cmd {

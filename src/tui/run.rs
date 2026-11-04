@@ -304,7 +304,10 @@ pub async fn run(
                                 Some(cmd) => {
                                     crate::tui::page::page_user_echo(&mut tui, &line)?;
                                     if let Some(b) = crate::scenario::command::busy_note(&cmd) { crate::tui::page::page_notice(&mut tui, b)?; }
-                                    let reply = scn.handle(cmd).await;
+                                    let Some(reply) = crate::tui::scenario_live::run_live(&mut tui, &mut editor, &mut events, &scn, cmd, last_tokens, window).await? else {
+                                        if crate::shutdown::is_requested() { break; }
+                                        continue;
+                                    };
                                     for n in &reply.notices { crate::tui::page::page_notice(&mut tui, n)?; }
                                     match reply.turn { Some(t) => Some(t), None => continue }
                                 }

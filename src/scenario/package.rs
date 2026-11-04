@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 /// Presentation layer over the core. Task, check and difficulty never change with it.
@@ -50,8 +50,7 @@ fn d_timeout() -> u32 {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct EnvSpec {
     /// Which environment runs the scenario. Step 1 knows only "container".
-    /// Schema field, only checked by `lint` (tests).
-    #[allow(dead_code)]
+    /// Checked at load: only "container" is supported.
     pub kind: String,
     /// Directory (relative to the package) used as the image build context.
     #[serde(default = "d_context")]
@@ -72,8 +71,7 @@ pub(crate) struct EnvSpec {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CheckSpec {
-    /// Schema field, not read by any code.
-    #[allow(dead_code)]
+    /// Checked at load: only "script" is supported.
     pub kind: String,
     /// File name under the package's `tests/` directory.
     pub script: String,
@@ -156,6 +154,20 @@ impl Package {
             .with_context(|| format!("cannot read {}", file.display()))?;
         let mut p: Package =
             toml::from_str(&text).with_context(|| format!("bad {}", file.display()))?;
+        if p.environment.kind != "container" {
+            bail!(
+                "{}: environment kind '{}' is not supported (only 'container')",
+                file.display(),
+                p.environment.kind
+            );
+        }
+        if p.check.kind != "script" {
+            bail!(
+                "{}: check kind '{}' is not supported (only 'script')",
+                file.display(),
+                p.check.kind
+            );
+        }
         p.dir = dir.to_path_buf();
         Ok(p)
     }
@@ -328,6 +340,24 @@ script = "check.sh"
         )
         .unwrap();
         d
+    }
+
+    #[test]
+    fn load_rejects_unsupported_environment_and_check_kinds() {
+        for (from, to, needle) in [
+            ("kind = \"container\"", "kind = \"vm\"", "environment kind"),
+            ("kind = \"script\"", "kind = \"manual\"", "check kind"),
+        ] {
+            let root = tmp("kinds");
+            let d = write_pkg(&root);
+            std::fs::write(d.join("task.toml"), TASK.replace(from, to)).unwrap();
+            let err = format!("{:#}", Package::load(&d).unwrap_err());
+            assert!(
+                err.contains(needle) && err.contains("not supported"),
+                "{err}"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 
     #[test]
