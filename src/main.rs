@@ -25,6 +25,7 @@ mod migrate;
 mod plain;
 mod progress;
 mod reset;
+mod scenario;
 mod session;
 mod setup;
 mod shutdown;
