@@ -72,6 +72,11 @@ impl Store {
         self.root.join("runs").join(format!("{id}.toml"))
     }
 
+    /// True when a run file exists for `id`, readable or not.
+    pub fn has_file(&self, id: &str) -> bool {
+        self.run_path(id).is_file()
+    }
+
     pub fn save(&self, rec: &RunRecord) -> Result<()> {
         write_atomic(&self.run_path(&rec.run_id), &toml::to_string(rec)?)
     }

@@ -13,6 +13,7 @@ pub(crate) mod library;
 pub(crate) mod package;
 pub(crate) mod select;
 pub(crate) mod store;
+pub(crate) mod sweep;
 pub(crate) mod terminal;
 
 #[cfg(test)]

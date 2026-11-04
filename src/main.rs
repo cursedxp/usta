@@ -107,6 +107,9 @@ async fn main() -> Result<()> {
         ui::notice(".usta/ set up");
     }
 
+    // Resolve scenario leftovers (finished tasks' containers, crash survivors) before any UI.
+    scenario::sweep::startup(&project_root, &today());
+
     // File watcher — spawned ONCE (starts a thread), then passed by (&mut) into
     // the running path. Input thread + debounce state are path-specific:
     // the plain path uses rustyline, the TUI path uses crossterm EventStream.
