@@ -38,3 +38,36 @@ pub(crate) mod validate;
 mod docker_tests;
 #[cfg(test)]
 mod flow_tests;
+
+#[cfg(test)]
+mod pins {
+    /// The hard rule, in code: a generated script never runs on the host, so no
+    /// scenario module spawns anything except the docker seam and the window launcher.
+    #[test]
+    fn only_the_docker_seam_and_the_launcher_spawn_processes() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/scenario");
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if matches!(
+                name.as_str(),
+                "docker.rs" | "terminal.rs" | "docker_tests.rs" | "flow_tests.rs"
+            ) {
+                continue;
+            }
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            let prod = text.split("#[cfg(test)]").next().unwrap();
+            for word in ["Command::new", "std::process::Command", "process::Command"] {
+                assert!(!prod.contains(word), "{name} spawns a process");
+            }
+        }
+    }
+
+    /// `access` is written into the launcher file, so only a container run may have one.
+    #[test]
+    fn only_the_container_environment_builds_an_access_line() {
+        for src in [include_str!("folder.rs"), include_str!("talk.rs")] {
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            assert!(prod.contains("access: String::new()"));
+        }
+    }
+}

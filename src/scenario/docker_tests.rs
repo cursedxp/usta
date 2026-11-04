@@ -6,8 +6,12 @@
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{Docker, RealDocker};
 use crate::scenario::env::{CheckOutcome, Environment};
+use crate::scenario::folder::FolderEnv;
 use crate::scenario::library;
+use crate::scenario::model::NoModel;
 use crate::scenario::package::tests::tmp;
+use crate::scenario::package::Package;
+use crate::scenario::validate::{prove_script, Proof};
 
 const TAG: &str = "cert0000";
 
@@ -16,6 +20,15 @@ struct Cleanup(String);
 impl Drop for Cleanup {
     fn drop(&mut self) {
         let _ = RealDocker.run(&["rm", "-f", &self.0]);
+    }
+}
+
+/// Removes a test image, and the build's temporary tag, even when an assertion panics.
+struct ImageCleanup(String);
+impl Drop for ImageCleanup {
+    fn drop(&mut self) {
+        let _ = RealDocker.run(&["rmi", "-f", &self.0]);
+        let _ = RealDocker.run(&["rmi", "-f", &format!("{}-bld", self.0)]);
     }
 }
 
@@ -118,4 +131,114 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
     let gone = d.run(&["inspect", &name]).unwrap();
     assert!(!gone.ok(), "clean must remove the container");
     let _ = std::fs::remove_dir_all(global);
+}
+
+/// A generated package on disk, as staging would hold it.
+fn generated_container(root: &std::path::Path) -> Package {
+    let d = root.join("gen-cert-1");
+    for (f, c) in [
+        ("task.toml", "id = \"gen-cert-1\"\ntopic = \"cert\"\ntitle = \"T\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"container\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n"),
+        ("instruction.md", "Make /root/done exist.\n"),
+        ("tone/adventure.md", "## open\nGo.\n\n## close\nDone.\n"),
+        ("environment/Dockerfile", "FROM debian:12-slim\nRUN mkdir -p /opt/x\nCOPY note.txt /opt/x/\nWORKDIR /root\nENV MODE=fast\n"),
+        ("environment/note.txt", "hello\n"),
+        ("solution/solve.sh", "touch /root/done\n"),
+        ("tests/check.sh", "[ -f /root/done ] || { echo not yet; exit 1; }\n[ \"$(cat /opt/x/note.txt)\" = hello ] || exit 1\nexit 0\n"),
+    ] {
+        std::fs::create_dir_all(d.join(f).parent().unwrap()).unwrap();
+        std::fs::write(d.join(f), c).unwrap();
+    }
+    Package::load(&d).unwrap()
+}
+
+#[test]
+#[ignore = "needs Docker"]
+fn a_generated_recipe_builds_inside_limits_and_is_certified() {
+    let root = tmp("cert_gen");
+    let pkg = generated_container(&root);
+    assert_eq!(pkg.lint(), Vec::<String>::new());
+    let d = RealDocker;
+    let _guard = Cleanup(format!("usta-{TAG}-cert-gen"));
+    let _image = ImageCleanup(ContainerEnv::image(&pkg));
+    let mut env = ContainerEnv {
+        docker: &d,
+        project_tag: TAG.into(),
+    };
+    assert_eq!(
+        prove_script(&mut env, &pkg, "cert-gen").unwrap(),
+        Proof::Passed
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+#[ignore = "needs Docker"]
+fn a_recipe_cannot_exceed_the_build_memory() {
+    let root = tmp("cert_mem");
+    let pkg = generated_container(&root);
+    std::fs::write(
+        pkg.dir.join("environment/Dockerfile"),
+        "FROM debian:12-slim\nRUN cat /proc/self/cgroup >/dev/null; v=$(cat /sys/fs/cgroup/memory.max); [ \"$v\" = 1073741824 ]\n",
+    )
+    .unwrap();
+    let _image = ImageCleanup(ContainerEnv::image(&pkg));
+    crate::scenario::limited_build::build(&RealDocker, &pkg, &ContainerEnv::image(&pkg), TAG)
+        .unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+#[ignore = "needs Docker"]
+fn a_task_container_runs_under_the_file_size_limit_for_every_exec() {
+    let root = tmp("cert_ulimit");
+    let pkg = generated_container(&root);
+    let d = RealDocker;
+    let _guard = Cleanup(format!("usta-{TAG}-cert-ul"));
+    let _image = ImageCleanup(ContainerEnv::image(&pkg));
+    let mut env = ContainerEnv {
+        docker: &d,
+        project_tag: TAG.into(),
+    };
+    let h = env.prepare(&pkg, "cert-ul").unwrap();
+    let out = d
+        .run(&["exec", &h.reference, "sh", "-c", "ulimit -f"])
+        .unwrap();
+    let v = out.stdout.trim();
+    assert!(
+        v != "unlimited" && v.parse::<u64>().is_ok_and(|n| n > 0),
+        "ulimit -f under exec: {v}"
+    );
+    env.clean(&h).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+#[ignore = "needs Docker"]
+fn a_folder_script_check_cannot_write_to_the_task_and_has_no_network() {
+    let root = tmp("cert_folder");
+    let d = root.join("gen-cert-2");
+    for (f, c) in [
+        ("task.toml", "id = \"gen-cert-2\"\ntopic = \"cert\"\ntitle = \"T\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"folder\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n"),
+        ("instruction.md", "Write plan.md.\n"),
+        ("tone/adventure.md", "## open\nGo.\n\n## close\nDone.\n"),
+        ("environment/files/brief.md", "Brief.\n"),
+        ("solution/files/plan.md", "Plan.\n"),
+        ("tests/check.sh", "if touch /task/x 2>/dev/null; then echo wrote; exit 2; fi\nif python3 -c 'import socket; socket.create_connection((\"1.1.1.1\", 53), 3)' 2>/dev/null; then echo online; exit 2; fi\n[ -f /task/plan.md ] || { echo plan.md missing; exit 1; }\nexit 0\n"),
+    ] {
+        std::fs::create_dir_all(d.join(f).parent().unwrap()).unwrap();
+        std::fs::write(d.join(f), c).unwrap();
+    }
+    let pkg = Package::load(&d).unwrap();
+    let docker = RealDocker;
+    let mut env = FolderEnv {
+        docker: &docker,
+        project_tag: TAG.into(),
+        tasks: root.join("tasks"),
+        model: &NoModel,
+    };
+    assert_eq!(
+        prove_script(&mut env, &pkg, "cert-folder").unwrap(),
+        Proof::Passed
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
