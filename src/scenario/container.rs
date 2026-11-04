@@ -91,7 +91,7 @@ impl ContainerEnv<'_> {
             .unwrap_or(false)
     }
 
-    fn is_running(&self, name: &str) -> bool {
+    pub fn is_running(&self, name: &str) -> bool {
         self.docker
             .run(&["inspect", "-f", "{{.State.Running}}", name])
             .map(|o| o.ok() && o.stdout.trim() == "true")

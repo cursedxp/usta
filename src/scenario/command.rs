@@ -8,7 +8,7 @@
 //! never container, image or Docker (install guidance and the no-window
 //! fallback are the sanctioned exceptions, in `docker.rs` and `terminal.rs`).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
 
@@ -90,7 +90,7 @@ pub(crate) struct Reply {
 }
 
 impl Reply {
-    fn note(s: impl Into<String>) -> Reply {
+    pub(crate) fn note(s: impl Into<String>) -> Reply {
         Reply {
             notices: vec![s.into()],
             turn: None,
@@ -383,17 +383,18 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
             if let Some(e) = server_gone_error(&env, &rec) {
                 return Err(e);
             }
-            engine::resume(&mut env, &store, pkg, &mut rec, &tick)?;
+            // A closed window leaves an own active run with a healthy server: only reopen it.
+            let woke = !already_running(&env, &rec);
+            if woke {
+                engine::resume(&mut env, &store, pkg, &mut rec, &tick)?;
+            }
             let req = WindowReq {
                 command_line: &rec.access,
                 run_id: &rec.run_id,
                 scratch: &scratch,
             };
             let notices = vec![
-                format!(
-                    "Resumed: {}. Your files are as you left them; its programs were restarted.",
-                    pkg.title
-                ),
+                resume_notice(&pkg.title, woke),
                 window_notice(&SystemLauncher, &req),
             ];
             Ok(Reply {
@@ -477,6 +478,19 @@ fn own_active(store: &Store, pid: u32) -> Result<RunRecord> {
         .ok_or_else(|| anyhow!("no active task; use /scenario start or /scenario resume"))
 }
 
+/// An own active run whose server is still running needs no wake-up.
+fn already_running(env: &ContainerEnv, rec: &RunRecord) -> bool {
+    rec.state == RunState::Active && env.is_running(&rec.reference)
+}
+
+fn resume_notice(title: &str, woke: bool) -> String {
+    if woke {
+        format!("Resumed: {title}. Your files are as you left them; its programs were restarted.")
+    } else {
+        format!("Back in: {title}. Your task is still running; opened a new terminal window.")
+    }
+}
+
 /// Resumable = paused, or active and owned by this process (its server may have
 /// stopped mid-session; `engine::resume` handles both).
 fn pick_resumable(store: &Store, sel: Option<&str>, topic: &str, pid: u32) -> Result<RunRecord> {
@@ -489,16 +503,18 @@ fn pick_resumable(store: &Store, sel: Option<&str>, topic: &str, pid: u32) -> Re
                     || (r.state == RunState::Active && r.owner_pid == pid))
         })
         .collect();
-    match sel {
+    Ok(match sel {
         Some(id) => paused
             .into_iter()
             .find(|r| r.run_id == id)
-            .ok_or_else(|| anyhow!("no task '{id}' to resume; see /scenario")),
+            .ok_or_else(|| anyhow!("no task '{id}' to resume; see /scenario"))?,
         None => paused
-            .into_iter()
-            .last()
-            .ok_or_else(|| anyhow!("nothing to resume; see /scenario")),
-    }
+            .iter()
+            .rfind(|r| r.state == RunState::Paused)
+            .or(paused.last())
+            .cloned()
+            .ok_or_else(|| anyhow!("nothing to resume; see /scenario"))?,
+    })
 }
 
 /// Unfinished = paused, or active and owned by this process. Never finished, dropped, another topic's or another Usta's.
@@ -533,59 +549,6 @@ pub(crate) fn pick_unfinished(
                     .join(" · ")
             ),
         },
-    }
-}
-
-/// Holds the session's identity; pauses runs this process owns when dropped
-/// (normal close, `?` error, unwind). A hard kill is handled by the startup sweep.
-pub(crate) struct Slot {
-    ctx: Ctx,
-}
-
-impl Slot {
-    pub fn new(global: &Path, project_root: &Path, topic: &str) -> Slot {
-        Slot {
-            ctx: Ctx {
-                global: global.to_path_buf(),
-                project_root: project_root.to_path_buf(),
-                topic: topic.to_string(),
-                pid: std::process::id(),
-            },
-        }
-    }
-
-    pub async fn handle(&self, cmd: ScenarioCmd) -> Reply {
-        let ctx = self.ctx.clone();
-        tokio::task::spawn_blocking(move || execute(&ctx, cmd))
-            .await
-            .unwrap_or_else(|e| Reply::note(format!("scenario: internal error: {e}")))
-    }
-}
-
-impl Drop for Slot {
-    fn drop(&mut self) {
-        let store = Store::new(&self.ctx.project_root);
-        if !store.exists() {
-            return;
-        }
-        let docker = RealDocker;
-        let mut env = ContainerEnv {
-            docker: &docker,
-            project_tag: project_tag(&self.ctx.project_root),
-        };
-        let today = crate::lifecycle::today();
-        let alive: &dyn Fn(u32) -> bool = &crate::lock::pid_alive;
-        let tick = Tick {
-            pid: self.ctx.pid,
-            alive,
-            stamp: "",
-            today: &today,
-        };
-        for mut rec in store.all() {
-            if rec.state == RunState::Active && rec.owner_pid == self.ctx.pid {
-                let _ = engine::pause(&mut env, &store, &mut rec, &tick);
-            }
-        }
     }
 }
 
@@ -971,5 +934,43 @@ mod tests {
         assert!(log.contains("RAW-TEXT"));
         let _ = std::fs::remove_dir_all(g);
         let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn bare_resume_prefers_the_paused_run_over_an_own_active_one() {
+        let p = tmp("cmd_pick_pref");
+        let store = Store::new(&p);
+        store.save(&rec("p-1", RunState::Paused, 0)).unwrap();
+        store.save(&rec("z-2", RunState::Active, 7)).unwrap();
+        assert_eq!(
+            pick_resumable(&store, None, "linux", 7).unwrap().run_id,
+            "p-1"
+        );
+        assert_eq!(
+            pick_resumable(&store, Some("z-2"), "linux", 7)
+                .unwrap()
+                .run_id,
+            "z-2"
+        );
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn an_active_run_with_a_running_server_is_not_woken_again() {
+        use crate::scenario::docker::fake::{ok, FakeDocker};
+        let mut r = rec("a-1", RunState::Active, 7);
+        r.reference = "usta-x-a-1".into();
+        let on = FakeDocker::new(|_| ok("true"));
+        let off = FakeDocker::new(|_| ok("false"));
+        let env = |d| ContainerEnv {
+            docker: d,
+            project_tag: "x".into(),
+        };
+        assert!(already_running(&env(&on), &r));
+        assert!(!already_running(&env(&off), &r));
+        r.state = RunState::Paused;
+        assert!(!already_running(&env(&on), &r));
+        assert!(!resume_notice("T", false).contains("restarted"));
+        assert!(resume_notice("T", true).contains("restarted"));
     }
 }
