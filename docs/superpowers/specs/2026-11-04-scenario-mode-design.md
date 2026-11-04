@@ -193,7 +193,7 @@ Hand-written packages are examples, not the product. A person can ask for any su
 
 - `/scenario start` in any topic generates a scenario when no suitable package is left. No topic ever answers "no tasks".
 - The model receives the topic, the curriculum map, the learner's level, the world ledger and the finished scenarios. It returns a package in the fixed format and picks the environment using the three questions above.
-- Script-checked packages pass the validation above before the learner sees them. Rubric-checked packages pass the rubric check. A failure goes back to the model for at most 3 rounds, then Usta tells the learner plainly and offers a conversation-only scenario on the same skill.
+- Script-checked packages pass the validation above before the learner sees them. Rubric-checked packages pass the rubric check. A failure goes back to the model for at most 3 rounds, then Usta tells the learner plainly and starts a conversation-only scenario on the same skill.
 - Passing packages enter a local library and are reused, so generation is paid for once.
 - Without Docker, Usta picks an environment that needs none and says so once. A subject that truly needs a running system gets install guidance.
 
