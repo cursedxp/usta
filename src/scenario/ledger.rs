@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::scenario::library::topic_matches;
 use crate::scenario::package::{Package, StorySpec};
 use crate::scenario::store::{write_atomic, RunRecord, RunState};
 
@@ -168,7 +169,7 @@ pub(crate) fn reconcile(
     let mut changed = false;
     for r in records
         .iter()
-        .filter(|r| r.state == RunState::Finished && r.topic == topic)
+        .filter(|r| r.state == RunState::Finished && topic_matches(&r.topic, topic))
     {
         if let Some(p) = pkgs.iter().find(|p| p.id == r.package) {
             changed |= ledger.apply_finished(&p.story, &r.run_id, today);

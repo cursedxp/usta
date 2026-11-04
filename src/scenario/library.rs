@@ -89,6 +89,16 @@ pub(crate) fn sync(global: &Path) -> Result<PathBuf> {
     Ok(root)
 }
 
+/// A session on `topic` gets packages of that topic or of the broader one it
+/// extends: `linux-security` finds `linux`. Run records carry the package's
+/// topic, so they match the same way.
+pub(crate) fn topic_matches(pkg_topic: &str, topic: &str) -> bool {
+    topic == pkg_topic
+        || topic
+            .strip_prefix(pkg_topic)
+            .is_some_and(|rest| rest.starts_with('-'))
+}
+
 /// Packages of `topic`, sorted by id. A directory that does not load is skipped.
 pub(crate) fn load_all(global: &Path, topic: &str) -> Result<Vec<Package>> {
     let Ok(dir) = std::fs::read_dir(library_root(global)) else {
@@ -98,7 +108,7 @@ pub(crate) fn load_all(global: &Path, topic: &str) -> Result<Vec<Package>> {
         .flatten()
         .filter(|e| e.path().is_dir())
         .filter_map(|e| Package::load(&e.path()).ok())
-        .filter(|p| p.topic == topic)
+        .filter(|p| topic_matches(&p.topic, topic))
         .collect();
     pkgs.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(pkgs)
@@ -146,6 +156,18 @@ mod tests {
         sorted.sort();
         assert_eq!(ids, sorted);
         assert!(load_all(&g, "rust").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn a_narrower_topic_finds_the_broader_packages_and_only_those() {
+        let g = tmp("lib_prefix");
+        sync(&g).unwrap();
+        let linux = load_all(&g, "linux").unwrap().len();
+        assert_eq!(load_all(&g, "linux-security").unwrap().len(), linux);
+        assert!(load_all(&g, "linuxish").unwrap().is_empty());
+        assert!(load_all(&g, "lin").unwrap().is_empty());
+        assert!(!topic_matches("linux-security", "linux"));
         let _ = std::fs::remove_dir_all(g);
     }
 
