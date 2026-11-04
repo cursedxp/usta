@@ -108,9 +108,14 @@ pub(crate) fn plan(
 
 /// Run once at startup, before the session UI. Record-only work first (needs
 /// no Docker, which Usta itself usually starts later), then the Docker side.
+/// This is the only entry point that may ask the learner a question.
 pub(crate) fn startup(project_root: &Path, today: &str) {
     drop_foreign(project_root, today);
-    sweep_docker(project_root, today);
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let ask = |prompt: &str| crate::setup::confirm(prompt, &["y", "yes"]).unwrap_or(false);
+    let asker: Option<&dyn Fn(&str) -> bool> = if interactive { Some(&ask) } else { None };
+    docker_sweep(project_root, today, asker);
 }
 
 /// Record-only sweep, no Docker: unfinished records from a moved project are
@@ -129,29 +134,36 @@ pub(crate) fn drop_foreign(project_root: &Path, today: &str) {
     }
 }
 
-/// Docker-side sweep. Call right after `ensure_ready` in the start and resume
-/// paths too: it parks an own `Active` record whose owner is dead so it cannot
-/// block starting. No Docker call unless this project ever recorded a run;
-/// failures are warnings, never fatal.
+/// Docker-side sweep for use INSIDE a session (call right after `ensure_ready`
+/// in the start and resume paths). It never asks and never reads stdin: a stale
+/// task is skipped and asked about at the next launch. It parks an own `Active`
+/// record whose owner is dead, even when the container is gone, so that record
+/// cannot block starting. Failures are warnings, never fatal.
 pub(crate) fn sweep_docker(project_root: &Path, today: &str) {
-    let store = Store::new(project_root);
-    if !store.exists() {
-        return;
-    }
+    docker_sweep(project_root, today, None);
+}
+
+fn docker_sweep(project_root: &Path, today: &str, ask: Option<&dyn Fn(&str) -> bool>) {
     let docker = RealDocker;
-    if available(&docker).is_err() {
+    if !Store::new(project_root).exists() || available(&docker).is_err() {
         return;
     }
+    sweep_with(project_root, today, &docker, &crate::lock::pid_alive, ask);
+}
+
+fn sweep_with(
+    project_root: &Path,
+    today: &str,
+    docker: &dyn Docker,
+    alive: &dyn Fn(u32) -> bool,
+    ask: Option<&dyn Fn(&str) -> bool>,
+) {
+    let store = Store::new(project_root);
     let tag = project_tag(project_root);
-    let Ok(containers) = list_labeled(&docker, &tag) else {
+    let Ok(containers) = list_labeled(docker, &tag) else {
         return;
     };
-    let alive: &dyn Fn(u32) -> bool = &crate::lock::pid_alive;
-    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin())
-        && std::io::IsTerminal::is_terminal(&std::io::stdout());
-    let ask = |prompt: &str| crate::setup::confirm(prompt, &["y", "yes"]).unwrap_or(false);
-    let asker: Option<&dyn Fn(&str) -> bool> = if interactive { Some(&ask) } else { None };
-    execute(&store, &docker, &tag, &containers, alive, today, asker);
+    execute(&store, docker, &tag, &containers, alive, today, ask);
 }
 
 fn mark_foreign(store: &Store, run_id: &str, package: &str, today: &str) {
@@ -206,13 +218,19 @@ pub(crate) fn execute(
                 }
                 if has_unreadable_record(store, run_id) {
                     // Keep the work, but a running one must not stay running.
-                    if containers
+                    let running = containers
                         .iter()
-                        .any(|c| c.name == name && c.state == "running")
-                    {
-                        let _ = docker.run(&["stop", "-t", "2", &name]);
-                    }
-                    ui::warn("a practice task has an unreadable record; stopped it, kept its work");
+                        .any(|c| c.name == name && c.state == "running");
+                    let stopped = running
+                        && docker
+                            .run(&["stop", "-t", "2", &name])
+                            .map(|o| o.ok())
+                            .unwrap_or(false);
+                    ui::warn(if stopped {
+                        "a practice task has an unreadable record; stopped it, kept its work"
+                    } else {
+                        "a practice task has an unreadable record; left it untouched"
+                    });
                     continue;
                 }
                 let _ = docker.run(&["rm", "-f", &name]);
@@ -534,6 +552,33 @@ mod tests {
             None,
         );
         assert_eq!(d2.calls(), vec!["rm -f usta-aaaa1111-ghost".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_in_session_sweep_never_prompts_for_a_stale_task() {
+        let root = tmp("sweep_no_prompt");
+        let store = Store::new(&root);
+        let tag = project_tag(&root);
+        let mut r = rec("old", RunState::Paused, 0, "2026-10-01");
+        r.reference = format!("usta-{tag}-old");
+        store.save(&r).unwrap();
+        let d = fake();
+        sweep_with(&root, TODAY, &d, DEAD, None);
+        assert_eq!(store.load("old").unwrap().state, RunState::Paused);
+        assert!(
+            d.calls().iter().all(|c| c.starts_with("ps")),
+            "{:?}",
+            d.calls()
+        );
+        // Contrast: with an asker the same record does prompt exactly once.
+        let asked = std::cell::Cell::new(0);
+        let counting = |_: &str| {
+            asked.set(asked.get() + 1);
+            false
+        };
+        sweep_with(&root, TODAY, &d, DEAD, Some(&counting));
+        assert_eq!(asked.get(), 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
