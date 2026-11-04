@@ -59,7 +59,12 @@ pub(crate) async fn run_live(
         tokio::select! {
             biased;
             _ = crate::shutdown::requested() => return Ok(None),
-            r = &mut fut => return Ok(Some(r)),
+            r = &mut fut => {
+                while let Ok(line) = rx.try_recv() {
+                    crate::tui::page::page_notice(tui, &line)?;
+                }
+                return Ok(Some(r));
+            }
             Some(line) = rx.recv() => { crate::tui::page::page_notice(tui, &line)?; }
             Some(Ok(ev)) = events.next() => {
                 if crate::tui::page::handle_nav(tui, &ev) { continue; }

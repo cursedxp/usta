@@ -16,9 +16,10 @@ use crate::scenario::store::{project_tag, RunState, Store};
 /// (normal close, `?` error, unwind). A hard kill is handled by the startup sweep.
 pub(crate) struct Slot {
     ctx: Ctx,
-    /// True while a command's blocking work runs. It cannot be cancelled: a
-    /// shutdown signal only ends the wait, the work finishes on its own, and the
-    /// pause at session end must not race it.
+    /// True while a command's blocking work runs. Only generation can be
+    /// cancelled (`cancel`), and that is also an early return of the same work;
+    /// a shutdown signal only ends the wait, the work finishes on its own, and
+    /// the pause at session end must not race it.
     busy: Arc<AtomicBool>,
     model: Arc<dyn Model>,
     cancel: Arc<Cancel>,
@@ -64,16 +65,6 @@ impl Slot {
             _ = crate::shutdown::requested() => None,
             r = self.handle_with(cmd, said, progress) => Some(r),
         }
-    }
-
-    #[cfg(test)]
-    pub fn cancel_for_test(&self) -> Arc<Cancel> {
-        self.cancel.clone()
-    }
-
-    #[cfg(test)]
-    pub async fn handle(&self, cmd: ScenarioCmd) -> Reply {
-        self.handle_with(cmd, Vec::new(), Arc::new(|_| {})).await
     }
 
     pub async fn handle_with(
@@ -149,6 +140,17 @@ impl Drop for Slot {
 }
 
 #[cfg(test)]
+impl Slot {
+    pub fn cancel_for_test(&self) -> Arc<Cancel> {
+        self.cancel.clone()
+    }
+
+    pub async fn handle(&self, cmd: ScenarioCmd) -> Reply {
+        self.handle_with(cmd, Vec::new(), Arc::new(|_| {})).await
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::scenario::model::{NoModel, Progress};
@@ -199,11 +201,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn progress_reaches_the_caller_while_a_command_runs() {
+    async fn handle_with_accepts_said_and_progress_and_still_runs_the_command() {
         let s = slot();
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let sink = seen.clone();
-        let progress: Progress = Arc::new(move |m: &str| sink.lock().unwrap().push(m.to_string()));
+        // Pins the signature only: `Usage` reports no stages. Flow tests assert real progress lines.
+        let progress: Progress = Arc::new(|_: &str| {});
         let r = s
             .handle_with(ScenarioCmd::Usage, Vec::new(), progress)
             .await;

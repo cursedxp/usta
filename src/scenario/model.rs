@@ -17,7 +17,7 @@ const CALL_LIMIT: Duration = Duration::from_secs(600);
 #[derive(Debug, Clone)]
 pub(crate) struct ModelText {
     pub text: String,
-    /// The reply hit the output budget, so it is cut off. Always false on the CLI, which fails instead.
+    /// The API reported the reply hit the output budget, so it is cut off. The CLI backend never sets it.
     pub truncated: bool,
 }
 
@@ -46,14 +46,19 @@ impl Model for BackendModel {
             .context("cannot start the model call")?;
         let history = [Message::user(prompt)];
         let call = backend.complete_with_limit(system, &history, CLOSING_MAX_TOKENS);
-        let reply = rt
-            .block_on(async { tokio::time::timeout(CALL_LIMIT, call).await })
-            .map_err(|_| {
-                anyhow!(
-                    "the model did not answer within {} minutes",
-                    CALL_LIMIT.as_secs() / 60
-                )
-            })??;
+        // A quit drops the call, which kills the `claude -p` child (kill_on_drop).
+        let reply = rt.block_on(async {
+            tokio::select! {
+                biased;
+                _ = crate::shutdown::requested() => Err(anyhow!("stopped: Usta is closing")),
+                r = tokio::time::timeout(CALL_LIMIT, call) => r
+                    .map_err(|_| anyhow!(
+                        "the model did not answer within {} minutes",
+                        CALL_LIMIT.as_secs() / 60
+                    ))
+                    .and_then(|r| r),
+            }
+        })?;
         Ok(ModelText {
             text: reply.text,
             truncated: reply.truncated,

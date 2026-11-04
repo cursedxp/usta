@@ -575,6 +575,29 @@ pub fn run_backend_wizard() -> Result<Backend> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn detached_drops_the_session_and_keeps_the_model_on_both_arms() {
+        let cli = Backend::Cli {
+            model: "sonnet".into(),
+            session_id: Some("s".into()),
+            bin: "claude".into(),
+        };
+        match cli.detached() {
+            Backend::Cli {
+                model, session_id, ..
+            } => assert!(model == "sonnet" && session_id.is_none()),
+            _ => panic!("arm changed"),
+        }
+        let api = Backend::Api {
+            client: anthropic::Client::new("k".into()),
+            model: "opus".into(),
+        };
+        match api.detached() {
+            Backend::Api { model, .. } => assert_eq!(model, "opus"),
+            _ => panic!("arm changed"),
+        }
+    }
+
     use super::*;
     use crate::image_attach::PastedImage;
 

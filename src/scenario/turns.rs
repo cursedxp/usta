@@ -9,6 +9,15 @@ const SAID_LIMIT: usize = 30;
 
 /// The conversation since the task opened or resumed, labelled, newest last. A
 /// compacted history may have lost the marker; then it is simply the latest lines.
+/// A user-role message the shell injected, not something the learner said.
+fn synthesized(text: &str) -> bool {
+    text.starts_with(crate::tokens::CHECKPOINT)
+        || text.starts_with("[SCENARIO")
+        || text.starts_with("[GAME MODE")
+        || text.starts_with("[EXAM MODE")
+        || crate::file_feedback::is_delivery_turn(text)
+}
+
 pub(crate) fn conversation(history: &[Message]) -> Vec<String> {
     let from = history
         .iter()
@@ -21,6 +30,7 @@ pub(crate) fn conversation(history: &[Message]) -> Vec<String> {
         .map_or(0, |i| i + 1);
     let lines: Vec<String> = history[from..]
         .iter()
+        .filter(|m| m.role == "assistant" || !synthesized(&m.text()))
         .map(|m| {
             format!(
                 "{}: {}",
@@ -113,5 +123,20 @@ mod tests {
         let c = conversation(&long);
         assert_eq!(c.len(), 30);
         assert_eq!(c.last().unwrap(), "learner: m39");
+    }
+
+    #[test]
+    fn synthesized_user_messages_are_not_the_learner_speaking() {
+        let h = vec![
+            Message::user("[SCENARIO START] x"),
+            Message::user(crate::tokens::CHECKPOINT),
+            Message::user("[Files changed]\nsrc/a.rs"),
+            Message::user("[File saved: a.rs]\nbody"),
+            Message::user("[GAME MODE ON] go"),
+            Message::user("[EXAM MODE — MOCK EXAM]\nx"),
+            Message::user("[SCENARIO DONE] y"),
+            Message::user("I think it is the port"),
+        ];
+        assert_eq!(conversation(&h), vec!["learner: I think it is the port"]);
     }
 }
