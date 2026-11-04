@@ -12,8 +12,21 @@ use crate::scenario::package::Package;
 /// Check scripts enter the container only here, at check time, and are removed right after.
 pub(crate) const CHECK_DIR: &str = "/opt/.usta-check";
 /// Reference solution location, certification only.
-#[cfg(test)]
+#[allow(dead_code)] // consumed by later steps
 pub(crate) const SOLUTION_DIR: &str = "/opt/.usta-solution";
+
+/// Bound on a generated setup, start or solution script.
+pub(crate) const SCRIPT_SECS: u32 = 300;
+/// Larger files fail with EFBIG in generated tasks; the only cap on disk use while one runs.
+pub(crate) const FILE_LIMIT: &str = "fsize=2147483648";
+
+fn exec_prefix<'a>(pkg: &Package, name: &'a str) -> Vec<&'a str> {
+    if pkg.is_generated() {
+        vec!["exec", "-u", "0", name]
+    } else {
+        vec!["exec", name]
+    }
+}
 
 pub(crate) struct ContainerEnv<'a> {
     pub docker: &'a dyn Docker,
@@ -29,7 +42,7 @@ impl ContainerEnv<'_> {
         format!("usta-scn-{}:v{}", pkg.id, pkg.version)
     }
 
-    fn must(&self, args: &[&str]) -> Result<Out> {
+    pub(crate) fn must(&self, args: &[&str]) -> Result<Out> {
         let o = self.docker.run(args)?;
         if o.ok() {
             Ok(o)
@@ -79,8 +92,33 @@ impl ContainerEnv<'_> {
         }
     }
 
-    fn run_script(&self, name: &str, path: &str) -> Result<()> {
-        self.must(&["exec", name, "sh", path]).map(|_| ())
+    fn run_script(&self, pkg: &Package, name: &str, path: &str) -> Result<()> {
+        let secs = SCRIPT_SECS.to_string();
+        let mut args = exec_prefix(pkg, name);
+        if pkg.is_generated() {
+            args.extend(["timeout", &secs]);
+        }
+        args.extend(["sh", path]);
+        self.must(&args).map(|_| ())
+    }
+
+    /// What a learner's window and every check need. `None` when all are there.
+    #[allow(dead_code)] // consumed by later steps
+    pub fn missing_tools(&self, name: &str) -> Option<String> {
+        let found = self
+            .docker
+            .run(&[
+                "exec",
+                name,
+                "sh",
+                "-c",
+                "command -v bash && command -v sleep && command -v timeout",
+            ])
+            .is_ok_and(|o| o.ok());
+        (!found).then(|| {
+            "the task needs bash, sleep and timeout inside; use a base image that has them"
+                .to_string()
+        })
     }
 
     /// True only when the runtime says the server does not exist ("No such", as
@@ -105,25 +143,59 @@ impl ContainerEnv<'_> {
     }
 
     /// Certification only (not one of the five operations): run the reference solution inside.
-    #[cfg(test)]
+    #[allow(dead_code)] // consumed by later steps
     pub fn apply_solution(&self, pkg: &Package, h: &EnvHandle) -> Result<()> {
         let src = format!("{}/.", pkg.dir.join("solution").display());
         let dest = format!("{}:{SOLUTION_DIR}", h.reference);
         self.must(&["cp", &src, &dest])?;
-        let run = self.run_script(&h.reference, &format!("{SOLUTION_DIR}/solve.sh"));
-        let _ = self
-            .docker
-            .run(&["exec", &h.reference, "rm", "-rf", SOLUTION_DIR]);
+        let run = self.run_script(pkg, &h.reference, &format!("{SOLUTION_DIR}/solve.sh"));
+        let mut rm = exec_prefix(pkg, &h.reference);
+        rm.extend(["rm", "-rf", SOLUTION_DIR]);
+        let _ = self.docker.run(&rm);
         run
+    }
+
+    /// Run the check script inside `name` and read its exit code.
+    pub fn run_check(&self, pkg: &Package, name: &str) -> Result<CheckOutcome> {
+        let src = format!("{}/.", pkg.dir.join("tests").display());
+        let dest = format!("{name}:{CHECK_DIR}");
+        self.must(&["cp", &src, &dest])?;
+        let script = format!("{CHECK_DIR}/{}", pkg.check.script);
+        let secs = pkg.check.timeout_secs.to_string();
+        let run = self
+            .docker
+            .run(&["exec", name, "timeout", &secs, "sh", &script]);
+        // Asked before cleanup so cleanup stays the last call; only needed on a plain failure.
+        let stopped = matches!(&run, Ok(o) if o.code == 1 && !self.is_running(name));
+        let _ = self.docker.run(&["exec", name, "rm", "-rf", CHECK_DIR]);
+        let o = run?;
+        Ok(match o.code {
+            0 => CheckOutcome::Pass,
+            124 => CheckOutcome::Fail {
+                output: format!("the check timed out after {secs}s"),
+            },
+            // The daemon reports its own errors as exit 1; a stopped task means this was one.
+            1 if stopped => {
+                return Err(internal(format!(
+                    "task stopped during the check: {}",
+                    o.text()
+                )))
+            }
+            1 => CheckOutcome::Fail {
+                output: tail(&o.text(), 20, 1500),
+            },
+            // Check scripts exit 0 or 1 only: anything else is a broken script, docker, a signal.
+            c => return Err(internal(format!("check run failed ({c}): {}", o.text()))),
+        })
     }
 
     fn start_and_setup(&self, pkg: &Package, name: &str) -> Result<()> {
         self.must(&["start", name])?;
         if let Some(s) = &pkg.environment.setup {
-            self.run_script(name, s)?;
+            self.run_script(pkg, name, s)?;
         }
         if let Some(s) = &pkg.environment.start {
-            self.run_script(name, s)?;
+            self.run_script(pkg, name, s)?;
         }
         Ok(())
     }
@@ -161,6 +233,16 @@ impl Environment for ContainerEnv<'_> {
         if !pkg.environment.network {
             args.extend(["--network", "none"]);
         }
+        if pkg.is_generated() {
+            args.extend([
+                "--security-opt",
+                "no-new-privileges",
+                "--ulimit",
+                FILE_LIMIT,
+                "--entrypoint",
+                "",
+            ]);
+        }
         args.extend([image.as_str(), "sleep", "infinity"]);
         self.must(&args)?;
         if let Err(e) = self.start_and_setup(pkg, &name) {
@@ -186,7 +268,7 @@ impl Environment for ContainerEnv<'_> {
             return Ok(None);
         };
         Ok(self
-            .run_script(&h.reference, s)
+            .run_script(pkg, &h.reference, s)
             .err()
             .map(|e| e.to_string()))
     }
@@ -196,38 +278,7 @@ impl Environment for ContainerEnv<'_> {
         if !self.running(&h.reference)? {
             bail!("the task is not running; use /scenario resume");
         }
-        let src = format!("{}/.", pkg.dir.join("tests").display());
-        let dest = format!("{}:{CHECK_DIR}", h.reference);
-        self.must(&["cp", &src, &dest])?;
-        let script = format!("{CHECK_DIR}/{}", pkg.check.script);
-        let secs = pkg.check.timeout_secs.to_string();
-        let run = self
-            .docker
-            .run(&["exec", &h.reference, "timeout", &secs, "sh", &script]);
-        // Asked before cleanup so cleanup stays the last call; only needed on a plain failure.
-        let stopped = matches!(&run, Ok(o) if o.code == 1 && !self.is_running(&h.reference));
-        let _ = self
-            .docker
-            .run(&["exec", &h.reference, "rm", "-rf", CHECK_DIR]);
-        let o = run?;
-        Ok(match o.code {
-            0 => CheckOutcome::Pass,
-            124 => CheckOutcome::Fail {
-                output: format!("the check timed out after {secs}s"),
-            },
-            // The daemon reports its own errors as exit 1; a stopped task means this was one.
-            1 if stopped => {
-                return Err(internal(format!(
-                    "task stopped during the check: {}",
-                    o.text()
-                )))
-            }
-            1 => CheckOutcome::Fail {
-                output: tail(&o.text(), 20, 1500),
-            },
-            // Check scripts exit 0 or 1 only: anything else is a broken script, docker, a signal.
-            c => return Err(internal(format!("check run failed ({c}): {}", o.text()))),
-        })
+        self.run_check(pkg, &h.reference)
     }
 
     fn clean(&mut self, h: &EnvHandle) -> Result<()> {
@@ -371,6 +422,55 @@ mod tests {
         assert!(idx("create") < idx("start usta-aaaa1111-demo-1"));
         assert!(idx("start usta-aaaa1111-demo-1") < idx("sh /usr/local/lib/usta/setup.sh"));
         assert!(idx("sh /usr/local/lib/usta/setup.sh") < idx("sh /usr/local/lib/usta/start.sh"));
+    }
+
+    #[test]
+    fn generated_tasks_get_extra_flags_and_bounded_root_scripts() {
+        let mut p = pkg();
+        p.id = "gen-x-1".into();
+        p.environment.setup = Some("/s.sh".into());
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("ps ") {
+                ok("")
+            } else {
+                ok("x")
+            }
+        });
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        env.prepare(&p, "r1").unwrap();
+        let calls = d.calls().join("\n");
+        assert!(
+            calls.contains("--security-opt no-new-privileges"),
+            "{calls}"
+        );
+        assert!(calls.contains("--ulimit fsize=2147483648"), "{calls}");
+        assert!(
+            calls.contains("--entrypoint  usta-scn-gen-x-1:v3 sleep infinity"),
+            "{calls}"
+        );
+        assert!(
+            calls.contains("exec -u 0 usta-aaaa1111-r1 timeout 300 sh /s.sh"),
+            "{calls}"
+        );
+    }
+
+    #[test]
+    fn a_missing_shell_tool_is_named() {
+        let d = FakeDocker::new(|_| fail(1, ""));
+        let env = ContainerEnv {
+            docker: &d,
+            project_tag: "t".into(),
+        };
+        assert!(env.missing_tools("n").unwrap().contains("bash"));
+        let d = FakeDocker::new(|_| ok("/bin/bash\n"));
+        let env = ContainerEnv {
+            docker: &d,
+            project_tag: "t".into(),
+        };
+        assert!(env.missing_tools("n").is_none());
     }
 
     #[test]

@@ -57,13 +57,29 @@ fn time_limit(args: &[&str]) -> Duration {
 /// it left behind holding the pipe open can use this up.
 const DRAIN: Duration = Duration::from_secs(1);
 
+/// A check or build can print without end, and this buffer is on the host.
+/// Only the tail is ever read, so only the tail is kept.
+const KEEP: usize = 1 << 20;
+
 /// Read a stream on its own thread so a full pipe never stalls the process.
 fn drain(mut stream: impl Read + Send + 'static) -> Receiver<Vec<u8>> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stream.read_to_end(&mut buf);
-        let _ = tx.send(buf);
+        let mut kept = Vec::new();
+        let mut chunk = [0u8; 65536];
+        while let Ok(n) = stream.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            kept.extend_from_slice(&chunk[..n]);
+            if kept.len() > 2 * KEEP {
+                kept.drain(..kept.len() - KEEP);
+            }
+        }
+        if kept.len() > KEEP {
+            kept.drain(..kept.len() - KEEP);
+        }
+        let _ = tx.send(kept);
     });
     rx
 }
@@ -533,6 +549,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(o.stdout.len(), 512 * 1024);
+    }
+
+    #[test]
+    fn a_flood_of_output_keeps_only_the_tail_in_memory() {
+        let o = sh(
+            "yes x | head -c 6000000; echo; echo the-end",
+            Duration::from_secs(20),
+        )
+        .unwrap();
+        assert!(o.stdout.len() <= KEEP, "{}", o.stdout.len());
+        assert!(o.stdout.trim_end().ends_with("the-end"));
     }
 
     #[test]
