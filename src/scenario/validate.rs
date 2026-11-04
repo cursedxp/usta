@@ -11,13 +11,13 @@ use serde::Deserialize;
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{probe, Docker, Runtime};
 use crate::scenario::engine::Tick;
-use crate::scenario::env::{CheckOutcome, EnvHandle, Environment, Internal, CONTAINER};
+use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, Internal, CONTAINER};
 use crate::scenario::folder::{copy_data, FolderEnv};
 use crate::scenario::lint::walk;
-use crate::scenario::model::{model_failed, Model};
+use crate::scenario::model::{model_failed, Model, ModelFailed};
 use crate::scenario::package::Package;
 use crate::scenario::prompt::review_system;
-use crate::scenario::rubric::{parse_json, read_work, vote};
+use crate::scenario::rubric::{panel, parse_json, read_work};
 use crate::scenario::store::{RunRecord, RunState, Store};
 
 #[derive(Debug, PartialEq)]
@@ -73,24 +73,47 @@ fn feedback(stage: &str, e: anyhow::Error) -> Result<Proof> {
     }
 }
 
+/// A check that cannot run is the package's doing (it stopped the task, or ate its own
+/// files), so its text goes to the model. It is never the plain "use /scenario resume"
+/// sentence: no learner run exists here to resume. Whether the runtime itself died is
+/// the prover's question, asked after a proof that did not pass.
+fn check_in_proof(env: &mut dyn Certify, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
+    env.check(pkg, h).map_err(|e| {
+        if e.downcast_ref::<Internal>().is_some() || e.downcast_ref::<ModelFailed>().is_some() {
+            e
+        } else {
+            internal("the task was not running when its check ran")
+        }
+    })
+}
+
 fn two_conditions(env: &mut dyn Certify, pkg: &Package, h: &EnvHandle) -> Result<Proof> {
     if let Some(p) = env.tools_problem(h) {
         return Ok(Proof::Problems(vec![p]));
     }
-    match env.check(pkg, h) {
-        Err(e) => return feedback("the check broke on a fresh task", e),
-        Ok(CheckOutcome::Pass) => {
-            return Ok(Proof::Problems(vec![
-                "the check already passes on a fresh task, so doing nothing would count as solved"
-                    .into(),
-            ]))
+    // Twice: a check that changes the task when it runs would pass the second time.
+    for n in 0..2 {
+        match check_in_proof(env, pkg, h) {
+            Err(e) => return feedback("the check broke on a fresh task", e),
+            Ok(CheckOutcome::Pass) if n == 0 => {
+                return Ok(Proof::Problems(vec![
+                    "the check already passes on a fresh task, so doing nothing would count as solved"
+                        .into(),
+                ]))
+            }
+            Ok(CheckOutcome::Pass) => {
+                return Ok(Proof::Problems(vec![
+                    "the check passes the second time it runs on a fresh task, so running it changes the task"
+                        .into(),
+                ]))
+            }
+            Ok(CheckOutcome::Fail { .. }) => {}
         }
-        Ok(CheckOutcome::Fail { .. }) => {}
     }
     if let Err(e) = env.apply_solution(pkg, h) {
         return feedback("the reference solution failed", e);
     }
-    match env.check(pkg, h) {
+    match check_in_proof(env, pkg, h) {
         Err(e) => feedback("the check broke after the reference solution", e),
         Ok(CheckOutcome::Pass) => Ok(Proof::Passed),
         Ok(CheckOutcome::Fail { output }) => Ok(Proof::Problems(vec![format!(
@@ -100,16 +123,22 @@ fn two_conditions(env: &mut dyn Certify, pkg: &Package, h: &EnvHandle) -> Result
 }
 
 pub(crate) fn prove_script(env: &mut dyn Certify, pkg: &Package, run_id: &str) -> Result<Proof> {
+    prove_and_clean(env, pkg, run_id).0
+}
+
+/// The proof, and whether everything it made is gone. `false`: `clean` failed, so a
+/// resource may remain and the caller must keep its record for the sweep.
+fn prove_and_clean(env: &mut dyn Certify, pkg: &Package, run_id: &str) -> (Result<Proof>, bool) {
     if let Some(p) = lint_first(pkg) {
-        return Ok(p);
+        return (Ok(p), true);
     }
     let h = match env.prepare(pkg, run_id) {
         Ok(h) => h,
-        Err(e) => return feedback("the task's environment did not build", e),
+        Err(e) => return (feedback("the task's environment did not build", e), true),
     };
     let result = two_conditions(env, pkg, &h);
-    let _ = env.clean(&h);
-    result
+    let cleaned = env.clean(&h).is_ok();
+    (result, cleaned)
 }
 
 #[derive(Deserialize)]
@@ -119,18 +148,24 @@ struct Review {
     problems: Vec<String>,
 }
 
+/// What the review model reads, at most this many characters.
+const MATERIAL_LIMIT: usize = 60_000;
+
 fn material(pkg: &Package) -> Result<String> {
     let mut out = format!("Task:\n{}\n", pkg.instruction()?);
     let files = pkg.dir.join("environment/files");
     if files.is_dir() {
-        let names: Vec<String> = walk(&files)
-            .map_err(anyhow::Error::msg)?
-            .iter()
-            .filter_map(|f| f.strip_prefix(&files).ok().map(|r| r.display().to_string()))
-            .collect();
-        match read_work(&files, &names)? {
-            Ok(text) => out.push_str(&format!("Files:\n{text}\n")),
-            Err(e) => out.push_str(&format!("Files could not be read: {e}\n")),
+        out.push_str("Files:\n");
+        for f in walk(&files).map_err(anyhow::Error::msg)? {
+            let Ok(rel) = f.strip_prefix(&files) else {
+                continue;
+            };
+            let name = rel.display().to_string();
+            // One file at a time: a file that is not text must not hide the others.
+            match read_work(&files, std::slice::from_ref(&name))? {
+                Ok(text) => out.push_str(&text),
+                Err(e) => out.push_str(&format!("=== {name} ===\n(not shown: {e})\n")),
+            }
         }
     }
     let rubric: Vec<String> = pkg
@@ -139,18 +174,47 @@ fn material(pkg: &Package) -> Result<String> {
         .iter()
         .map(|c| format!("- {}: {}", c.id, c.text))
         .collect();
-    Ok(format!("{out}Rubric:\n{}\n", rubric.join("\n")))
+    let rubric = format!("Rubric:\n{}\n", rubric.join("\n"));
+    // The rubric is what is judged, so the files give way first.
+    let room = MATERIAL_LIMIT.saturating_sub(rubric.chars().count());
+    if out.chars().count() > room {
+        out = out.chars().take(room).collect();
+        out.push_str("\n[cut: the rest of the files is not shown]\n");
+    }
+    Ok(format!("{out}{rubric}"))
 }
 
-fn reference_answer(pkg: &Package) -> Result<String> {
+/// The reference answer as text. Inner `Err`: it is missing or blank, which is the
+/// package's problem; a blank reference would be judged as work and could pass.
+fn reference_answer(pkg: &Package) -> Result<Result<String, String>> {
     let answer = pkg.dir.join("solution/answer.md");
     if answer.is_file() {
-        return Ok(std::fs::read_to_string(answer)?);
+        let text = std::fs::read_to_string(answer)?;
+        return Ok(if text.trim().is_empty() {
+            Err("solution/answer.md is empty".into())
+        } else {
+            Ok(text)
+        });
     }
-    Ok(
-        read_work(&pkg.dir.join("solution/files"), &pkg.check.deliverables)?
-            .unwrap_or_else(|missing| format!("(missing: {missing})")),
-    )
+    let files = pkg.dir.join("solution/files");
+    let mut out = String::new();
+    for name in &pkg.check.deliverables {
+        match read_work(&files, std::slice::from_ref(name))? {
+            Err(e) => return Ok(Err(format!("the reference answer has a problem: {e}"))),
+            Ok(text) => {
+                let body = text.split_once('\n').map_or("", |(_, b)| b);
+                if body.trim().is_empty() {
+                    return Ok(Err(format!("solution/files/{name} is empty")));
+                }
+                out.push_str(&text);
+            }
+        }
+    }
+    Ok(if out.is_empty() {
+        Err("the package has no reference answer".into())
+    } else {
+        Ok(out)
+    })
 }
 
 pub(crate) fn prove_rubric(model: &dyn Model, pkg: &Package) -> Result<Proof> {
@@ -168,18 +232,23 @@ pub(crate) fn prove_rubric(model: &dyn Model, pkg: &Package) -> Result<Proof> {
             )]))
         }
     };
-    if !review.ok {
+    // `ok` with problems listed is not ok: the problems are what the model must fix.
+    if !review.ok || !review.problems.is_empty() {
         return Ok(Proof::Problems(if review.problems.is_empty() {
             vec!["the rubric rests on something outside the task".into()]
         } else {
             review.problems
         }));
     }
-    match vote(model, pkg, &reference_answer(pkg)?) {
-        Ok(v) if v.met => Ok(Proof::Passed),
-        Ok(v) => Ok(Proof::Problems(vec![format!(
+    let reference = match reference_answer(pkg)? {
+        Ok(text) => text,
+        Err(why) => return Ok(Proof::Problems(vec![why])),
+    };
+    match panel(model, pkg, &reference) {
+        Ok(CheckOutcome::Pass) => Ok(Proof::Passed),
+        Ok(CheckOutcome::Fail { output }) => Ok(Proof::Problems(vec![format!(
             "the reference answer does not meet the rubric: {}",
-            v.unmet.join("; ")
+            output.replace('\n', "; ")
         )])),
         Err(e) => feedback("the rubric could not be applied", e),
     }
@@ -233,12 +302,12 @@ impl Prover for RealProver<'_> {
         let run_id = format!("val-{}-r{round}", pkg.id);
         self.record(pkg, &run_id)?;
         let scratch = self.store.scratch_dir();
-        let proof = if pkg.environment.kind == CONTAINER {
+        let (proof, cleaned) = if pkg.environment.kind == CONTAINER {
             let mut env = ContainerEnv {
                 docker: self.docker,
                 project_tag: self.tag.clone(),
             };
-            prove_script(&mut env, pkg, &run_id)
+            prove_and_clean(&mut env, pkg, &run_id)
         } else {
             let mut env = FolderEnv {
                 docker: self.docker,
@@ -246,11 +315,15 @@ impl Prover for RealProver<'_> {
                 tasks: scratch.clone(),
                 model: self.model,
             };
-            prove_script(&mut env, pkg, &run_id)
+            prove_and_clean(&mut env, pkg, &run_id)
         };
-        let _ = self.store.remove(&run_id);
-        let _ = std::fs::remove_dir_all(scratch);
-        if matches!(proof, Ok(Proof::Problems(_))) {
+        // A failed clean keeps the record: the sweep needs it to find what is left.
+        if cleaned {
+            let _ = self.store.remove(&run_id);
+            let _ = std::fs::remove_dir_all(scratch);
+        }
+        // Anything but a pass leaves no image behind, and an error is no reason to skip the probe.
+        if !matches!(proof, Ok(Proof::Passed)) {
             if pkg.environment.kind == CONTAINER {
                 let _ = self.docker.run(&["rmi", "-f", &ContainerEnv::image(pkg)]);
             }
@@ -284,6 +357,8 @@ mod tests {
         prepare_plain: bool,
         solve_fails: bool,
         solved_yet: bool,
+        second_passes: bool,
+        fresh_runs: usize,
         calls: Vec<&'static str>,
     }
 
@@ -296,6 +371,8 @@ mod tests {
                 prepare_plain: false,
                 solve_fails: false,
                 solved_yet: false,
+                second_passes: false,
+                fresh_runs: 0,
                 calls: vec![],
             }
         }
@@ -330,6 +407,12 @@ mod tests {
         }
         fn check(&mut self, _: &Package, _: &EnvHandle) -> Result<CheckOutcome> {
             self.calls.push("check");
+            if !self.solved_yet {
+                self.fresh_runs += 1;
+                if self.second_passes && self.fresh_runs == 2 {
+                    return Ok(CheckOutcome::Pass);
+                }
+            }
             let r = if self.solved_yet {
                 &self.solved
             } else {
@@ -366,7 +449,10 @@ mod tests {
             prove_script(&mut f, &pkg("val_ok"), "v").unwrap(),
             Proof::Passed
         );
-        assert_eq!(f.calls, vec!["prepare", "check", "solve", "check", "clean"]);
+        assert_eq!(
+            f.calls,
+            vec!["prepare", "check", "check", "solve", "check", "clean"]
+        );
     }
 
     #[test]
@@ -412,6 +498,17 @@ mod tests {
             panic!()
         };
         assert!(p.concat().contains("syntax error"));
+    }
+
+    #[test]
+    fn a_check_that_changes_the_task_when_it_runs_is_rejected() {
+        let mut f = Fake::new(fail(), CheckOutcome::Pass);
+        f.second_passes = true;
+        let Proof::Problems(p) = prove_script(&mut f, &pkg("val_twice"), "v").unwrap() else {
+            panic!()
+        };
+        assert!(p.concat().contains("second time"), "{p:?}");
+        assert!(f.calls.contains(&"clean") && !f.calls.contains(&"solve"));
     }
 
     #[test]
@@ -489,7 +586,7 @@ mod tests {
     fn a_rubric_passes_when_it_rests_on_the_task_and_the_reference_meets_it() {
         let root = tmp("val_rub");
         let p = Package::load(&crate::scenario::lint::tests::folder_pkg(&root)).unwrap();
-        let m = FakeModel::with(&[OK_REVIEW, &all_met(&p)]);
+        let m = FakeModel::with(&[OK_REVIEW, &all_met(&p), &all_met(&p)]);
         assert_eq!(prove_rubric(&m, &p).unwrap(), Proof::Passed);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -506,11 +603,188 @@ mod tests {
         };
         assert!(x.concat().contains("not in the task"));
         let miss = r#"{"criteria":[{"id":"names-audience","met":false,"note":"who?"},{"id":"gives-reason","met":true,"note":""}]}"#;
-        let m = FakeModel::with(&[OK_REVIEW, miss]);
+        let m = FakeModel::with(&[OK_REVIEW, miss, miss]);
         let Proof::Problems(x) = prove_rubric(&m, &p).unwrap() else {
             panic!()
         };
         assert!(x.concat().contains("reference answer"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_missing_or_blank_reference_answer_is_a_problem_even_if_the_judge_would_pass_it() {
+        let root = tmp("val_blank");
+        let d = crate::scenario::lint::tests::folder_pkg(&root);
+        let p = Package::load(&d).unwrap();
+        for content in [None, Some("  \n")] {
+            match content {
+                None => std::fs::remove_file(d.join("solution/files/plan.md")).unwrap(),
+                Some(c) => std::fs::write(d.join("solution/files/plan.md"), c).unwrap(),
+            }
+            let m = FakeModel::with(&[OK_REVIEW, &all_met(&p), &all_met(&p), &all_met(&p)]);
+            let Proof::Problems(x) = prove_rubric(&m, &p).unwrap() else {
+                panic!("{content:?}")
+            };
+            assert!(x.concat().contains("plan.md"), "{x:?}");
+            assert_eq!(m.prompts.lock().unwrap().len(), 1, "only the review ran");
+        }
+        std::fs::write(d.join("solution/answer.md"), "\n").unwrap();
+        let m = FakeModel::with(&[OK_REVIEW, &all_met(&p), &all_met(&p)]);
+        assert!(matches!(prove_rubric(&m, &p).unwrap(), Proof::Problems(_)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_review_that_lists_problems_is_not_ok_whatever_its_flag_says() {
+        let root = tmp("val_ok_problems");
+        let p = Package::load(&crate::scenario::lint::tests::folder_pkg(&root)).unwrap();
+        let m = FakeModel::with(&[r#"{"ok":true,"problems":["x needs outside data"]}"#]);
+        let Proof::Problems(x) = prove_rubric(&m, &p).unwrap() else {
+            panic!()
+        };
+        assert!(x.concat().contains("outside data"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_reference_is_judged_by_the_panel_not_one_vote() {
+        let root = tmp("val_panel");
+        let p = Package::load(&crate::scenario::lint::tests::folder_pkg(&root)).unwrap();
+        let miss = r#"{"criteria":[{"id":"names-audience","met":false,"note":"who?"},{"id":"gives-reason","met":true,"note":""}]}"#;
+        // One lenient vote and one strict vote: the third decides.
+        let m = FakeModel::with(&[OK_REVIEW, &all_met(&p), miss, miss]);
+        assert!(matches!(prove_rubric(&m, &p).unwrap(), Proof::Problems(_)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_file_that_is_not_text_does_not_hide_the_others_and_the_size_is_capped() {
+        let root = tmp("val_material");
+        let d = crate::scenario::lint::tests::folder_pkg(&root);
+        std::fs::write(d.join("environment/files/logo.bin"), [0u8, 1, 2]).unwrap();
+        let p = Package::load(&d).unwrap();
+        let m = material(&p).unwrap();
+        assert!(m.contains("Audience: bakers"), "{m}");
+        assert!(m.contains("logo.bin") && m.contains("not shown"), "{m}");
+        for i in 0..4 {
+            std::fs::write(
+                d.join(format!("environment/files/big{i}.txt")),
+                "x".repeat(40_000),
+            )
+            .unwrap();
+        }
+        let m = material(&p).unwrap();
+        assert!(m.chars().count() < MATERIAL_LIMIT + 200, "{}", m.len());
+        assert!(
+            m.contains("Rubric:") && m.contains("names-audience"),
+            "the rubric survives the cut"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn prover_with<R>(
+        root: &std::path::Path,
+        d: &FakeDocker,
+        f: impl FnOnce(&mut RealProver) -> R,
+    ) -> (R, Store) {
+        let store = Store::new(root);
+        let alive: &dyn Fn(u32) -> bool = &|_| true;
+        let tick = Tick {
+            pid: 1,
+            alive,
+            stamp: "s",
+            today: "2026-11-04",
+        };
+        let m = FakeModel::default();
+        let say: &dyn Fn(&str) = &|_| {};
+        let mut free = || Ok(());
+        let mut prover = RealProver {
+            docker: d,
+            store: &store,
+            tag: "t".into(),
+            model: &m,
+            tick: &tick,
+            say,
+            free_server: &mut free,
+        };
+        let r = f(&mut prover);
+        (r, store)
+    }
+
+    fn rmi(d: &FakeDocker) -> bool {
+        d.calls().iter().any(|c| c.starts_with("rmi "))
+    }
+
+    #[test]
+    fn the_image_is_removed_after_a_problem_and_an_error_and_kept_after_a_pass() {
+        // Problems: the check never passes.
+        let root = tmp("val_img_problem");
+        let p = Package::load(&write_pkg(&root)).unwrap();
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("ps ") {
+                ok("")
+            } else if l.contains(" timeout ") {
+                dfail(1, "not yet")
+            } else {
+                ok("true")
+            }
+        });
+        let (r, _) = prover_with(&root, &d, |pr| pr.prove(&p, 0));
+        assert!(matches!(r.unwrap(), Proof::Problems(_)));
+        assert!(rmi(&d), "{:?}", d.calls());
+        // Err: the task is not running when the check runs. No learner is told to resume.
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("inspect -f {{.State.Running}}") {
+                ok("false")
+            } else {
+                ok("")
+            }
+        });
+        let (r, _) = prover_with(&root, &d, |pr| pr.prove(&p, 1));
+        let shown = format!("{r:?}");
+        assert!(!shown.contains("/scenario resume"), "{shown}");
+        assert!(rmi(&d), "{:?}", d.calls());
+        // Passed: the image stays so the engine does not build twice.
+        let n = std::cell::Cell::new(0);
+        let d2 = FakeDocker::new(move |l| {
+            if l.starts_with("ps ") {
+                return ok("");
+            }
+            if l.contains(" timeout ") {
+                n.set(n.get() + 1);
+                // Two fresh runs fail, the one after the solution passes.
+                return if n.get() <= 2 {
+                    dfail(1, "not yet")
+                } else {
+                    ok("")
+                };
+            }
+            ok("true")
+        });
+        let (r, _) = prover_with(&root, &d2, |pr| pr.prove(&p, 2));
+        assert_eq!(r.unwrap(), Proof::Passed, "{:?}", d2.calls());
+        assert!(!rmi(&d2), "{:?}", d2.calls());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_failed_clean_keeps_the_record_for_the_sweep() {
+        let root = tmp("val_keep_rec");
+        let p = Package::load(&write_pkg(&root)).unwrap();
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("ps ") {
+                ok("")
+            } else if l.starts_with("rm ") {
+                dfail(1, "permission denied")
+            } else if l.contains(" timeout ") {
+                dfail(1, "not yet")
+            } else {
+                ok("true")
+            }
+        });
+        let (r, store) = prover_with(&root, &d, |pr| pr.prove(&p, 0));
+        assert!(r.is_ok());
+        assert_eq!(store.all().len(), 1, "the record stays");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -589,7 +863,7 @@ mod tests {
             stamp: "s",
             today: "2026-11-04",
         };
-        let m = FakeModel::with(&[OK_REVIEW, &all_met(&p)]);
+        let m = FakeModel::with(&[OK_REVIEW, &all_met(&p), &all_met(&p)]);
         let say: &dyn Fn(&str) = &|_| {};
         let mut freed = 0;
         let mut free = || {
