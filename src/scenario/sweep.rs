@@ -7,7 +7,7 @@ use std::path::Path;
 use chrono::NaiveDate;
 
 use crate::scenario::container::{list_labeled, ContainerEnv, Found};
-use crate::scenario::docker::{available, Docker, RealDocker};
+use crate::scenario::docker::{probe, Docker, RealDocker, Runtime};
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::Environment;
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
@@ -169,7 +169,7 @@ fn docker_sweep(
     alive: &dyn Fn(u32) -> bool,
     ask: Option<&dyn Fn(&str) -> bool>,
 ) {
-    if !Store::new(project_root).exists() || available(docker).is_err() {
+    if !Store::new(project_root).exists() || !matches!(probe(docker), Runtime::Ready) {
         return;
     }
     sweep_with(project_root, today, docker, alive, ask);

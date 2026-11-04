@@ -11,6 +11,7 @@ pub(crate) mod env;
 pub(crate) mod ledger;
 pub(crate) mod library;
 pub(crate) mod package;
+pub(crate) mod pick;
 pub(crate) mod select;
 pub(crate) mod slot;
 pub(crate) mod store;
@@ -20,3 +21,5 @@ pub(crate) mod turns;
 
 #[cfg(test)]
 mod docker_tests;
+#[cfg(test)]
+mod flow_tests;

@@ -11,19 +11,20 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 
 use crate::progress;
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{
-    available, ensure_ready, runc_warning, Docker, RealDocker, RuntimeStarter, SystemStarter,
-    START_POLL, START_TIMEOUT,
+    ensure_ready, runc_warning, Docker, RealDocker, RuntimeStarter, SystemStarter, START_POLL,
+    START_TIMEOUT,
 };
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::{CheckOutcome, Internal};
 use crate::scenario::ledger::{self, Ledger};
 use crate::scenario::library;
 use crate::scenario::package::{Package, Tone};
+use crate::scenario::pick::{open_runs, own_active, pick_resumable, pick_unfinished};
 use crate::scenario::select::{self, Tag};
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::scenario::sweep;
@@ -75,12 +76,13 @@ pub(crate) fn parse(line: &str) -> Option<ScenarioCmd> {
     })
 }
 
-/// Shown before a slow command (the screen does not redraw while it works).
+/// Shown before a slow command, so the wait has a reason.
 pub(crate) fn busy_note(cmd: &ScenarioCmd) -> Option<&'static str> {
     match cmd {
         ScenarioCmd::Start(_) => Some("preparing your task… the first start can take a few minutes while its server is set up"),
         ScenarioCmd::Resume(_) => Some("resuming your task…"),
         ScenarioCmd::Check => Some("running the check…"),
+        ScenarioCmd::Pause => Some("pausing your task…"),
         _ => None,
     }
 }
@@ -269,7 +271,8 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                 .all()
                 .into_iter()
                 .filter(|r| {
-                    r.topic == ctx.topic && matches!(r.state, RunState::Paused | RunState::Active)
+                    library::topic_matches(&r.topic, &ctx.topic)
+                        && matches!(r.state, RunState::Paused | RunState::Active)
                 })
                 .collect();
             return Ok(Reply::note(render_list(
@@ -286,19 +289,27 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
     }
 
     let docker = seams.docker;
+    let ready = || {
+        ensure_ready(
+            docker,
+            seams.starter,
+            START_TIMEOUT,
+            START_POLL,
+            seams.sleep,
+        )
+    };
     match &cmd {
         ScenarioCmd::Start(_) | ScenarioCmd::Resume(_) => {
-            ensure_ready(
-                docker,
-                seams.starter,
-                START_TIMEOUT,
-                START_POLL,
-                seams.sleep,
-            )?;
+            ready()?;
             // Never prompts or reads stdin, so it is safe inside the session UI.
             sweep::sweep_docker(&ctx.project_root, &today, docker, seams.alive);
         }
-        ScenarioCmd::Check | ScenarioCmd::Pause => available(docker)?,
+        // Pause too: the record may only turn paused once the server really stopped.
+        // Nothing active means nothing to do, so the runtime is not started for it.
+        ScenarioCmd::Check | ScenarioCmd::Pause => {
+            own_active(&store, ctx.pid)?;
+            ready()?;
+        }
         // Drop works without the runtime: a clean that cannot run is retried at the next start.
         _ => {}
     }
@@ -321,6 +332,13 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             .ok_or_else(|| anyhow!("task '{id}' is not in the library"))
     };
     let scratch = ctx.project_root.join(".usta/scenarios");
+    let step = Step {
+        ctx,
+        seams,
+        store: &store,
+        tick: &tick,
+        pkgs: &pkgs,
+    };
 
     match cmd {
         ScenarioCmd::Start(sel) => {
@@ -335,12 +353,27 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                 &ledger.open_ids(),
             )
             .map_err(|m| anyhow!(m))?;
+            let unfinished = open_runs(&store, &ctx.topic, ctx.pid)
+                .into_iter()
+                .filter(|r| r.package == pkg.id)
+                .max_by_key(|r| r.state == RunState::Active);
+            if let Some(rec) = unfinished {
+                let note = format!(
+                    "You already have '{}' unfinished, so Usta continued it instead of starting over. To start fresh: /scenario drop {} confirm",
+                    pkg.title, rec.run_id
+                );
+                let mut reply = resume_run(&step, &mut env, pkg, rec)?;
+                reply.notices.insert(0, note);
+                return Ok(reply);
+            }
             let tone = store.tone();
             let mut notices = Vec::new();
             if let Some(w) = runc_warning(docker) {
                 notices.push(w);
             }
+            let paused = pause_notices(&step, None);
             let rec = engine::start(&mut env, &store, pkg, tone, &tick)?;
+            notices.extend(paused);
             notices.push(pkg.tone_text(tone, "open")?);
             let req = WindowReq {
                 command_line: &rec.access,
@@ -360,41 +393,8 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             })
         }
         ScenarioCmd::Resume(sel) => {
-            let mut rec = pick_resumable(&store, sel.as_deref(), &ctx.topic, ctx.pid)?;
-            let pkg = find_pkg(&rec.package)?;
-            if let Some(e) = server_gone_error(&env, &rec) {
-                return Err(e);
-            }
-            // A closed window leaves an own active run with a healthy server: only reopen it.
-            let woke = !already_running(&env, &rec);
-            let mut restarted = true;
-            if woke {
-                if let Some(w) = engine::resume(&mut env, &store, pkg, &mut rec, &tick)? {
-                    log_error(ctx, &w);
-                    restarted = false;
-                }
-            }
-            let req = WindowReq {
-                command_line: &rec.access,
-                run_id: &rec.run_id,
-                scratch: &scratch,
-            };
-            let notices = vec![
-                resume_notice(&pkg.title, woke, restarted),
-                window_notice(seams.launcher, &req),
-            ];
-            // The mentor turn says the services restarted: only true when we woke them.
-            let turn = if woke {
-                Some(resume_turn(
-                    pkg,
-                    &pkg.instruction()?,
-                    rec.last_check.as_deref(),
-                    restarted,
-                ))
-            } else {
-                None
-            };
-            Ok(Reply { notices, turn })
+            let rec = pick_resumable(&store, sel.as_deref(), &ctx.topic, ctx.pid)?;
+            resume_run(&step, &mut env, find_pkg(&rec.package)?, rec)
         }
         ScenarioCmd::Check => {
             let mut rec = own_active(&store, ctx.pid)?;
@@ -433,11 +433,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         }
         ScenarioCmd::Drop { id, confirmed } => {
             let mut rec = pick_unfinished(&store, id.as_deref(), &ctx.topic, ctx.pid)?;
-            let title = pkgs
-                .iter()
-                .find(|p| p.id == rec.package)
-                .map(|p| p.title.clone())
-                .unwrap_or_else(|| rec.package.clone());
+            let title = title_of(&pkgs, &rec.package);
             if !confirmed {
                 return Ok(Reply::note(format!(
                     "This removes your work on '{title}' for good, and nothing from it counts toward your progress. To go ahead: /scenario drop {} confirm",
@@ -460,12 +456,81 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
     }
 }
 
-fn own_active(store: &Store, pid: u32) -> Result<RunRecord> {
-    store
+/// What a step needs around the run it acts on.
+struct Step<'a> {
+    ctx: &'a Ctx,
+    seams: &'a Seams<'a>,
+    store: &'a Store,
+    tick: &'a Tick<'a>,
+    pkgs: &'a [Package],
+}
+
+fn title_of(pkgs: &[Package], package: &str) -> String {
+    pkgs.iter()
+        .find(|p| p.id == package)
+        .map(|p| p.title.clone())
+        .unwrap_or_else(|| package.to_string())
+}
+
+/// Starting or waking a task pauses whatever else runs (`engine::release_others`).
+/// Asked before that happens, so the learner can be told.
+fn pause_notices(s: &Step, except: Option<&str>) -> Vec<String> {
+    s.store
         .all()
         .into_iter()
-        .find(|r| r.state == RunState::Active && r.owner_pid == pid)
-        .ok_or_else(|| anyhow!("no active task; use /scenario start or /scenario resume"))
+        .filter(|r| r.state == RunState::Active && Some(r.run_id.as_str()) != except)
+        .map(|r| {
+            format!(
+                "'{}' was running, so it is paused now. Back to it: /scenario resume {}",
+                title_of(s.pkgs, &r.package),
+                r.run_id
+            )
+        })
+        .collect()
+}
+
+/// Bring `rec` back and open its window. A closed window leaves an own active
+/// run with a healthy server: that one only gets a new window.
+fn resume_run(
+    s: &Step,
+    env: &mut ContainerEnv,
+    pkg: &Package,
+    mut rec: RunRecord,
+) -> Result<Reply> {
+    if let Some(e) = server_gone_error(env, &rec) {
+        return Err(e);
+    }
+    let woke = !already_running(env, &rec);
+    let mut restarted = true;
+    let mut paused = Vec::new();
+    if woke {
+        paused = pause_notices(s, Some(&rec.run_id));
+        if let Some(w) = engine::resume(env, s.store, pkg, &mut rec, s.tick)? {
+            log_error(s.ctx, &w);
+            restarted = false;
+        }
+    }
+    let scratch = s.ctx.project_root.join(".usta/scenarios");
+    let req = WindowReq {
+        command_line: &rec.access,
+        run_id: &rec.run_id,
+        scratch: &scratch,
+    };
+    let mut notices = vec![resume_notice(&pkg.title, woke, restarted)];
+    notices.extend(paused);
+    notices.push(window_notice(s.seams.launcher, &req));
+    // The mentor turn says the services restarted: only true when we woke them.
+    let turn = if woke {
+        Some(resume_turn(
+            pkg,
+            &pkg.instruction()?,
+            rec.last_check.as_deref(),
+            restarted,
+        ))
+    } else {
+        None
+    };
+    Ok(Reply { notices, turn })
 }
 
 /// An own active run whose server is still running needs no wake-up.
@@ -480,67 +545,6 @@ fn resume_notice(title: &str, woke: bool, restarted: bool) -> String {
         format!("Resumed: {title}. Your files are as you left them; its programs were restarted.")
     } else {
         format!("Back in: {title}. Your task is still running; opened a new terminal window.")
-    }
-}
-
-/// Resumable = paused, or active and owned by this process (its server may have
-/// stopped mid-session; `engine::resume` handles both).
-fn pick_resumable(store: &Store, sel: Option<&str>, topic: &str, pid: u32) -> Result<RunRecord> {
-    let paused: Vec<RunRecord> = store
-        .all()
-        .into_iter()
-        .filter(|r| {
-            r.topic == topic
-                && (r.state == RunState::Paused
-                    || (r.state == RunState::Active && r.owner_pid == pid))
-        })
-        .collect();
-    Ok(match sel {
-        Some(id) => paused
-            .into_iter()
-            .find(|r| r.run_id == id)
-            .ok_or_else(|| anyhow!("no task '{id}' to resume; see /scenario"))?,
-        None => paused
-            .iter()
-            .rfind(|r| r.state == RunState::Paused)
-            .or(paused.last())
-            .cloned()
-            .ok_or_else(|| anyhow!("nothing to resume; see /scenario"))?,
-    })
-}
-
-/// Unfinished = paused, or active and owned by this process. Never finished, dropped, another topic's or another Usta's.
-pub(crate) fn pick_unfinished(
-    store: &Store,
-    sel: Option<&str>,
-    topic: &str,
-    pid: u32,
-) -> Result<RunRecord> {
-    let open: Vec<RunRecord> = store
-        .all()
-        .into_iter()
-        .filter(|r| {
-            r.topic == topic
-                && (r.state == RunState::Paused
-                    || (r.state == RunState::Active && r.owner_pid == pid))
-        })
-        .collect();
-    match sel {
-        Some(id) => open
-            .into_iter()
-            .find(|r| r.run_id == id)
-            .ok_or_else(|| anyhow!("no unfinished task '{id}'; see /scenario")),
-        None => match open.len() {
-            0 => bail!("no unfinished task; see /scenario"),
-            1 => Ok(open.into_iter().next().expect("one element")),
-            _ => bail!(
-                "several unfinished tasks; name one: {}",
-                open.iter()
-                    .map(|r| format!("/scenario drop {}", r.run_id))
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            ),
-        },
     }
 }
 
@@ -651,6 +655,7 @@ mod tests {
             .contains("first start"));
         assert!(busy_note(&ScenarioCmd::Resume(None)).is_some());
         assert!(busy_note(&ScenarioCmd::Check).is_some());
+        assert!(busy_note(&ScenarioCmd::Pause).is_some());
         assert!(busy_note(&ScenarioCmd::List).is_none());
         assert!(busy_note(&ScenarioCmd::Tone(None)).is_none());
         assert!(busy_note(&ScenarioCmd::Drop {

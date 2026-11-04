@@ -127,18 +127,9 @@ pub(crate) fn probe(d: &dyn Docker) -> Runtime {
 
 // Docker is named below on purpose: the learner cannot install or open it
 // without the name. Everywhere else learner text says "task" or "server".
-const NOT_INSTALLED: &str = "Practice tasks run on a small server that Usta starts for you, and that needs Docker. Docker is not installed on this computer. Install Docker Desktop from https://docs.docker.com/get-docker/ (on Linux, install your distribution's docker package), open it once, then run /scenario start again.";
-const CANNOT_START: &str = "Usta needs Docker and it is installed, but Usta could not start it. Open Docker yourself, wait until it says it is running, then try /scenario start again.";
-const START_TIMEOUT_MSG: &str = "Docker did not finish starting within 90 seconds. Wait until it says it is running, then try /scenario start again.";
-
-/// The runtime must already be running (used by check, pause and the startup sweep).
-pub(crate) fn available(d: &dyn Docker) -> Result<()> {
-    match probe(d) {
-        Runtime::Ready => Ok(()),
-        Runtime::Stopped => bail!("Docker is not running. Run /scenario start, which starts it for you, or open Docker yourself."),
-        Runtime::NotInstalled => bail!(NOT_INSTALLED),
-    }
-}
+const NOT_INSTALLED: &str = "Practice tasks run on a small server that Usta starts for you, and that needs Docker. Docker is not installed on this computer. Install Docker Desktop from https://docs.docker.com/get-docker/ (on Linux, install your distribution's docker package), open it once, then try again.";
+const CANNOT_START: &str = "Usta needs Docker and it is installed, but Usta could not start it. Open Docker yourself, wait until it says it is running, then try again.";
+const START_TIMEOUT_MSG: &str = "Docker did not finish starting within 90 seconds. Wait until it says it is running, then try again.";
 
 /// Tries to launch the stopped runtime. True = a launch was attempted.
 pub(crate) trait RuntimeStarter {
@@ -367,20 +358,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn available_has_plain_messages_for_both_failures() {
-        assert!(available(&FakeDocker::new(|_| ok("27"))).is_ok());
-        let stopped = available(&FakeDocker::new(|_| fail(1, "x")))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            stopped.contains("not running") && stopped.contains("/scenario start"),
-            "{stopped}"
-        );
-        let missing = available(&FakeDocker::missing()).unwrap_err().to_string();
-        assert!(missing.contains("not installed"), "{missing}");
-    }
-
     struct FakeStarter {
         started: std::cell::Cell<bool>,
         can: bool,
@@ -447,7 +424,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            e.contains("did not finish starting") && e.contains("try /scenario start again"),
+            e.contains("did not finish starting") && !e.contains("/scenario"),
             "{e}"
         );
         assert_eq!(slept.get(), 5); // LIMIT / POLL, no real waiting in the test
@@ -483,7 +460,9 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("not installed") && e.contains("https://docs.docker.com/get-docker/"),
+            e.contains("not installed")
+                && e.contains("https://docs.docker.com/get-docker/")
+                && !e.contains("/scenario"),
             "{e}"
         );
         assert!(!st.started.get());
