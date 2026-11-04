@@ -18,6 +18,7 @@ use crate::scenario::docker::{
     START_TIMEOUT,
 };
 use crate::scenario::engine::{self, Tick};
+use crate::scenario::env::FOLDER;
 use crate::scenario::env::{CheckOutcome, Internal};
 use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
@@ -365,12 +366,18 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             let rec = engine::start(&mut env, &store, pkg, tone, &tick)?;
             notices.extend(paused);
             notices.push(pkg.tone_text(tone, "open")?);
-            let req = WindowReq {
-                command_line: &rec.access,
-                run_id: &rec.run_id,
-                scratch: &scratch,
-            };
-            notices.push(window_notice(seams.launcher, &req));
+            if rec.env == FOLDER {
+                // No terminal for a folder task: the learner works in their own editor.
+                let dir = store.tasks_dir().join(&rec.run_id);
+                notices.push(format!("Your files are in {}.", dir.display()));
+            } else {
+                let req = WindowReq {
+                    command_line: &rec.access,
+                    run_id: &rec.run_id,
+                    scratch: &scratch,
+                };
+                notices.push(window_notice(seams.launcher, &req));
+            }
             notices.push("When you think it is solved: /scenario check".into());
             Ok(Reply {
                 notices,

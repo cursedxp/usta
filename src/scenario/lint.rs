@@ -84,8 +84,13 @@ fn data_problems(root: &Path) -> Vec<String> {
                 .unwrap_or("")
                 .to_ascii_lowercase();
             let shebang = std::fs::read(f).is_ok_and(|b| b.starts_with(b"#!"));
-            (!DATA_EXTENSIONS.contains(&ext.as_str()) || shebang)
-                .then(|| format!("{} must be a data file", f.display()))
+            // An editor runs `.vscode/tasks.json` or `.cargo/config.toml` when the folder is opened.
+            let hidden = f.strip_prefix(root).is_ok_and(|rel| {
+                rel.components()
+                    .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+            });
+            (!DATA_EXTENSIONS.contains(&ext.as_str()) || shebang || hidden)
+                .then(|| format!("{} must be a visible data file", f.display()))
         })
         .collect()
 }
@@ -563,6 +568,21 @@ evidence = ["competitors.csv"]
         let problems = Package::load(&d).unwrap().lint().join("\n");
         assert!(
             problems.contains("run.sh") && problems.contains("note.txt"),
+            "{problems}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_folder_holds_no_hidden_files_an_editor_would_run() {
+        let root = tmp("lint_hidden");
+        let d = folder_pkg(&root);
+        std::fs::create_dir_all(d.join("environment/files/.vscode")).unwrap();
+        std::fs::write(d.join("environment/files/.vscode/tasks.json"), "{}\n").unwrap();
+        std::fs::write(d.join("solution/files/.hidden.md"), "x\n").unwrap();
+        let problems = Package::load(&d).unwrap().lint().join("\n");
+        assert!(
+            problems.contains("tasks.json") && problems.contains(".hidden.md"),
             "{problems}"
         );
         let _ = std::fs::remove_dir_all(root);

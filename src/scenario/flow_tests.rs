@@ -693,3 +693,72 @@ fn a_lost_tag_file_does_not_drop_the_task() {
     assert!(turn(&w.cmd(ScenarioCmd::Resume(None))).starts_with("[SCENARIO RESUME]"));
     assert!(!w.removed_anything());
 }
+
+/// A world whose only task is a folder task (topic "marketing").
+fn folder_world(name: &str) -> World {
+    let mut w = World::new(name);
+    w.topic = "marketing".into();
+    let src = w.base.join("src");
+    let pkg = crate::scenario::lint::tests::folder_pkg(&src);
+    let lib = crate::scenario::library::library_root(&w.global).join("demo-pkg");
+    crate::scenario::folder::copy_data(&pkg, &lib).unwrap();
+    w
+}
+
+fn inspects(w: &World) -> usize {
+    w.docker
+        .calls()
+        .iter()
+        .filter(|c| c.starts_with("inspect"))
+        .count()
+}
+
+#[test]
+fn a_folder_task_resumes_without_asking_the_runtime_and_opens_no_window() {
+    let w = folder_world("flow_folder_resume");
+    w.start(Some("demo-pkg"));
+    let run = w.only_run();
+    assert_eq!(run.env, "folder");
+    w.cmd(ScenarioCmd::Pause);
+    assert_eq!(w.only_run().state, RunState::Paused);
+    let before = inspects(&w);
+    let back = w.cmd(ScenarioCmd::Resume(None));
+    assert_eq!(inspects(&w), before, "{:?}", w.docker.calls());
+    assert_eq!(w.windows.0.get(), 0);
+    assert!(says(&back, "usta-tasks"), "{:?}", back.notices);
+    assert!(!says(&back, "terminal window"), "{:?}", back.notices);
+    assert!(turn(&back).starts_with("[SCENARIO RESUME]"));
+    assert!(!turn(&back).contains("services"), "{}", turn(&back));
+    assert_eq!(w.only_run().state, RunState::Active);
+}
+
+#[test]
+fn a_folder_task_whose_files_are_gone_gets_the_plain_sentence() {
+    let w = folder_world("flow_folder_gone");
+    w.start(Some("demo-pkg"));
+    w.cmd(ScenarioCmd::Pause);
+    let dir = Store::new(&w.project).tasks_dir().join(w.only_run().run_id);
+    std::fs::remove_dir_all(dir).unwrap();
+    let e = w.try_cmd(ScenarioCmd::Resume(None)).err().unwrap();
+    assert!(
+        e.to_string().contains("files for this task are gone"),
+        "{e}"
+    );
+    assert_eq!(w.only_run().state, RunState::Paused);
+}
+
+#[test]
+fn an_own_active_folder_task_says_back_in_and_wakes_nothing() {
+    let w = folder_world("flow_folder_active");
+    w.start(Some("demo-pkg"));
+    let r = w.start(Some("demo-pkg"));
+    assert!(
+        says(&r, "Back in") || says(&r, "instead of starting over"),
+        "{:?}",
+        r.notices
+    );
+    assert!(says(&r, "usta-tasks"), "{:?}", r.notices);
+    assert_eq!(r.turn, None);
+    assert_eq!(w.windows.0.get(), 0);
+    assert_eq!(w.only_run().state, RunState::Active);
+}

@@ -2,6 +2,7 @@
 //! not the learner, but they tell it to keep the infrastructure words out of its replies.
 
 use crate::anthropic::Message;
+use crate::scenario::env::FOLDER;
 use crate::scenario::package::{Package, Tone};
 
 /// How much of the conversation a conversation task's judge reads.
@@ -73,33 +74,20 @@ pub(crate) fn resume_turn(
     last_check: Option<&str>,
     restarted: bool,
 ) -> String {
-    let services = if restarted {
-        "its services were restarted"
+    // A folder task has no server: only its files survive, and nothing was restarted.
+    let survived = if pkg.environment.kind == FOLDER {
+        "Their files in the task folder are as they left them".to_string()
+    } else if restarted {
+        "Their work on the server survived; its services were restarted".to_string()
     } else {
-        "its services did not come back up, possibly because of their unfinished work; they are on the server and can look into it"
+        "Their work on the server survived; its services did not come back up, possibly because of their unfinished work; they are on the server and can look into it".to_string()
     };
     format!(
         "[SCENARIO RESUME] The learner came back to the unfinished task \"{}\" ({}). Task: {instruction} \
-         Their last check: {}. Their work on the server survived; {services}. \
+         Their last check: {}. {survived}. \
          Say task or server to the learner; never container, image or Docker. \
          In two sentences, say where they left off if this conversation shows it, otherwise restate the task. \
          Do not give the fix.",
-        pkg.title,
-        pkg.id,
-        last_check.unwrap_or("none yet")
-    )
-}
-
-pub(crate) fn resume_files_turn(
-    pkg: &Package,
-    instruction: &str,
-    last_check: Option<&str>,
-) -> String {
-    format!(
-        "[SCENARIO RESUME] The learner came back to the unfinished task \"{}\" ({}). Task: {instruction} \
-         Their last check: {}. Their files in the task folder are as they left them. \
-         In two sentences, say where they left off if this conversation shows it, otherwise restate the task. \
-         Do not give the answer.",
         pkg.title,
         pkg.id,
         last_check.unwrap_or("none yet")

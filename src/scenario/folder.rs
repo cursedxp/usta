@@ -43,6 +43,13 @@ pub(crate) fn copy_data(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One plain sentence: the learner may have deleted or moved the task folder.
+pub(crate) fn gone_error(run_id: &str) -> anyhow::Error {
+    anyhow!(
+        "the files for this task are gone, so it cannot be continued; give it up with /scenario drop {run_id} confirm and start it again"
+    )
+}
+
 fn valid_run_id(id: &str) -> bool {
     !id.is_empty()
         && id != DONE_DIR
@@ -147,8 +154,10 @@ impl Environment for FolderEnv<'_> {
             kind: FOLDER.into(),
         };
         let dir = self.dir(&h)?;
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("cannot create {}", dir.display()))?;
+        std::fs::create_dir_all(&self.tasks)
+            .with_context(|| format!("cannot create {}", self.tasks.display()))?;
+        // `create_dir` fails on an existing folder: never write into, or roll back, someone's work.
+        std::fs::create_dir(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
         if let Err(e) = copy_data(&pkg.dir.join("environment/files"), &dir) {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
@@ -163,7 +172,7 @@ impl Environment for FolderEnv<'_> {
     fn resume(&mut self, _: &Package, h: &EnvHandle) -> Result<Option<String>> {
         let dir = self.dir(h)?;
         if !dir.is_dir() {
-            anyhow::bail!("the folder for this task is gone: {}", dir.display());
+            return Err(gone_error(self.run_id(h).unwrap_or_default()));
         }
         Ok(None)
     }
@@ -171,6 +180,9 @@ impl Environment for FolderEnv<'_> {
     fn check(&mut self, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
         let dir = self.dir(h)?;
         let run_id = self.run_id(h).unwrap_or_default();
+        if !dir.is_dir() {
+            return Err(gone_error(run_id));
+        }
         self.check_script(pkg, run_id, &dir)
     }
 
@@ -355,6 +367,38 @@ mod tests {
             .downcast_ref::<Internal>()
             .is_some());
         assert_eq!(d.calls().last().unwrap(), "rm -f usta-aaaa1111-chk-r1");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_check_on_gone_files_gives_the_plain_sentence() {
+        let (root, mut pkg) = setup("fold_gone");
+        pkg.check.kind = "script".into();
+        pkg.check.script = "check.sh".into();
+        let d = FakeDocker::new(|_| ok("true"));
+        let mut e = env(&d, &root);
+        let h = e.prepare(&pkg, "r1").unwrap();
+        std::fs::remove_dir_all(root.join("usta-tasks/r1")).unwrap();
+        let err = e.check(&pkg, &h).unwrap_err();
+        assert!(err.downcast_ref::<Internal>().is_none(), "{err}");
+        assert!(
+            err.to_string().contains("files for this task are gone"),
+            "{err}"
+        );
+        assert!(d.calls().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepare_over_an_existing_folder_is_an_error_and_leaves_it_alone() {
+        let (root, pkg) = setup("fold_collide");
+        let d = FakeDocker::new(|_| ok(""));
+        let mut e = env(&d, &root);
+        std::fs::create_dir_all(root.join("usta-tasks/r1")).unwrap();
+        std::fs::write(root.join("usta-tasks/r1/mine.md"), "mine\n").unwrap();
+        assert!(e.prepare(&pkg, "r1").is_err());
+        assert!(root.join("usta-tasks/r1/mine.md").is_file());
+        assert!(!root.join("usta-tasks/r1/brief.md").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 }

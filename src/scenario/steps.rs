@@ -8,12 +8,13 @@ use crate::scenario::command::{Ctx, Reply, Seams};
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::FOLDER;
+use crate::scenario::folder::gone_error;
 use crate::scenario::ledger;
 use crate::scenario::package::Package;
 use crate::scenario::route::Router;
 use crate::scenario::store::{RunRecord, RunState, Store};
 use crate::scenario::terminal::{window_notice, WindowReq};
-use crate::scenario::turns::{resume_files_turn, resume_turn};
+use crate::scenario::turns::resume_turn;
 
 pub(crate) fn log_error(ctx: &Ctx, text: &str) {
     let p = ctx.project_root.join(".usta/scenarios/last-error.log");
@@ -100,10 +101,7 @@ pub(crate) fn resume_run(
     // A folder task has no server: its files are the state, so container logic must not judge it.
     if folder {
         if !env.folder.dir(&rec.handle())?.is_dir() {
-            return Err(anyhow!(
-                "the files for this task are gone, so it cannot be resumed; give it up with /scenario drop {} confirm and start it again",
-                rec.run_id
-            ));
+            return Err(gone_error(&rec.run_id));
         }
     } else if let Some(e) = server_gone_error(&env.container, &rec) {
         return Err(e);
@@ -122,31 +120,31 @@ pub(crate) fn resume_run(
             restarted = false;
         }
     }
-    let scratch = s.ctx.project_root.join(".usta/scenarios");
-    let req = WindowReq {
-        command_line: &rec.access,
-        run_id: &rec.run_id,
-        scratch: &scratch,
-    };
     let mut notices = vec![if folder {
-        folder_resume_notice(&pkg.title, woke)
+        let dir = s.store.tasks_dir().join(&rec.run_id);
+        folder_resume_notice(&pkg.title, woke, &dir)
     } else {
         resume_notice(&pkg.title, woke, restarted)
     }];
     notices.extend(paused);
-    notices.push(window_notice(s.seams.launcher, &req));
+    // A folder task has no terminal: the learner works in their own editor.
+    if !folder {
+        let scratch = s.ctx.project_root.join(".usta/scenarios");
+        let req = WindowReq {
+            command_line: &rec.access,
+            run_id: &rec.run_id,
+            scratch: &scratch,
+        };
+        notices.push(window_notice(s.seams.launcher, &req));
+    }
     // The mentor turn says the services restarted: only true when we woke them.
     let turn = if woke {
-        Some(if folder {
-            resume_files_turn(pkg, &pkg.instruction()?, rec.last_check.as_deref())
-        } else {
-            resume_turn(
-                pkg,
-                &pkg.instruction()?,
-                rec.last_check.as_deref(),
-                restarted,
-            )
-        })
+        Some(resume_turn(
+            pkg,
+            &pkg.instruction()?,
+            rec.last_check.as_deref(),
+            restarted,
+        ))
     } else {
         None
     };
@@ -168,10 +166,10 @@ pub(crate) fn resume_notice(title: &str, woke: bool, restarted: bool) -> String 
     }
 }
 
-pub(crate) fn folder_resume_notice(title: &str, woke: bool) -> String {
-    if woke {
-        format!("Resumed: {title}. Your files are as you left them.")
-    } else {
-        format!("Back in: {title}. Your task is still open; opened a new terminal window.")
-    }
+pub(crate) fn folder_resume_notice(title: &str, woke: bool, dir: &std::path::Path) -> String {
+    let verb = if woke { "Resumed" } else { "Back in" };
+    format!(
+        "{verb}: {title}. Your files are as you left them, in {}.",
+        dir.display()
+    )
 }
