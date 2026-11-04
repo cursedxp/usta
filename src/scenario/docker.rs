@@ -206,6 +206,7 @@ pub(crate) fn ensure_ready(
     timeout: Duration,
     poll: Duration,
     sleep: &dyn Fn(Duration),
+    stop: &dyn Fn() -> bool,
 ) -> Result<()> {
     match probe(d) {
         Runtime::Ready => return Ok(()),
@@ -222,6 +223,9 @@ pub(crate) fn ensure_ready(
     while waited < timeout && begun.elapsed() < timeout {
         sleep(poll);
         waited += poll;
+        if stop() {
+            bail!("stopped while waiting for the practice server software");
+        }
         if matches!(probe(d), Runtime::Ready) {
             return Ok(());
         }
@@ -412,7 +416,15 @@ mod tests {
             started: Default::default(),
             can: true,
         };
-        ensure_ready(&FakeDocker::new(|_| ok("27")), &st, LIMIT, POLL, &|_| {}).unwrap();
+        ensure_ready(
+            &FakeDocker::new(|_| ok("27")),
+            &st,
+            LIMIT,
+            POLL,
+            &|_| {},
+            &|| false,
+        )
+        .unwrap();
         assert!(!st.started.get());
     }
 
@@ -436,7 +448,15 @@ mod tests {
             can: true,
         };
         let slept = Cell::new(0u32);
-        ensure_ready(&d, &st, LIMIT, POLL, &|_| slept.set(slept.get() + 1)).unwrap();
+        ensure_ready(
+            &d,
+            &st,
+            LIMIT,
+            POLL,
+            &|_| slept.set(slept.get() + 1),
+            &|| false,
+        )
+        .unwrap();
         assert!(st.started.get());
         assert_eq!(slept.get(), 3);
     }
@@ -454,6 +474,7 @@ mod tests {
             LIMIT,
             POLL,
             &|_| slept.set(slept.get() + 1),
+            &|| false,
         )
         .unwrap_err()
         .to_string();
@@ -477,6 +498,7 @@ mod tests {
             LIMIT,
             POLL,
             &|_| slept.set(1),
+            &|| false,
         )
         .unwrap_err()
         .to_string();
@@ -490,7 +512,7 @@ mod tests {
             started: Default::default(),
             can: true,
         };
-        let e = ensure_ready(&FakeDocker::missing(), &st, LIMIT, POLL, &|_| {})
+        let e = ensure_ready(&FakeDocker::missing(), &st, LIMIT, POLL, &|_| {}, &|| false)
             .unwrap_err()
             .to_string();
         assert!(
@@ -631,7 +653,7 @@ mod tests {
             can: true,
         };
         let limit = Duration::from_millis(100);
-        let e = ensure_ready(&d, &st, limit, Duration::from_millis(1), &|_| {});
+        let e = ensure_ready(&d, &st, limit, Duration::from_millis(1), &|_| {}, &|| false);
         assert!(e.is_err());
         assert!(d.calls().len() < 20, "polled {} times", d.calls().len());
     }

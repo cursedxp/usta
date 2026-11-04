@@ -149,12 +149,26 @@ pub(crate) fn drop_foreign(project_root: &Path, today: &str) {
     }
 }
 
-/// A folder or conversation run has no server, so parking a dead owner's record needs
-/// no runtime. Without this it could not be resumed on a computer with no Docker.
-pub(crate) fn park_serverless(store: &Store, today: &str, alive: &dyn Fn(u32) -> bool) {
-    for mut r in store.all() {
+/// Parks what needs no runtime to park. A folder or conversation run of a dead owner
+/// has no server, and with no runtime installed no server can be running, so a stale
+/// container record goes too. Otherwise either would block the learner on a computer
+/// with no Docker. Record-only.
+pub(crate) fn park_serverless(
+    store: &Store,
+    today: &str,
+    docker: &dyn Docker,
+    alive: &dyn Fn(u32) -> bool,
+) {
+    let runs: Vec<RunRecord> = store
+        .all()
+        .into_iter()
+        .filter(|r| r.state == RunState::Active)
+        .collect();
+    let boxed = runs.iter().any(|r| r.env == CONTAINER);
+    let no_runtime = boxed && matches!(probe(docker), Runtime::NotInstalled);
+    for mut r in runs {
         let dead = r.owner_pid == 0 || !alive(r.owner_pid);
-        if r.state == RunState::Active && r.env != CONTAINER && dead {
+        if if r.env == CONTAINER { no_runtime } else { dead } {
             r.state = RunState::Paused;
             r.owner_pid = 0;
             r.updated = today.to_string();

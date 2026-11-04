@@ -34,7 +34,7 @@ use crate::scenario::sweep;
 use crate::scenario::terminal::{Launcher, SystemLauncher};
 use crate::scenario::turns::done_turn;
 
-const USAGE: &str = "scenario commands: /scenario (list) · start [number|id|what you want] · talk [skill] · resume [id] · check · pause · drop [id] · tone plain|adventure";
+const USAGE: &str = "scenario commands: /scenario (list) · start [number|id|what you want] · talk [skill] · resume [id] · check · pause · drop [id] · tone plain|adventure · help";
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ScenarioCmd {
@@ -82,14 +82,16 @@ pub(crate) fn parse(line: &str) -> Option<ScenarioCmd> {
             ScenarioCmd::Drop { id, confirmed }
         }
         Some("tone") => ScenarioCmd::Tone(it.next().map(String::from)),
-        Some(_) => ScenarioCmd::Usage,
+        Some("help") => ScenarioCmd::Usage,
+        // Not a verb, so it says what they want: the learner never has to learn `start`.
+        Some(_) => ScenarioCmd::Start(rest_of(rest.split_whitespace())),
     })
 }
 
 /// Shown before a slow command, so the wait has a reason.
 pub(crate) fn busy_note(cmd: &ScenarioCmd) -> Option<&'static str> {
     match cmd {
-        ScenarioCmd::Start(_) => Some("preparing your task… the first start can take a few minutes while its server is set up"),
+        ScenarioCmd::Start(_) => Some("preparing your task… this can take a few minutes"),
         ScenarioCmd::Talk(_) => Some("preparing your task…"),
         ScenarioCmd::Resume(_) => Some("resuming your task…"),
         ScenarioCmd::Check => Some("running the check…"),
@@ -320,7 +322,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
     }
 
     let docker = seams.docker;
-    sweep::park_serverless(&store, &today, seams.alive);
+    sweep::park_serverless(&store, &today, docker, seams.alive);
     let mut env = Router::new(
         docker,
         &project_tag(&ctx.project_root),
@@ -522,7 +524,11 @@ mod tests {
             Some(ScenarioCmd::Tone(Some("adventure".into())))
         );
         assert_eq!(parse("/scenario tone"), Some(ScenarioCmd::Tone(None)));
-        assert_eq!(parse("/scenario wat"), Some(ScenarioCmd::Usage));
+        assert_eq!(parse("/scenario help"), Some(ScenarioCmd::Usage));
+        assert_eq!(
+            parse("/scenario Price Anchoring"),
+            Some(ScenarioCmd::Start(Some("price anchoring".into())))
+        );
     }
 
     #[test]
@@ -567,9 +573,11 @@ mod tests {
 
     #[test]
     fn only_slow_commands_get_a_busy_note() {
-        assert!(busy_note(&ScenarioCmd::Start(None))
-            .unwrap()
-            .contains("first start"));
+        let start = busy_note(&ScenarioCmd::Start(None)).unwrap();
+        assert!(
+            start.contains("few minutes") && !start.contains("server"),
+            "{start}"
+        );
         assert!(busy_note(&ScenarioCmd::Resume(None)).is_some());
         assert!(busy_note(&ScenarioCmd::Check).is_some());
         assert!(busy_note(&ScenarioCmd::Pause).is_some());

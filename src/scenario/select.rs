@@ -71,7 +71,8 @@ pub(crate) enum Pick<'a> {
     },
 }
 
-/// `arg` = 1-based number, id, or free text; `None` = the first `New` one that can run
+/// `arg` = 1-based number, id, or free text (a number nothing is listed under is
+/// text too: `1984` is a subject); `None` = the first `New` one that can run
 /// here. Explicit picks are honoured even for done or skipped tasks, and even when they
 /// need a runtime that is missing (the install guidance is the answer then), but not
 /// for a task that is later in the story.
@@ -91,11 +92,7 @@ pub(crate) fn resolve<'a>(
         return Ok(next.map_or(Pick::Generate { request: None }, Pick::Package));
     };
     let found = match a.parse::<usize>() {
-        Ok(n) => Some(
-            n.checked_sub(1)
-                .and_then(|i| pkgs.get(i))
-                .ok_or_else(|| format!("no task '{a}'; see /scenario"))?,
-        ),
+        Ok(n) => n.checked_sub(1).and_then(|i| pkgs.get(i)),
         Err(_) => pkgs.iter().find(|p| p.id == a),
     };
     let Some(p) = found else {
@@ -243,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn free_text_is_a_request_and_a_bad_number_stays_an_error() {
+    fn free_text_and_an_unlisted_number_are_requests() {
         let pkgs = vec![pkg("a", &["x1"])];
         let Pick::Generate { request } =
             resolve(&pkgs, Some("price anchoring"), "", &[], &[], true).unwrap()
@@ -251,7 +248,13 @@ mod tests {
             panic!()
         };
         assert_eq!(request.as_deref(), Some("price anchoring"));
-        assert!(resolve(&pkgs, Some("9"), "", &[], &[], true).is_err());
+        for n in ["1984", "0"] {
+            let Pick::Generate { request } = resolve(&pkgs, Some(n), "", &[], &[], true).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(request.as_deref(), Some(n));
+        }
     }
 
     #[test]

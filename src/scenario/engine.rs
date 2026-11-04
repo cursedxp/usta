@@ -23,6 +23,26 @@ pub(crate) struct CheckReport {
     pub clean_warning: Option<String>,
 }
 
+/// A run a different live Usta owns is never paused from here. Asked on its own too,
+/// so a start can refuse before paying for a generation.
+pub(crate) fn refuse_other_owner(store: &Store, t: &Tick, except: Option<&str>) -> Result<()> {
+    for rec in store.all() {
+        if rec.state == RunState::Active
+            && Some(rec.run_id.as_str()) != except
+            && rec.owner_pid != 0
+            && rec.owner_pid != t.pid
+            && (t.alive)(rec.owner_pid)
+        {
+            bail!(
+                "another usta (pid {}) is running scenario '{}'; close it first",
+                rec.owner_pid,
+                rec.package
+            );
+        }
+    }
+    Ok(())
+}
+
 /// At most one run is active per project: pause the others, but never one a
 /// different live Usta owns.
 pub(crate) fn release_others(
@@ -31,18 +51,11 @@ pub(crate) fn release_others(
     t: &Tick,
     except: Option<&str>,
 ) -> Result<()> {
+    refuse_other_owner(store, t, except)?;
     for mut rec in store.all() {
-        if rec.state != RunState::Active || Some(rec.run_id.as_str()) == except {
-            continue;
+        if rec.state == RunState::Active && Some(rec.run_id.as_str()) != except {
+            pause(env, store, &mut rec, t)?;
         }
-        if rec.owner_pid != 0 && rec.owner_pid != t.pid && (t.alive)(rec.owner_pid) {
-            bail!(
-                "another usta (pid {}) is running scenario '{}'; close it first",
-                rec.owner_pid,
-                rec.package
-            );
-        }
-        pause(env, store, &mut rec, t)?;
     }
     Ok(())
 }

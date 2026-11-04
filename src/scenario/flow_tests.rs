@@ -37,6 +37,7 @@ struct Daemon {
     start_script_fails: bool,
     /// The runtime stops answering the moment a check has run.
     dies_at_check: bool,
+    stop_fails: bool,
 }
 
 fn word_after<'a>(line: &'a str, key: &str) -> &'a str {
@@ -77,6 +78,8 @@ impl Daemon {
             let (name, tag) = (word_after(l, "--name "), word_after(l, "usta.project="));
             self.boxes.insert(name.into(), (false, tag.into()));
             ok("")
+        } else if l.starts_with("stop ") && self.stop_fails {
+            fail(1, "cannot stop")
         } else if l.starts_with("start ") || l.starts_with("stop ") {
             match self.boxes.get_mut(&last) {
                 Some(b) => {
@@ -131,10 +134,14 @@ impl Daemon {
 struct Starter {
     daemon: Rc<RefCell<Daemon>>,
     calls: Cell<u32>,
+    stuck: Cell<bool>,
 }
 impl RuntimeStarter for Starter {
     fn start(&self) -> bool {
         self.calls.set(self.calls.get() + 1);
+        if self.stuck.get() {
+            return false;
+        }
         self.daemon.borrow_mut().up = true;
         true
     }
@@ -169,6 +176,10 @@ struct World {
     cancel: Arc<Cancel>,
     conversation: RefCell<Vec<String>>,
     stopping: Cell<bool>,
+    /// Other process ids count as live Ustas.
+    others_alive: Cell<bool>,
+    /// Esc arrives while Usta waits for the runtime.
+    esc_in_wait: Cell<bool>,
 }
 
 impl World {
@@ -192,6 +203,7 @@ impl World {
             starter: Starter {
                 daemon: daemon.clone(),
                 calls: Cell::new(0),
+                stuck: Cell::new(false),
             },
             windows: Windows::default(),
             pid: Rc::new(Cell::new(101)),
@@ -202,6 +214,8 @@ impl World {
             cancel: Arc::default(),
             conversation: RefCell::default(),
             stopping: Cell::new(false),
+            others_alive: Cell::new(false),
+            esc_in_wait: Cell::new(false),
             daemon,
         }
     }
@@ -300,14 +314,18 @@ impl World {
             pid: self.pid.get(),
         };
         let pid = self.pid.clone();
-        let alive = move |p: u32| p == pid.get();
+        let alive = |p: u32| p == pid.get() || self.others_alive.get();
         let live = self.live();
         let seams = Seams {
             docker: &self.docker,
             starter: &self.starter,
             launcher: &self.windows,
             alive: &alive,
-            sleep: &|_| {},
+            sleep: &|_| {
+                if self.esc_in_wait.get() {
+                    self.cancel.request();
+                }
+            },
             stopping: &|| self.stopping.get(),
             live: &live,
         };
@@ -916,18 +934,20 @@ fn a_used_up_topic_generates_the_next_task_and_the_library_keeps_it() {
 }
 
 #[test]
-fn a_package_that_never_proves_itself_is_discarded_and_talk_is_offered() {
+fn a_package_that_never_proves_itself_is_discarded_and_a_conversation_starts() {
     let mut w = World::new("flow_gen_fail");
     w.topic_is("nginx-ops");
     let c = container_reply();
     w.model_says(&[&c, &c, &c, &c]);
     w.daemon.borrow_mut().check_code = 0; // the check passes on a fresh task, every round
     let r = w.start(None);
-    assert!(says(&r, "/scenario talk"), "{:?}", r.notices);
+    assert!(says(&r, "as a conversation"), "{:?}", r.notices);
     assert!(!says(&r, "no tasks"));
-    assert!(w.runs().is_empty());
+    assert_eq!(w.only_run().env, "conversation", "the learner has a task");
+    assert!(turn(&r).starts_with("[SCENARIO START]"));
     let left = library::load_all(&w.global, "nginx-ops").unwrap().pkgs;
-    assert!(left.is_empty());
+    assert_eq!(left.len(), 1, "only the fixed-text task");
+    assert_eq!(left[0].environment.kind, "conversation");
     assert_eq!(w.box_count(), 0, "validation left nothing behind");
     let log = std::fs::read_to_string(w.project.join(".usta/scenarios/last-error.log")).unwrap();
     assert!(log.contains("already passes"), "{log}");
@@ -1033,15 +1053,21 @@ fn a_bare_start_with_only_server_tasks_and_no_docker_generates_instead_of_refusi
 }
 
 #[test]
-fn an_explicit_pick_of_a_server_task_without_docker_gets_install_guidance() {
+fn an_explicit_pick_of_a_server_task_without_docker_gets_guidance_and_a_talk_on_it() {
     let w = World::new("flow_no_docker_explicit");
     w.docker_missing();
-    let e = w
-        .try_cmd(ScenarioCmd::Start(Some(BACKUP.into())))
-        .err()
-        .unwrap();
-    assert!(e.to_string().contains("docs.docker.com"), "{e}");
-    assert!(w.runs().is_empty());
+    w.model_says(&["nonsense", "nonsense", "nonsense", "nonsense"]);
+    let r = w.start(Some(BACKUP));
+    assert!(says(&r, "docs.docker.com"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "conversation");
+    let title = library::load_all(&w.global, "linux")
+        .unwrap()
+        .pkgs
+        .into_iter()
+        .find(|p| p.id == BACKUP)
+        .unwrap()
+        .title;
+    assert!(says(&r, &title), "{:?}", r.notices);
 }
 
 #[test]
@@ -1076,18 +1102,15 @@ fn a_runtime_that_cannot_come_up_sends_a_bare_start_to_a_task_that_needs_none() 
 }
 
 #[test]
-fn a_subject_that_truly_needs_a_system_gets_install_guidance_and_the_talk_offer() {
+fn a_subject_that_truly_needs_a_system_gets_install_guidance_and_a_conversation() {
     let mut w = World::new("flow_needs_system");
     w.topic_is("nginx-ops");
     w.docker_missing();
     w.model_says(&[r#"{"kind":"needs_system","why":"nginx must run"}"#]);
     let r = w.start(None);
-    assert!(
-        says(&r, "docs.docker.com") && says(&r, "/scenario talk"),
-        "{:?}",
-        r.notices
-    );
+    assert!(says(&r, "docs.docker.com"), "{:?}", r.notices);
     assert!(!says(&r, "needs none"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "conversation");
 }
 
 #[test]
@@ -1320,7 +1343,8 @@ fn a_script_proof_pauses_the_running_task_and_says_so_even_if_it_then_fails() {
     w.daemon.borrow_mut().check_code = 0; // every round fails: the check passes on a fresh task
     let r = w.start(Some("something new"));
     assert!(says(&r, "paused now"), "{:?}", r.notices);
-    assert_eq!(w.only_run().state, RunState::Paused);
+    let old = w.runs().into_iter().find(|r| r.package == BACKUP).unwrap();
+    assert_eq!(old.state, RunState::Paused);
 }
 
 #[test]
@@ -1412,4 +1436,199 @@ fn a_check_on_gone_files_keeps_its_own_sentence() {
     std::fs::remove_dir_all(dir).unwrap();
     let e = w.try_cmd(ScenarioCmd::Check).err().unwrap().to_string();
     assert!(e.contains("files for this task are gone"), "{e}");
+}
+
+#[test]
+fn generation_with_docker_stopped_starts_nothing_for_a_conversation_task() {
+    let mut w = World::new("flow_gen_stopped");
+    w.topic_is("pottery");
+    w.docker_off();
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(None);
+    assert_eq!(w.only_run().env, "conversation", "{:?}", r.notices);
+    assert_eq!(w.starter.calls.get(), 0);
+    assert!(!w.model_prompt(0).0.contains("cannot run a server now"));
+    assert!(!says(&r, "needs none"), "{:?}", r.notices);
+}
+
+#[test]
+fn a_script_proof_is_what_brings_a_stopped_runtime_up() {
+    let mut w = World::new("flow_gen_stopped_box");
+    w.topic_is("nginx-ops");
+    w.docker_off();
+    w.model_says(&[&container_reply()]);
+    w.daemon.borrow_mut().check_codes.extend([1, 1, 0]);
+    let r = w.start(None);
+    assert_eq!(w.only_run().env, "container", "{:?}", r.notices);
+    assert_eq!(w.starter.calls.get(), 1);
+    assert_eq!(w.running().len(), 1);
+}
+
+#[test]
+fn esc_during_the_wait_for_the_runtime_stops_generation() {
+    let mut w = World::new("flow_esc_wait");
+    w.topic_is("nginx-ops");
+    w.docker_off();
+    w.esc_in_wait.set(true);
+    w.model_says(&[&container_reply()]);
+    let r = w.start(None);
+    assert!(r.turn.is_none() && r.notices.is_empty(), "{:?}", r.notices);
+    assert!(w.runs().is_empty());
+    let left = library::load_all(&w.global, "nginx-ops").unwrap().pkgs;
+    assert!(left.is_empty());
+}
+
+#[test]
+fn a_runtime_that_will_not_come_up_for_a_proof_ends_in_a_conversation() {
+    let mut w = World::new("flow_proof_stuck");
+    w.topic_is("nginx-ops");
+    w.docker_off();
+    w.starter.stuck.set(true);
+    w.model_says(&[&container_reply()]);
+    let r = w.start(None);
+    assert!(says(&r, "could not start it"), "{:?}", r.notices);
+    assert!(says(&r, "as a conversation"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "conversation");
+}
+
+#[test]
+fn a_shutdown_during_a_start_fallback_installs_nothing() {
+    let mut w = World::new("flow_start_stop");
+    w.topic_is("pottery");
+    w.stopping.set(true);
+    w.model_says(&["nonsense", "nonsense", "nonsense", "nonsense"]);
+    let r = w.start(None);
+    assert!(r.turn.is_none(), "{:?}", r.notices);
+    assert!(!says(&r, "as a conversation"), "{:?}", r.notices);
+    assert!(w.runs().is_empty());
+    let left = library::load_all(&w.global, "pottery").unwrap().pkgs;
+    assert!(left.is_empty(), "nothing was installed");
+}
+
+#[test]
+fn a_stale_server_record_does_not_block_talk_once_docker_is_gone() {
+    let w = World::new("flow_stale_talk");
+    w.start(Some(BACKUP));
+    w.docker_missing();
+    w.relaunch();
+    assert_eq!(w.only_run().state, RunState::Active);
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.cmd(ScenarioCmd::Talk(None));
+    assert!(says(&r, "Who is it for?"), "{:?}", r.notices);
+    let old = w.runs().into_iter().find(|r| r.package == BACKUP).unwrap();
+    assert_eq!(old.state, RunState::Paused);
+}
+
+#[test]
+fn a_stale_server_record_does_not_block_start_once_docker_is_gone() {
+    let w = World::new("flow_stale_start");
+    w.start(Some(BACKUP));
+    w.docker_missing();
+    w.relaunch();
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(Some("something new"));
+    assert!(says(&r, "Who is it for?"), "{:?}", r.notices);
+    let dropped = w.cmd(ScenarioCmd::Drop {
+        id: Some(
+            w.runs()
+                .into_iter()
+                .find(|r| r.package == BACKUP)
+                .unwrap()
+                .run_id,
+        ),
+        confirmed: true,
+    });
+    assert!(says(&dropped, "Dropped"), "{:?}", dropped.notices);
+}
+
+/// Another Usta project has a task running on this machine.
+fn busy_elsewhere(w: &World) {
+    let mut d = w.daemon.borrow_mut();
+    d.boxes
+        .insert("usta-otherproj-x".into(), (true, "otherproj".into()));
+}
+
+#[test]
+fn another_projects_task_does_not_block_a_task_that_needs_no_server() {
+    let mut w = World::new("flow_other_project");
+    w.topic_is("pottery");
+    busy_elsewhere(&w);
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(None);
+    assert_eq!(w.only_run().env, "conversation", "{:?}", r.notices);
+    assert!(w.model_prompt(0).0.contains("cannot run a server now"));
+    assert!(!says(&r, "needs none"), "{:?}", r.notices);
+    assert!(Store::new(&w.project).note_once("no-runtime"), "not spent");
+}
+
+#[test]
+fn another_projects_task_shows_its_refusal_when_a_subject_needs_a_system() {
+    let mut w = World::new("flow_other_needs");
+    w.topic_is("nginx-ops");
+    busy_elsewhere(&w);
+    w.model_says(&[r#"{"kind":"needs_system","why":"nginx must run"}"#]);
+    let r = w.start(None);
+    assert!(says(&r, "another Usta project"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "conversation");
+}
+
+#[test]
+fn a_bare_start_passes_over_a_server_task_while_another_project_runs_one() {
+    let w = World::new("flow_other_bare");
+    busy_elsewhere(&w);
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(None);
+    assert_eq!(w.only_run().env, "conversation", "{:?}", r.notices);
+}
+
+#[test]
+fn a_named_server_task_keeps_the_other_projects_refusal() {
+    let w = World::new("flow_other_named");
+    busy_elsewhere(&w);
+    let e = w
+        .try_cmd(ScenarioCmd::Start(Some(BACKUP.into())))
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("another Usta project"), "{e}");
+    assert!(w.runs().is_empty());
+}
+
+#[test]
+fn a_task_that_could_not_be_paused_is_not_reported_as_paused() {
+    let w = World::new("flow_pause_fails");
+    w.open_the_story();
+    w.start(Some(BACKUP));
+    w.daemon.borrow_mut().stop_fails = true;
+    w.model_says(&[&container_reply()]);
+    let r = w.start(Some("something new"));
+    assert!(!says(&r, "paused now"), "{:?}", r.notices);
+    assert_eq!(w.only_run().state, RunState::Active);
+}
+
+#[test]
+fn a_task_paused_before_a_failed_start_is_still_reported() {
+    let w = World::new("flow_pause_then_fail");
+    w.open_the_story();
+    w.start(Some(BACKUP));
+    busy_elsewhere(&w);
+    let r = w.cmd(ScenarioCmd::Start(Some(CONFIG.into())));
+    assert!(says(&r, "paused now"), "{:?}", r.notices);
+    assert!(says(&r, "another Usta project"), "{:?}", r.notices);
+}
+
+#[test]
+fn another_live_usta_is_refused_before_any_model_call() {
+    let mut w = World::new("flow_other_usta");
+    w.start(Some(BACKUP));
+    w.pid.set(w.pid.get() + 1);
+    w.others_alive.set(true);
+    w.topic_is("linux");
+    for cmd in [
+        ScenarioCmd::Start(Some("something new".into())),
+        ScenarioCmd::Talk(None),
+    ] {
+        let e = w.try_cmd(cmd).err().unwrap().to_string();
+        assert!(e.contains("another usta"), "{e}");
+    }
+    assert_eq!(w.model_calls_since_mark(), 0);
 }

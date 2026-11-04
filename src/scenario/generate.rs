@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::scenario::draft::{self, Draft};
-use crate::scenario::env::CONVERSATION;
+use crate::scenario::env::{internal, CONVERSATION};
 use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
 use crate::scenario::lint::learner_word_problems;
@@ -282,7 +282,7 @@ pub(crate) fn fallback_talk(
     };
     let out = write();
     let _ = std::fs::remove_dir_all(&staged);
-    out
+    out.map_err(|e| internal(format!("{e:#}")))
 }
 
 #[cfg(test)]
@@ -702,6 +702,16 @@ mod tests {
             panic!()
         };
         assert_eq!(w, "nginx must run");
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn a_fallback_that_cannot_write_is_an_internal_error() {
+        let g = tmp("gen_fallback_io");
+        std::fs::create_dir_all(g.join("scenarios")).unwrap();
+        std::fs::write(g.join("scenarios/staging"), "a file where a folder belongs").unwrap();
+        let e = fallback_talk(&g, "1", "marketing", "price").unwrap_err();
+        assert!(e.downcast_ref::<crate::scenario::env::Internal>().is_some());
         let _ = std::fs::remove_dir_all(g);
     }
 

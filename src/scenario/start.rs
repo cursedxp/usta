@@ -15,13 +15,18 @@ use crate::scenario::prompt::Brief;
 use crate::scenario::route::Router;
 use crate::scenario::select::{self, Pick};
 use crate::scenario::steps::{
-    finished_ids, log_error, map_text, model_failed, open_notices, pause_notices, ready,
-    ready_to_release, resume_run, sync_ledger, Step, NO_RUNTIME,
+    failed_with, finished_ids, log_error, map_text, model_failed, open_notices, pause_notices,
+    ready, ready_to_release, ready_unless, resume_run, running_now, sync_ledger, with_notices,
+    Step, NO_RUNTIME,
 };
 use crate::scenario::store::{project_tag, RunState};
 use crate::scenario::sweep;
 use crate::scenario::turns::start_turn;
 use crate::scenario::validate::RealProver;
+
+/// A generation that could not be tested, or could not fit, ends here.
+const AS_TALK: &str =
+    "Usta could not build a tested task for this here, so you get it as a conversation instead.";
 
 const LEVEL_LIMIT: usize = 4_000;
 const MAP_LIMIT: usize = 12_000;
@@ -58,13 +63,38 @@ fn brief(
     }
 }
 
+/// Why this start cannot use a server.
+enum NoServer {
+    /// The runtime is missing or will not come up.
+    Absent(anyhow::Error),
+    /// Another project's task holds the one server allowed.
+    Refused(anyhow::Error),
+}
+
+impl NoServer {
+    fn into_notice(self) -> String {
+        match self {
+            NoServer::Absent(e) | NoServer::Refused(e) => e.to_string(),
+        }
+    }
+}
+
+/// Brings the runtime up: only for a task known to need it.
+fn server_blocked(s: &Step, env: &Router) -> Option<NoServer> {
+    if let Err(e) = ready(s) {
+        return Some(NoServer::Absent(e));
+    }
+    env.container.guard_single().err().map(NoServer::Refused)
+}
+
 pub(crate) fn start(
     s: &Step,
     env: &mut Router,
     sel: Option<String>,
-    notices: Vec<String>,
+    mut notices: Vec<String>,
 ) -> Result<Reply> {
     let ctx = s.ctx;
+    engine::refuse_other_owner(s.store, s.tick, None)?;
     ready_to_release(s, None)?;
     sync_ledger(ctx, s.store, s.pkgs, s.tick.today);
     let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
@@ -82,100 +112,129 @@ pub(crate) fn start(
     };
     let mut pick = resolve(!matches!(probe(s.seams.docker), Runtime::NotInstalled))?;
     // Only a learner who named a task hears why it cannot run; a bare start moves on.
-    let mut down = None;
+    let mut blocked = None;
     if sel.is_none() && matches!(pick, Pick::Package(p) if p.needs_runtime()) {
-        down = ready(s).err();
-        if down.is_some() {
+        blocked = server_blocked(s, env);
+        if blocked.is_some() {
             pick = resolve(false)?;
         }
     }
     match pick {
-        Pick::Package(pkg) => {
-            if pkg.needs_runtime() {
-                ready(s)?;
-                sweep::sweep_docker(
-                    &ctx.project_root,
-                    s.tick.today,
-                    s.seams.docker,
-                    s.seams.alive,
-                );
+        Pick::Package(pkg) if pkg.needs_runtime() => {
+            if let Err(e) = ready(s) {
+                notices.push(e.to_string());
+                return talk(s, env, Some(pkg.title.clone()), notices);
             }
+            sweep::sweep_docker(
+                &ctx.project_root,
+                s.tick.today,
+                s.seams.docker,
+                s.seams.alive,
+            );
             begin(s, env, pkg, &ledger, notices)
         }
+        Pick::Package(pkg) => begin(s, env, pkg, &ledger, notices),
         Pick::Generate { request } => {
-            let why_not = down.or_else(|| ready(s).err());
-            generate_and_begin(s, env, &ledger, request, why_not, notices)
+            generate_and_begin(s, env, &ledger, request, blocked, notices)
         }
     }
 }
 
-/// Nothing suitable is in the library. `why_not`: this computer cannot run a server now.
+/// Nothing suitable is in the library. The runtime is only looked at here: starting it
+/// waits for a proof that needs it, because most tasks never do.
 fn generate_and_begin(
     s: &Step,
     env: &mut Router,
     ledger: &Ledger,
     request: Option<String>,
-    why_not: Option<anyhow::Error>,
+    mut blocked: Option<NoServer>,
     mut notices: Vec<String>,
 ) -> Result<Reply> {
     let ctx = s.ctx;
-    let runtime = why_not.is_none();
-    if runtime {
-        sweep::sweep_docker(
-            &ctx.project_root,
-            s.tick.today,
-            s.seams.docker,
-            s.seams.alive,
-        );
-        // Say so now, not after paying for a generation that cannot be proven.
-        env.container.guard_single()?;
+    let docker = s.seams.docker;
+    let sweep = || sweep::sweep_docker(&ctx.project_root, s.tick.today, docker, s.seams.alive);
+    let mut up = false;
+    if blocked.is_none() {
+        match probe(docker) {
+            Runtime::Ready => {
+                sweep();
+                // Said now, not after paying for a generation that cannot be proven.
+                blocked = env.container.guard_single().err().map(NoServer::Refused);
+                up = true;
+            }
+            Runtime::NotInstalled => blocked = ready(s).err().map(NoServer::Absent),
+            Runtime::Stopped => {}
+        }
     }
-    let b = brief(s, ledger, request, runtime, false);
+    let b = brief(s, ledger, request, blocked.is_none(), false);
+    let mut late = None;
     let outcome = {
+        let cancel = &s.seams.live.cancel;
         let paused = &mut notices;
+        let late = &mut late;
         let mut free = || {
-            paused.extend(pause_notices(s, None));
-            engine::release_others(&mut *env, s.store, s.tick, None)
+            if !up {
+                let came_up = ready_unless(s, &|| cancel.requested()).and_then(|_| {
+                    sweep();
+                    env.container.guard_single()
+                });
+                if let Err(e) = came_up {
+                    let told = anyhow!("no server for the proof: {e}");
+                    *late = Some(NoServer::Absent(e));
+                    return Err(told);
+                }
+                up = true;
+            }
+            let before = running_now(s);
+            let released = engine::release_others(&mut *env, s.store, s.tick, None);
+            paused.extend(pause_notices(s, &before));
+            released
         };
         produce(s, &b, ledger, &mut free)
     };
-    match outcome {
-        Err(e) => Ok(not_generated(s, e, notices)),
-        Ok(Outcome::Cancelled) => Ok(with_notices(Reply::default(), notices)),
+    let skill = b.request.as_deref().unwrap_or(&b.topic);
+    let log = match outcome {
+        Ok(Outcome::Cancelled) => return Ok(with_notices(Reply::default(), notices)),
         Ok(Outcome::Ready(p)) => {
-            if !runtime && s.store.note_once("no-runtime") {
+            let absent = matches!(blocked, Some(NoServer::Absent(_)));
+            if absent && s.store.note_once("no-runtime") {
                 notices.push(NO_RUNTIME.into());
             }
-            begin(s, env, &p, ledger, notices)
+            return begin(s, env, &p, ledger, notices);
         }
-        Ok(Outcome::NeedsSystem(why)) => {
-            log_error(ctx, &why);
-            if let Some(e) = why_not {
-                notices.push(e.to_string());
-            }
-            notices.push(offer(&b));
-            Ok(with_notices(Reply::default(), notices))
-        }
-        Ok(Outcome::Failed(log)) => {
-            log_error(ctx, &log.join("\n"));
-            notices.push(format!(
-                "Usta tried to build a tested task here and could not, so none was started. {}",
-                offer(&b)
-            ));
-            Ok(with_notices(Reply::default(), notices))
-        }
+        Err(e) if late.is_some() => vec![format!("{e:#}")],
+        Err(e) => return Ok(not_generated(s, e, notices)),
+        Ok(Outcome::NeedsSystem(why)) => vec![why],
+        Ok(Outcome::Failed(log)) => log,
+    };
+    let why_not = blocked.or(late).map(NoServer::into_notice);
+    fall_back(s, env, ledger, skill, &log, Some(AS_TALK), why_not, notices)
+}
+
+/// The tail of every failed generation: the learner still gets a task, a conversation
+/// from fixed text. `said` and `why_not` are told first; a shutdown installs nothing.
+#[allow(clippy::too_many_arguments)] // one call per verb; a struct would only rename them
+fn fall_back(
+    s: &Step,
+    env: &mut Router,
+    ledger: &Ledger,
+    skill: &str,
+    log: &[String],
+    said: Option<&str>,
+    why_not: Option<String>,
+    mut notices: Vec<String>,
+) -> Result<Reply> {
+    let ctx = s.ctx;
+    log_error(ctx, &log.join("\n"));
+    if (s.seams.stopping)() {
+        return Ok(with_notices(Reply::default(), notices));
     }
-}
-
-fn offer(b: &Brief) -> String {
-    let skill = b.request.as_deref().unwrap_or(&b.topic);
-    format!("You can still practise it as a conversation: /scenario talk {skill}")
-}
-
-fn with_notices(mut r: Reply, mut notices: Vec<String>) -> Reply {
-    notices.append(&mut r.notices);
-    r.notices = notices;
-    r
+    notices.extend(why_not);
+    notices.extend(said.map(String::from));
+    match generate::fallback_talk(&ctx.global, s.tick.stamp, &ctx.topic, skill) {
+        Ok(p) => begin(s, env, &p, ledger, notices),
+        Err(e) => failed_with(s, e, notices),
+    }
 }
 
 /// A model outage gets the one plain sentence. Anything else (a dead runtime, a disk
@@ -228,6 +287,7 @@ pub(crate) fn talk(
     notices: Vec<String>,
 ) -> Result<Reply> {
     let ctx = s.ctx;
+    engine::refuse_other_owner(s.store, s.tick, None)?;
     ready_to_release(s, None)?;
     sync_ledger(ctx, s.store, s.pkgs, s.tick.today);
     let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
@@ -240,13 +300,8 @@ pub(crate) fn talk(
         // The prompt rules this reply out, so here it is one more failed attempt.
         Ok(Outcome::NeedsSystem(why)) => vec![why],
     };
-    log_error(ctx, &log.join("\n"));
-    if (s.seams.stopping)() {
-        return Ok(with_notices(Reply::default(), notices));
-    }
     let line = skill.as_deref().unwrap_or(&ctx.topic);
-    let p = generate::fallback_talk(&ctx.global, s.tick.stamp, &ctx.topic, line)?;
-    begin(s, env, &p, &ledger, notices)
+    fall_back(s, env, &ledger, line, &log, None, None, notices)
 }
 
 /// Open `pkg`: continue an unfinished run of it, or start one.
@@ -272,9 +327,13 @@ fn begin(
     if pkg.needs_runtime() {
         notices.extend(runc_warning(s.seams.docker));
     }
-    let paused = pause_notices(s, None);
-    let rec = engine::start(env, s.store, pkg, tone, s.tick)?;
-    notices.extend(paused);
+    let before = running_now(s);
+    let started = engine::start(env, s.store, pkg, tone, s.tick);
+    notices.extend(pause_notices(s, &before));
+    let rec = match started {
+        Ok(rec) => rec,
+        Err(e) => return failed_with(s, e, notices),
+    };
     notices.push(pkg.tone_text(tone, "open")?);
     notices.extend(open_notices(s, pkg, &rec));
     notices.push("When you think it is solved: /scenario check".into());

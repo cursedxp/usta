@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Result};
 
 use crate::progress;
-use crate::scenario::command::{Ctx, Reply, Seams};
+use crate::scenario::command::{failure, Ctx, Reply, Seams};
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{ensure_ready, START_POLL, START_TIMEOUT};
 use crate::scenario::engine::{self, Tick};
@@ -76,8 +76,20 @@ pub(crate) struct Step<'a> {
 }
 
 pub(crate) fn ready(s: &Step) -> Result<()> {
+    ready_unless(s, &|| false)
+}
+
+/// `stop` ends the wait early, with an error.
+pub(crate) fn ready_unless(s: &Step, stop: &dyn Fn() -> bool) -> Result<()> {
     let m = s.seams;
-    ensure_ready(m.docker, m.starter, START_TIMEOUT, START_POLL, m.sleep)
+    ensure_ready(
+        m.docker,
+        m.starter,
+        START_TIMEOUT,
+        START_POLL,
+        m.sleep,
+        stop,
+    )
 }
 
 /// Starting or waking any task pauses a running server task, and only the runtime can
@@ -99,13 +111,24 @@ pub(crate) fn title_of(pkgs: &[Package], package: &str) -> String {
         .unwrap_or_else(|| package.to_string())
 }
 
-/// Starting or waking a task pauses whatever else runs (`engine::release_others`).
-/// Asked before that happens, so the learner can be told.
-pub(crate) fn pause_notices(s: &Step, except: Option<&str>) -> Vec<String> {
+/// What runs now. Starting or waking a task pauses it (`engine::release_others`).
+pub(crate) fn running_now(s: &Step) -> Vec<RunRecord> {
     s.store
         .all()
         .into_iter()
-        .filter(|r| r.state == RunState::Active && Some(r.run_id.as_str()) != except)
+        .filter(|r| r.state == RunState::Active)
+        .collect()
+}
+
+/// One line for each of `before` that is really paused now.
+pub(crate) fn pause_notices(s: &Step, before: &[RunRecord]) -> Vec<String> {
+    before
+        .iter()
+        .filter(|r| {
+            s.store
+                .load(&r.run_id)
+                .is_ok_and(|n| n.state == RunState::Paused)
+        })
         .map(|r| {
             format!(
                 "'{}' was running, so it is paused now. Back to it: /scenario resume {}",
@@ -114,6 +137,20 @@ pub(crate) fn pause_notices(s: &Step, except: Option<&str>) -> Vec<String> {
             )
         })
         .collect()
+}
+
+pub(crate) fn with_notices(mut r: Reply, mut notices: Vec<String>) -> Reply {
+    notices.append(&mut r.notices);
+    r.notices = notices;
+    r
+}
+
+/// A step failed after the learner was owed `notices`: an `Err` would lose them.
+pub(crate) fn failed_with(s: &Step, e: anyhow::Error, notices: Vec<String>) -> Result<Reply> {
+    if notices.is_empty() {
+        return Err(e);
+    }
+    Ok(with_notices(failure(s.ctx, e), notices))
 }
 
 /// How the learner reaches the task: a window, a folder or this conversation.
@@ -188,10 +225,16 @@ pub(crate) fn resume_run(
     let mut paused = Vec::new();
     if woke {
         ready_to_release(s, Some(&rec.run_id))?;
-        paused = pause_notices(s, Some(&rec.run_id));
-        if let Some(w) = engine::resume(env, s.store, pkg, &mut rec, s.tick)? {
-            log_error(s.ctx, &w);
-            restarted = false;
+        let before = running_now(s);
+        let woken = engine::resume(env, s.store, pkg, &mut rec, s.tick);
+        paused = pause_notices(s, &before);
+        match woken {
+            Ok(None) => {}
+            Ok(Some(w)) => {
+                log_error(s.ctx, &w);
+                restarted = false;
+            }
+            Err(e) => return failed_with(s, e, paused),
         }
     }
     let mut notices = vec![if rec.env == CONTAINER {
