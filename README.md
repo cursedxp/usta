@@ -34,6 +34,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 🌍 **Any topic** | Not Rust-specific. For a new topic (Linux security, GTM, anything) Usta **derives the approach through an introduction** and builds a web-researched **curriculum map** (`not seen → seen → settled → deepened`). Scope guarding: nothing stays hanging in the air. |
 | 📚 **Bring your own material** | Drop your book/course notes (md/txt — PDFs auto-convert if `pdftotext` is installed) into `materials/` — Usta anchors the curriculum to its chapters, assigns reading, and quizzes you on it. You read; it never summarizes the book at you. |
 | 🎨 **Terminal UI** | Claude Code-style terminal UI: two-column welcome box on open (learning status + what's next), a borderless multiline input (a single rule above, grows to 8 rows), sticky status line (spinner + context gauge); a calm, colorblind-safe visual language (glyph+color pairs, one accent), designed in a full TUI design system. Fullscreen: usta owns the window and keeps the conversation in its own scrollable pane (mouse wheel / PageUp / PageDown; drag to select and copy chat text). Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
+| 🛠️ **Scenario mode** | `/scenario` and Usta brings the work: a practice task on a throwaway Linux server, with a story that continues from one task to the next. Usta starts the server and opens a terminal window already inside it; you fix the problem, `/scenario check` tells you whether it holds. Needs Docker installed. Three Linux scenarios ship today; other subjects come later. |
 | 🗂️ **Management** | `usta topics` shows what you're learning where; `reset` clears a topic or everything. |
 | 📈 **Visible progress** | Every session lands in a lightweight history — `usta stats` shows your week (sessions, map %, settled items) and streaks. Broken streak? No guilt: it shows your longest instead. |
 
@@ -90,7 +91,7 @@ usta start gtm            # could be rust, gtm, anything
 
 Practice: Usta assigns exercises into `exercises/` — write, save, and say you're done: the review comes with your message. No solutions handed over.
 
-In-session commands: `/watch on|off` (file feedback) · `/watch live` (immediate review per save) · `/show [topic]` (animated visual explainer) · `/exam` (goal mode: mock exam) · `/game on|off` (gamification) · `/help` · `/quit` · `/context` (what fills the context window; exact bytes; token counts are estimates).
+In-session commands: `/watch on|off` (file feedback) · `/watch live` (immediate review per save) · `/show [topic]` (animated visual explainer) · `/exam` (goal mode: mock exam) · `/game on|off` (gamification) · `/help` · `/quit` · `/context` (what fills the context window; exact bytes; token counts are estimates) · `/scenario` (practice tasks: start, resume, check, pause, drop, tone).
 
 ### Companion watching
 
@@ -168,9 +169,9 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-v0.39 · Rust 2021 (1.88+). Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+v0.40 · Rust 2021 (1.88+). Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-Next up: scenario mode, where Usta brings the work instead of waiting for your project ([design](docs/superpowers/specs/2026-11-04-scenario-mode-design.md)). Further ideas: Homebrew tap, streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
+Next up: model-generated scenarios, so practice tasks are no longer limited to the packaged ones ([design](docs/superpowers/specs/2026-11-04-scenario-mode-design.md)). Further ideas: Homebrew tap, streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
 
 ## License
 
