@@ -169,7 +169,7 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-v0.40 · Rust 2021 (1.88+). Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+v0.41 · Rust 2021 (1.88+). Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Scenario mode design: [spec](docs/superpowers/specs/2026-11-04-scenario-mode-design.md). Further ideas: Homebrew tap, streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
 
