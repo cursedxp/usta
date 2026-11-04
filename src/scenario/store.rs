@@ -127,7 +127,10 @@ impl Store {
 
 /// The project's identity: labels every container so one project's cleanup can
 /// never touch another project's. `.usta/scenarios/tag` holds the tag and the
-/// folder it belongs to (an older file holds only the tag). When the folder is
+/// folder it belongs to (an older file holds only the tag). A new project gets a
+/// unique tag, never one derived from its path alone: a later project at the same
+/// path must not inherit a moved project's containers. A lost or damaged file is
+/// rebuilt from an unfinished record, so its tasks still match. When the folder is
 /// somewhere else, the old location decides: gone means it moved, so the tag
 /// stays and records and containers still match; still there means this is a
 /// copy, which gets a fresh tag so neither folder's cleanup can touch the other's
@@ -140,10 +143,35 @@ pub(crate) fn project_tag(project_root: &Path) -> String {
         Some((tag, Some(path))) if path == here => return tag,
         Some((tag, Some(path))) if is_original(&path, &here, &tag) => fresh_tag(&here, &tag),
         Some((tag, _)) => tag,
-        None => path_tag(project_root),
+        None => recovered_tag(project_root).unwrap_or_else(|| fresh_tag(&here, "")),
     };
     let _ = write_atomic(&file, &format!("{tag}\n{}\n", here.display()));
     tag
+}
+
+/// The tag inside a `usta-<tag>-<run>` reference.
+fn tag_in(reference: &str) -> Option<&str> {
+    let (tag, _) = reference.strip_prefix("usta-")?.split_once('-')?;
+    valid_tag(tag).then_some(tag)
+}
+
+/// Only unfinished records: a copy's dropped ones carry the original's tag.
+fn recovered_tag(project_root: &Path) -> Option<String> {
+    Store::new(project_root)
+        .all()
+        .iter()
+        .rev()
+        .filter(|r| {
+            matches!(
+                r.state,
+                RunState::Preparing | RunState::Active | RunState::Paused
+            )
+        })
+        .find_map(|r| tag_in(&r.reference).map(String::from))
+}
+
+fn valid_tag(tag: &str) -> bool {
+    tag.len() == 8 && tag.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
 }
 
 fn canon(path: &Path) -> PathBuf {
@@ -156,25 +184,26 @@ fn read_tag(file: &Path) -> Option<(String, Option<PathBuf>)> {
     let text = std::fs::read_to_string(file).ok()?;
     let mut lines = text.lines();
     let tag = lines.next()?.trim();
-    if tag.len() != 8 || !tag.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+    if !valid_tag(tag) {
         return None;
     }
     let path = lines.next().filter(|p| !p.is_empty()).map(PathBuf::from);
     Some((tag.to_string(), path))
 }
 
-/// True when `stored` is the live folder this one was copied from. Another name
-/// for the same folder is not, and neither is an unrelated project that took over
-/// the path after a move (it holds a different tag).
+/// True when `stored` is the live folder this one was copied from: it still holds
+/// this very tag. Another name for the same folder is not, and neither is an
+/// unrelated project that took over the path after a move, with a tag of its own
+/// or none yet (`/scenario tone` makes the folder without one).
 fn is_original(stored: &Path, here: &Path, tag: &str) -> bool {
     let scenarios = stored.join(".usta/scenarios");
     scenarios.is_dir()
         && canon(stored) != here
-        && read_tag(&scenarios.join("tag")).is_none_or(|(t, _)| t == tag)
+        && read_tag(&scenarios.join("tag")).is_some_and(|(t, _)| t == tag)
 }
 
-/// Not the plain path hash: a copy can land on the path the original's tag was
-/// hashed from.
+/// Unique per call: the clock goes into the hash, so the same path never yields
+/// the same tag twice.
 fn fresh_tag(here: &Path, old: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -182,7 +211,7 @@ fn fresh_tag(here: &Path, old: &str) -> String {
     path_tag(&here.join(format!("{old}-{nanos}")))
 }
 
-/// 8-hex hash of the project root (FNV-1a).
+/// 8-hex hash of a path (FNV-1a).
 fn path_tag(project_root: &Path) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in project_root.to_string_lossy().as_bytes() {
@@ -298,13 +327,11 @@ mod tests {
         let (old, new) = (base.join("old"), base.join("new"));
         std::fs::create_dir_all(&old).unwrap();
         let tag = project_tag(&old);
-        assert_eq!(tag, path_tag(&old), "first call derives it from the path");
         assert_eq!(
             stored(&old),
             (tag.clone(), canon(&old).display().to_string())
         );
         std::fs::rename(&old, &new).unwrap();
-        assert_ne!(path_tag(&new), tag, "the new path hashes differently");
         assert_eq!(
             project_tag(&new),
             tag,
@@ -324,25 +351,11 @@ mod tests {
         for bad in ["", "not-hex!", "aaaa1111 --filter x", "AAAA11112"] {
             std::fs::create_dir_all(root.join(".usta/scenarios")).unwrap();
             std::fs::write(root.join(".usta/scenarios/tag"), bad).unwrap();
-            assert_eq!(project_tag(&root), path_tag(&root), "{bad:?}");
+            let tag = project_tag(&root);
+            assert!(tag.len() == 8 && tag != bad, "{bad:?}: {tag}");
+            assert_eq!(project_tag(&root), tag, "{bad:?}: stable once replaced");
         }
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// The two lines of the tag file.
-    fn stored(root: &Path) -> (String, String) {
-        let text = std::fs::read_to_string(root.join(".usta/scenarios/tag")).unwrap();
-        let mut l = text.lines();
-        (l.next().unwrap().into(), l.next().unwrap_or("").into())
-    }
-
-    fn copy_tag_file(from: &Path, to: &Path) {
-        std::fs::create_dir_all(to.join(".usta/scenarios")).unwrap();
-        std::fs::copy(
-            from.join(".usta/scenarios/tag"),
-            to.join(".usta/scenarios/tag"),
-        )
-        .unwrap();
     }
 
     #[test]
@@ -405,16 +418,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// The two lines of the tag file.
+    fn stored(root: &Path) -> (String, String) {
+        let text = std::fs::read_to_string(root.join(".usta/scenarios/tag")).unwrap();
+        let mut l = text.lines();
+        (l.next().unwrap().into(), l.next().unwrap_or("").into())
+    }
+
+    fn copy_tag_file(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to.join(".usta/scenarios")).unwrap();
+        std::fs::copy(
+            from.join(".usta/scenarios/tag"),
+            to.join(".usta/scenarios/tag"),
+        )
+        .unwrap();
+    }
+
+    fn run_with_reference(root: &Path, id: &str, state: RunState, reference: &str) {
+        let mut r = rec(id, state, "2026-11-04");
+        r.reference = reference.into();
+        Store::new(root).save(&r).unwrap();
+    }
+
     #[test]
-    fn a_different_project_at_the_old_path_does_not_make_a_move_a_copy() {
-        let base = tmp("store_tag_reused");
-        let (old, new) = (base.join("old"), base.join("new"));
-        std::fs::create_dir_all(&old).unwrap();
-        let tag = project_tag(&old);
-        std::fs::rename(&old, &new).unwrap();
-        std::fs::create_dir_all(old.join(".usta/scenarios")).unwrap();
-        std::fs::write(old.join(".usta/scenarios/tag"), "abcd1234\n").unwrap();
-        assert_eq!(project_tag(&new), tag);
-        let _ = std::fs::remove_dir_all(base);
+    fn the_first_tag_is_not_a_function_of_the_path() {
+        let root = tmp("store_tag_unique");
+        std::fs::create_dir_all(&root).unwrap();
+        let first = project_tag(&root);
+        assert_ne!(first, path_tag(&root));
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        assert_ne!(project_tag(&root), first, "a new project at the same path");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_lost_or_damaged_tag_file_is_recovered_from_an_unfinished_record() {
+        let root = tmp("store_tag_recover");
+        std::fs::create_dir_all(&root).unwrap();
+        let tag = project_tag(&root);
+        let file = root.join(".usta/scenarios/tag");
+        run_with_reference(&root, "a", RunState::Paused, &format!("usta-{tag}-a"));
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(project_tag(&root), tag, "lost");
+        std::fs::write(&file, "broken").unwrap();
+        assert_eq!(project_tag(&root), tag, "damaged");
+        assert_eq!(stored(&root).0, tag, "and written back");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_a_well_formed_reference_of_an_unfinished_run_is_trusted() {
+        let root = tmp("store_tag_no_recover");
+        run_with_reference(&root, "d", RunState::Finished, "usta-abcd1234-d");
+        run_with_reference(&root, "x", RunState::Dropped, "usta-abcd1234-x");
+        run_with_reference(&root, "k", RunState::Paused, "kiln-db");
+        run_with_reference(&root, "s", RunState::Paused, "usta-short-s");
+        run_with_reference(&root, "e", RunState::Paused, "");
+        assert_ne!(project_tag(&root), "abcd1234");
+        let _ = std::fs::remove_dir_all(root);
     }
 }

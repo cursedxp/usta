@@ -621,11 +621,12 @@ mod tests {
     fn foreign_records_are_dropped_with_no_docker_at_all() {
         let root = tmp("sweep_foreign_nodocker");
         let store = Store::new(&root);
+        let tag = project_tag(&root); // read first: the project's identity predates the stray record
         let mut r = rec("m", RunState::Active, 999_999, "2026-11-04");
         r.reference = "usta-bbbb2222-m".into();
         store.save(&r).unwrap();
         let mut own = rec("own", RunState::Paused, 0, "2026-11-04");
-        own.reference = format!("usta-{}-own", project_tag(&root));
+        own.reference = format!("usta-{tag}-own");
         store.save(&own).unwrap();
         drop_foreign(&root, TODAY);
         assert_eq!(store.load("m").unwrap().state, RunState::Dropped);

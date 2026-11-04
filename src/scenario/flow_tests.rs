@@ -617,3 +617,74 @@ fn a_copied_project_and_its_original_never_touch_each_others_work() {
     assert_eq!(w.box_count(), 2);
     assert!(!w.removed_anything());
 }
+
+/// Pause a task, then move the project away, leaving its old path free.
+fn moved_away(w: &mut World) -> (PathBuf, PathBuf, String) {
+    w.start(Some(BACKUP));
+    w.cmd(ScenarioCmd::Pause);
+    let old = w.project.clone();
+    let tag = project_tag(&old);
+    let moved = w.base.join("moved");
+    std::fs::rename(&old, &moved).unwrap();
+    std::fs::create_dir_all(&old).unwrap();
+    (old, moved, tag)
+}
+
+fn assert_moved_work_survives(w: &mut World, moved: PathBuf, tag: &str) {
+    w.project = moved;
+    w.relaunch();
+    assert_eq!(project_tag(&w.project), tag, "the move kept its identity");
+    let paused: Vec<RunRecord> = w
+        .runs()
+        .into_iter()
+        .filter(|r| r.state == RunState::Paused)
+        .collect();
+    assert_eq!(paused.len(), 1, "{:?}", w.runs());
+    assert!(!w.removed_anything(), "{:?}", w.docker.calls());
+    assert!(turn(&w.cmd(ScenarioCmd::Resume(None))).starts_with("[SCENARIO RESUME]"));
+    assert!(!w.removed_anything());
+}
+
+#[test]
+fn a_new_project_at_the_old_path_leaves_the_moved_work_alone() {
+    let mut w = World::new("flow_new_at_old");
+    let (old, moved, tag) = moved_away(&mut w);
+
+    // The new project opens first and works: its sweep must not see the moved container.
+    w.project = old;
+    assert_ne!(project_tag(&w.project), tag);
+    w.start(Some(BACKUP));
+    w.relaunch();
+    assert_eq!(w.box_count(), 2);
+    assert!(!w.removed_anything(), "{:?}", w.docker.calls());
+
+    assert_moved_work_survives(&mut w, moved, &tag);
+}
+
+#[test]
+fn a_tone_only_folder_at_the_old_path_does_not_make_a_move_a_copy() {
+    let mut w = World::new("flow_tone_at_old");
+    let (old, moved, tag) = moved_away(&mut w);
+
+    // `/scenario tone` makes .usta/scenarios/ without any tag file.
+    w.project = old.clone();
+    w.cmd(ScenarioCmd::Tone(Some("adventure".into())));
+    assert!(old.join(".usta/scenarios/tone").exists());
+    assert!(!old.join(".usta/scenarios/tag").exists());
+
+    assert_moved_work_survives(&mut w, moved, &tag);
+}
+
+#[test]
+fn a_lost_tag_file_does_not_drop_the_task() {
+    let w = World::new("flow_lost_tag");
+    w.start(Some(BACKUP));
+    w.cmd(ScenarioCmd::Pause);
+    let tag = project_tag(&w.project);
+    std::fs::remove_file(w.project.join(".usta/scenarios/tag")).unwrap();
+    w.relaunch();
+    assert_eq!(project_tag(&w.project), tag);
+    assert_eq!(w.only_run().state, RunState::Paused);
+    assert!(turn(&w.cmd(ScenarioCmd::Resume(None))).starts_with("[SCENARIO RESUME]"));
+    assert!(!w.removed_anything());
+}
