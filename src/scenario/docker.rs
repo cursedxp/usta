@@ -1,9 +1,13 @@
 //! Thin seam over the `docker` CLI so every command line is testable without Docker.
 
+use std::io::Read;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::sync::mpsc::{channel, Receiver};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+
+use crate::scenario::env::{internal, Internal};
 
 pub(crate) struct Out {
     pub code: i32,
@@ -30,16 +34,77 @@ pub(crate) struct RealDocker;
 
 impl Docker for RealDocker {
     fn run(&self, args: &[&str]) -> Result<Out> {
-        let o = Command::new("docker")
-            .args(args)
-            .output()
-            .context("could not run the docker command")?;
-        Ok(Out {
-            code: o.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
-        })
+        run_bounded("docker", args, time_limit(args))
     }
+}
+
+/// How long one docker call may take. A wedged daemon answers nothing, so every
+/// call has a bound: short for the ones launch and exit wait on, long for the
+/// work that legitimately takes time (image builds, setup and check scripts).
+fn time_limit(args: &[&str]) -> Duration {
+    let secs = match args.first().copied() {
+        Some("version" | "ps" | "inspect" | "image") => 10,
+        Some("stop") => 15,
+        Some("rm") => 30,
+        Some("create" | "start" | "cp") => 60,
+        Some("build") => 1800,
+        _ => 600,
+    };
+    Duration::from_secs(secs)
+}
+
+/// How long to wait for the output once the process has ended; only something
+/// it left behind holding the pipe open can use this up.
+const DRAIN: Duration = Duration::from_secs(1);
+
+/// Read a stream on its own thread so a full pipe never stalls the process.
+fn drain(mut stream: impl Read + Send + 'static) -> Receiver<Vec<u8>> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stream.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    rx
+}
+
+fn drained(rx: &Receiver<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&rx.recv_timeout(DRAIN).unwrap_or_default()).into_owned()
+}
+
+/// Run `program`, killing it after `limit`. Running past the limit is an
+/// internal error; failing to spawn is a plain one (`probe`: not installed).
+fn run_bounded(program: &str, args: &[&str], limit: Duration) -> Result<Out> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("could not run the {program} command"))?;
+    let stdout = drain(child.stdout.take().expect("stdout is piped"));
+    let stderr = drain(child.stderr.take().expect("stderr is piped"));
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(internal(format!(
+                "{program} {} timed out after {}s",
+                args.first().unwrap_or(&""),
+                limit.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    Ok(Out {
+        code: status.code().unwrap_or(-1),
+        stdout: drained(&stdout),
+        stderr: drained(&stderr),
+    })
 }
 
 pub(crate) enum Runtime {
@@ -52,6 +117,8 @@ pub(crate) enum Runtime {
 
 pub(crate) fn probe(d: &dyn Docker) -> Runtime {
     match d.run(&["version", "--format", "{{.Server.Version}}"]) {
+        // Timed out: the CLI is there, the engine does not answer.
+        Err(e) if e.downcast_ref::<Internal>().is_some() => Runtime::Stopped,
         Err(_) => Runtime::NotInstalled,
         Ok(o) if o.ok() => Runtime::Ready,
         Ok(_) => Runtime::Stopped,
@@ -134,8 +201,11 @@ pub(crate) fn ensure_ready(
     if !s.start() {
         bail!(CANNOT_START);
     }
+    // Probes take time of their own on a daemon that does not answer: `begun` keeps
+    // the wait at `timeout`, `waited` keeps it deterministic when `sleep` is a test's.
+    let begun = Instant::now();
     let mut waited = Duration::ZERO;
-    while waited < timeout {
+    while waited < timeout && begun.elapsed() < timeout {
         sleep(poll);
         waited += poll;
         if matches!(probe(d), Runtime::Ready) {
@@ -441,5 +511,103 @@ mod tests {
             stderr: "b\n".into(),
         };
         assert_eq!(o.text(), "a\nb");
+    }
+
+    /// A daemon that never answers: `RealDocker` turns that into an internal error.
+    struct Wedged;
+    impl Docker for Wedged {
+        fn run(&self, _: &[&str]) -> Result<Out> {
+            Err(internal("docker version timed out after 10s"))
+        }
+    }
+
+    fn sh(script: &str, limit: Duration) -> Result<Out> {
+        run_bounded("sh", &["-c", script], limit)
+    }
+
+    #[test]
+    fn a_command_past_its_limit_is_killed_and_becomes_an_internal_error() {
+        let begun = Instant::now();
+        let e = sh("sleep 30", Duration::from_millis(150)).err().unwrap();
+        assert!(
+            begun.elapsed() < Duration::from_secs(5),
+            "must not wait it out"
+        );
+        assert!(e.downcast_ref::<Internal>().is_some(), "{e:?}");
+        assert!(e.to_string().contains("timed out"), "{e}");
+    }
+
+    #[test]
+    fn a_bounded_run_keeps_exit_code_and_both_streams() {
+        let o = sh("echo out; echo err >&2; exit 3", Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            (o.code, o.stdout.trim(), o.stderr.trim()),
+            (3, "out", "err")
+        );
+    }
+
+    #[test]
+    fn output_larger_than_a_pipe_buffer_does_not_stall_the_run() {
+        let o = sh(
+            "dd if=/dev/zero bs=1024 count=512 2>/dev/null",
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(o.stdout.len(), 512 * 1024);
+    }
+
+    #[test]
+    fn a_background_process_holding_the_pipe_does_not_hang_the_read() {
+        let begun = Instant::now();
+        let o = sh("sleep 30 & echo done", Duration::from_secs(10)).unwrap();
+        assert!(o.ok());
+        assert!(begun.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_missing_program_is_not_an_internal_error() {
+        let e = run_bounded("usta-no-such-binary", &[], Duration::from_secs(1))
+            .err()
+            .unwrap();
+        assert!(e.downcast_ref::<Internal>().is_none(), "{e:?}");
+    }
+
+    #[test]
+    fn short_steps_get_short_bounds_and_long_steps_long_ones() {
+        let secs = |args: &[&str]| time_limit(args).as_secs();
+        for quick in [
+            &["version", "--format", "x"][..],
+            &["ps", "-a"],
+            &["inspect", "n"],
+            &["image", "inspect", "i"],
+        ] {
+            assert!(secs(quick) <= 10, "{quick:?}");
+        }
+        assert!(secs(&["stop", "-t", "2", "n"]) <= 15);
+        assert!(secs(&["rm", "-f", "n"]) <= 30);
+        assert!(secs(&["start", "n"]) <= 60);
+        assert!(secs(&["exec", "n", "sh", "setup.sh"]) >= 600);
+        assert!(secs(&["build", "-t", "i", "."]) >= 1800);
+    }
+
+    #[test]
+    fn a_wedged_daemon_counts_as_stopped_not_as_missing() {
+        assert!(matches!(probe(&Wedged), Runtime::Stopped));
+    }
+
+    #[test]
+    fn slow_probes_count_against_the_start_wait() {
+        let d = FakeDocker::new(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            fail(1, "x")
+        });
+        let st = FakeStarter {
+            started: Default::default(),
+            can: true,
+        };
+        let limit = Duration::from_millis(100);
+        let e = ensure_ready(&d, &st, limit, Duration::from_millis(1), &|_| {});
+        assert!(e.is_err());
+        assert!(d.calls().len() < 20, "polled {} times", d.calls().len());
     }
 }
