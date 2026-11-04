@@ -382,7 +382,7 @@ impl Package {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::scenario::package::tests::{tmp, write_pkg};
     use crate::scenario::package::ThreadSpec;
@@ -511,7 +511,7 @@ text = "Gives a reason drawn from the competitor file"
 evidence = ["competitors.csv"]
 "#;
 
-    fn folder_pkg(root: &Path) -> PathBuf {
+    pub(crate) fn folder_pkg(root: &Path) -> PathBuf {
         let d = root.join("demo-pkg");
         for (f, c) in [
             ("task.toml", RUBRIC_TOML),

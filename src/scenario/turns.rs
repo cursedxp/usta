@@ -90,6 +90,22 @@ pub(crate) fn resume_turn(
     )
 }
 
+pub(crate) fn resume_files_turn(
+    pkg: &Package,
+    instruction: &str,
+    last_check: Option<&str>,
+) -> String {
+    format!(
+        "[SCENARIO RESUME] The learner came back to the unfinished task \"{}\" ({}). Task: {instruction} \
+         Their last check: {}. Their files in the task folder are as they left them. \
+         In two sentences, say where they left off if this conversation shows it, otherwise restate the task. \
+         Do not give the answer.",
+        pkg.title,
+        pkg.id,
+        last_check.unwrap_or("none yet")
+    )
+}
+
 pub(crate) fn done_turn(pkg: &Package) -> String {
     format!(
         "[SCENARIO DONE] The check passed for \"{}\" ({}). Skills exercised: {}. The shell already showed the closing. \

@@ -302,7 +302,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         _ => {}
     }
     library::sync(&ctx.global)?;
-    let mut env = Router::new(docker, &project_tag(&ctx.project_root));
+    let mut env = Router::new(docker, &project_tag(&ctx.project_root), store.tasks_dir());
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     let tick = Tick {
         pid: ctx.pid,

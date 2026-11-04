@@ -122,7 +122,11 @@ impl Drop for Slot {
             return;
         }
         let docker = RealDocker;
-        let mut env = Router::new(&docker, &project_tag(&self.ctx.project_root));
+        let mut env = Router::new(
+            &docker,
+            &project_tag(&self.ctx.project_root),
+            store.tasks_dir(),
+        );
         let today = crate::lifecycle::today();
         let alive: &dyn Fn(u32) -> bool = &crate::lock::pid_alive;
         let tick = Tick {

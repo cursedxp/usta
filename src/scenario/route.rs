@@ -2,23 +2,32 @@
 //! `prepare` routes on the package, the others on `EnvHandle::kind`, because
 //! `release_others` pauses runs of other kinds through this same object.
 
+use std::path::PathBuf;
+
 use anyhow::{bail, Result};
 
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::Docker;
-use crate::scenario::env::{CheckOutcome, EnvHandle, Environment, CONTAINER};
+use crate::scenario::env::{CheckOutcome, EnvHandle, Environment, CONTAINER, FOLDER};
+use crate::scenario::folder::FolderEnv;
 use crate::scenario::package::Package;
 
 pub(crate) struct Router<'a> {
     pub container: ContainerEnv<'a>,
+    pub folder: FolderEnv<'a>,
 }
 
 impl<'a> Router<'a> {
-    pub fn new(docker: &'a dyn Docker, tag: &str) -> Router<'a> {
+    pub fn new(docker: &'a dyn Docker, tag: &str, tasks: PathBuf) -> Router<'a> {
         Router {
             container: ContainerEnv {
                 docker,
                 project_tag: tag.to_string(),
+            },
+            folder: FolderEnv {
+                docker,
+                project_tag: tag.to_string(),
+                tasks,
             },
         }
     }
@@ -26,6 +35,7 @@ impl<'a> Router<'a> {
     fn pick(&mut self, kind: &str) -> Result<&mut dyn Environment> {
         match kind {
             CONTAINER => Ok(&mut self.container),
+            FOLDER => Ok(&mut self.folder),
             other => bail!("environment kind '{other}' is not supported"),
         }
     }
@@ -58,7 +68,7 @@ mod tests {
     #[test]
     fn a_handle_of_an_unknown_kind_is_refused_and_touches_no_runtime() {
         let d = FakeDocker::new(|_| ok(""));
-        let mut r = Router::new(&d, "aaaa1111");
+        let mut r = Router::new(&d, "aaaa1111", PathBuf::from("t"));
         let h = EnvHandle {
             reference: "usta-aaaa1111-x".into(),
             access: String::new(),
@@ -71,7 +81,7 @@ mod tests {
     #[test]
     fn a_container_handle_reaches_the_container_environment() {
         let d = FakeDocker::new(|_| ok(""));
-        let mut r = Router::new(&d, "aaaa1111");
+        let mut r = Router::new(&d, "aaaa1111", PathBuf::from("t"));
         let h = EnvHandle {
             reference: "usta-aaaa1111-x".into(),
             access: String::new(),

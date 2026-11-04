@@ -71,6 +71,15 @@ impl Store {
         }
     }
 
+    /// Where folder tasks live: visible in the project, for the learner's own editor.
+    pub fn tasks_dir(&self) -> PathBuf {
+        self.root
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(&self.root)
+            .join(crate::scenario::folder::TASKS_DIR)
+    }
+
     /// True once any run was ever recorded in this project (gates all Docker work at startup).
     pub fn exists(&self) -> bool {
         self.root.is_dir()
