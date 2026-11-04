@@ -104,6 +104,22 @@ impl Backend {
         }
     }
 
+    /// A session-free copy for work outside the conversation (scenario generation).
+    /// The API client is new, not cloned: a clone would share a connection pool across runtimes.
+    pub fn detached(&self) -> Backend {
+        match self {
+            Backend::Cli { model, bin, .. } => Backend::Cli {
+                model: model.clone(),
+                session_id: None,
+                bin: bin.clone(),
+            },
+            Backend::Api { client, model } => Backend::Api {
+                client: client.fresh(),
+                model: model.clone(),
+            },
+        }
+    }
+
     /// Reset the CLI server session — after compaction, the next call opens
     /// a NEW session with the compacted history. No-op on the API backend.
     pub fn reset_session(&mut self) {

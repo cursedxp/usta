@@ -222,7 +222,12 @@ pub async fn run(
         crate::shutdown::keep_going_to_save(opened, crate::shutdown::is_requested())?;
     }
 
-    let scn = crate::scenario::slot::Slot::new(global, project_root, &topic);
+    let scn = crate::scenario::slot::Slot::new(
+        global,
+        project_root,
+        &topic,
+        std::sync::Arc::new(crate::scenario::model::BackendModel::new(backend)),
+    );
     let mut watching = true;
     // One honest axis (spec K4): `live` = immediate plain-review turn at
     // every flush, only by the user's explicit choice (`/watch live` or a
@@ -304,7 +309,8 @@ pub async fn run(
                                 Some(cmd) => {
                                     crate::tui::page::page_user_echo(&mut tui, &line)?;
                                     if let Some(b) = crate::scenario::command::busy_note(&cmd) { crate::tui::page::page_notice(&mut tui, b)?; }
-                                    let Some(reply) = crate::tui::scenario_live::run_live(&mut tui, &mut editor, &mut events, &scn, cmd, last_tokens, window).await? else {
+                                    let said = crate::scenario::turns::conversation(session.history());
+                                    let Some(reply) = crate::tui::scenario_live::run_live(&mut tui, &mut editor, &mut events, &scn, cmd, said, last_tokens, window).await? else {
                                         if crate::shutdown::is_requested() { break; }
                                         continue;
                                     };

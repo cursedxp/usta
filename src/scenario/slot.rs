@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::scenario::command::{execute, Ctx, Reply, ScenarioCmd};
 use crate::scenario::docker::RealDocker;
 use crate::scenario::engine::{self, Tick};
+use crate::scenario::model::{Cancel, Live, Model, Progress};
 use crate::scenario::route::Router;
 use crate::scenario::store::{project_tag, RunState, Store};
 
@@ -19,6 +20,8 @@ pub(crate) struct Slot {
     /// shutdown signal only ends the wait, the work finishes on its own, and the
     /// pause at session end must not race it.
     busy: Arc<AtomicBool>,
+    model: Arc<dyn Model>,
+    cancel: Arc<Cancel>,
 }
 
 /// Clears the busy flag when the blocking work ends, panic included.
@@ -31,7 +34,7 @@ impl Drop for BusyGuard {
 }
 
 impl Slot {
-    pub fn new(global: &Path, project_root: &Path, topic: &str) -> Slot {
+    pub fn new(global: &Path, project_root: &Path, topic: &str, model: Arc<dyn Model>) -> Slot {
         Slot {
             ctx: Ctx {
                 global: global.to_path_buf(),
@@ -40,26 +43,59 @@ impl Slot {
                 pid: std::process::id(),
             },
             busy: Arc::new(AtomicBool::new(false)),
+            model,
+            cancel: Arc::default(),
         }
+    }
+
+    /// True when generation is running, so this Esc stops it. Any other step keeps its wait.
+    pub fn cancel_generation(&self) -> bool {
+        self.cancel.request()
     }
 
     /// Plain loop: wait for the work, but give up on a shutdown signal.
-    pub async fn handle_until_shutdown(&self, cmd: ScenarioCmd) -> Option<Reply> {
+    pub async fn handle_until_shutdown(
+        &self,
+        cmd: ScenarioCmd,
+        said: Vec<String>,
+        progress: Progress,
+    ) -> Option<Reply> {
         tokio::select! {
             _ = crate::shutdown::requested() => None,
-            r = self.handle(cmd) => Some(r),
+            r = self.handle_with(cmd, said, progress) => Some(r),
         }
     }
 
+    #[cfg(test)]
+    pub fn cancel_for_test(&self) -> Arc<Cancel> {
+        self.cancel.clone()
+    }
+
+    #[cfg(test)]
     pub async fn handle(&self, cmd: ScenarioCmd) -> Reply {
+        self.handle_with(cmd, Vec::new(), Arc::new(|_| {})).await
+    }
+
+    pub async fn handle_with(
+        &self,
+        cmd: ScenarioCmd,
+        said: Vec<String>,
+        progress: Progress,
+    ) -> Reply {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Reply::note("the previous step is still finishing; try again in a moment");
         }
         let ctx = self.ctx.clone();
+        let live = Live {
+            model: self.model.clone(),
+            said,
+            progress,
+            cancel: self.cancel.clone(),
+        };
         let guard = BusyGuard(self.busy.clone());
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            execute(&ctx, cmd)
+            execute(&ctx, &live, cmd)
         })
         .await
         .unwrap_or_else(|e| Reply::note(format!("scenario: internal error: {e}")))
@@ -115,12 +151,14 @@ impl Drop for Slot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenario::model::{NoModel, Progress};
 
     fn slot() -> Slot {
         Slot::new(
             Path::new("/nonexistent-g"),
             Path::new("/nonexistent-p"),
             "linux",
+            Arc::new(NoModel),
         )
     }
 
@@ -158,5 +196,17 @@ mod tests {
         let r = s.handle(ScenarioCmd::Usage).await;
         assert!(!r.notices.join(" ").contains("still finishing"));
         assert!(!s.busy.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn progress_reaches_the_caller_while_a_command_runs() {
+        let s = slot();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = seen.clone();
+        let progress: Progress = Arc::new(move |m: &str| sink.lock().unwrap().push(m.to_string()));
+        let r = s
+            .handle_with(ScenarioCmd::Usage, Vec::new(), progress)
+            .await;
+        assert!(r.notices.concat().contains("scenario commands"));
     }
 }

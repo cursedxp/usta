@@ -264,7 +264,12 @@ pub(crate) async fn run_plain_loop(
     let _ = ready_tx.send(()); // ilk prompt
 
     let mut watching = true;
-    let scn = crate::scenario::slot::Slot::new(ctx.global, ctx.project_root, ctx.topic);
+    let scn = crate::scenario::slot::Slot::new(
+        ctx.global,
+        ctx.project_root,
+        ctx.topic,
+        std::sync::Arc::new(crate::scenario::model::BackendModel::new(backend)),
+    );
     loop {
         tokio::select! {
             _ = crate::shutdown::requested() => break,
@@ -302,7 +307,10 @@ pub(crate) async fn run_plain_loop(
                             if let Some(b) = crate::scenario::command::busy_note(&cmd) {
                                 ui::notice(b);
                             }
-                            let reply = match scn.handle_until_shutdown(cmd).await {
+                            let progress: crate::scenario::model::Progress =
+                                std::sync::Arc::new(|m: &str| ui::notice(m));
+                            let said = crate::scenario::turns::conversation(session.history());
+                            let reply = match scn.handle_until_shutdown(cmd, said, progress).await {
                                 Some(r) => r,
                                 None => break,
                             };

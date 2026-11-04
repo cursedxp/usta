@@ -10,6 +10,7 @@ use crate::scenario::command::{run_with, Ctx, Reply, ScenarioCmd, Seams};
 use crate::scenario::docker::fake::{fail, ok, FakeDocker};
 use crate::scenario::docker::{Out, RuntimeStarter};
 use crate::scenario::ledger::{Ledger, Thread};
+use crate::scenario::model::Live;
 use crate::scenario::package::tests::tmp;
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::scenario::sweep;
@@ -139,6 +140,7 @@ struct World {
     starter: Starter,
     windows: Windows,
     pid: Rc<Cell<u32>>,
+    live: Live,
 }
 
 impl World {
@@ -163,6 +165,7 @@ impl World {
             },
             windows: Windows::default(),
             pid: Rc::new(Cell::new(101)),
+            live: Live::idle(),
             daemon,
         }
     }
@@ -196,6 +199,7 @@ impl World {
             launcher: &self.windows,
             alive: &alive,
             sleep: &|_| {},
+            live: &self.live,
         };
         run_with(&ctx, cmd, &seams)
     }
@@ -407,6 +411,7 @@ fn a_runtime_that_cannot_start_leaves_the_record_active_and_names_no_wrong_comma
         launcher: &w.windows,
         alive: &|_| true,
         sleep: &|_| {},
+        live: &w.live,
     };
     for cmd in [ScenarioCmd::Pause, ScenarioCmd::Check] {
         let e = run_with(&ctx, cmd, &seams).err().unwrap().to_string();

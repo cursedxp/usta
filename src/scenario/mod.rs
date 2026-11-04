@@ -13,6 +13,7 @@ pub(crate) mod ledger;
 pub(crate) mod library;
 pub(crate) mod limited_build;
 pub(crate) mod lint;
+pub(crate) mod model;
 pub(crate) mod package;
 pub(crate) mod pick;
 pub(crate) mod route;

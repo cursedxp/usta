@@ -1,7 +1,40 @@
 //! The synthesized `[SCENARIO ...]` turns. They are for the mentor (the model),
 //! not the learner, but they tell it to keep the infrastructure words out of its replies.
 
+use crate::anthropic::Message;
 use crate::scenario::package::{Package, Tone};
+
+/// How much of the conversation a conversation task's judge reads.
+const SAID_LIMIT: usize = 30;
+
+/// The conversation since the task opened or resumed, labelled, newest last. A
+/// compacted history may have lost the marker; then it is simply the latest lines.
+pub(crate) fn conversation(history: &[Message]) -> Vec<String> {
+    let from = history
+        .iter()
+        .rposition(|m| {
+            m.role == "user" && {
+                let t = m.text();
+                t.contains("[SCENARIO START]") || t.contains("[SCENARIO RESUME]")
+            }
+        })
+        .map_or(0, |i| i + 1);
+    let lines: Vec<String> = history[from..]
+        .iter()
+        .map(|m| {
+            format!(
+                "{}: {}",
+                if m.role == "assistant" {
+                    "mentor"
+                } else {
+                    "learner"
+                },
+                m.text()
+            )
+        })
+        .collect();
+    lines[lines.len().saturating_sub(SAID_LIMIT)..].to_vec()
+}
 
 pub(crate) fn start_turn(pkg: &Package, instruction: &str, tone: Tone, world: &str) -> String {
     let world = if world.is_empty() {
@@ -56,4 +89,29 @@ pub(crate) fn done_turn(pkg: &Package) -> String {
         pkg.id,
         pkg.skills.join(", ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversation_starts_after_the_last_marker_and_falls_back_to_the_tail() {
+        let h = vec![
+            Message::user("old talk"),
+            Message::user("[SCENARIO START] x"),
+            Message::assistant_raw(serde_json::json!("hello")),
+            Message::user("my reply"),
+        ];
+        assert_eq!(conversation(&h), vec!["mentor: hello", "learner: my reply"]);
+        let plain = vec![
+            Message::user("a"),
+            Message::assistant_raw(serde_json::json!("b")),
+        ];
+        assert_eq!(conversation(&plain), vec!["learner: a", "mentor: b"]);
+        let long: Vec<Message> = (0..40).map(|i| Message::user(format!("m{i}"))).collect();
+        let c = conversation(&long);
+        assert_eq!(c.len(), 30);
+        assert_eq!(c.last().unwrap(), "learner: m39");
+    }
 }

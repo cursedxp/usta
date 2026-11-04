@@ -230,6 +230,11 @@ pub struct Client {
 }
 
 impl Client {
+    /// A new client with the same key and its own connection pool.
+    pub fn fresh(&self) -> Client {
+        Client::new(self.api_key.clone())
+    }
+
     pub fn new(api_key: String) -> Self {
         Client {
             http: reqwest::Client::builder()

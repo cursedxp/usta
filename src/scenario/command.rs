@@ -21,6 +21,7 @@ use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::{CheckOutcome, Internal};
 use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
+use crate::scenario::model::Live;
 use crate::scenario::package::{Package, Tone};
 use crate::scenario::pick::{open_runs, own_active, pick_resumable, pick_unfinished};
 use crate::scenario::route::Router;
@@ -164,8 +165,8 @@ fn failure(ctx: &Ctx, e: anyhow::Error) -> Reply {
     }
 }
 
-pub(crate) fn execute(ctx: &Ctx, cmd: ScenarioCmd) -> Reply {
-    match run(ctx, cmd) {
+pub(crate) fn execute(ctx: &Ctx, live: &Live, cmd: ScenarioCmd) -> Reply {
+    match run(ctx, live, cmd) {
         Ok(r) => r,
         Err(e) => failure(ctx, e),
     }
@@ -185,9 +186,11 @@ pub(crate) struct Seams<'a> {
     pub launcher: &'a dyn Launcher,
     pub alive: &'a dyn Fn(u32) -> bool,
     pub sleep: &'a dyn Fn(Duration),
+    #[allow(dead_code)] // consumed by later steps
+    pub live: &'a Live,
 }
 
-fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
+fn run(ctx: &Ctx, live: &Live, cmd: ScenarioCmd) -> Result<Reply> {
     run_with(
         ctx,
         cmd,
@@ -197,6 +200,7 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
             launcher: &SystemLauncher,
             alive: &crate::lock::pid_alive,
             sleep: &std::thread::sleep,
+            live,
         },
     )
 }
@@ -721,16 +725,21 @@ mod tests {
             topic: "rust".into(),
             pid: 1,
         };
-        let t = execute(&ctx, ScenarioCmd::Tone(Some("adventure".into())));
+        let t = execute(
+            &ctx,
+            &Live::idle(),
+            ScenarioCmd::Tone(Some("adventure".into())),
+        );
         assert!(t.notices.concat().contains("adventure"));
-        let bad = execute(&ctx, ScenarioCmd::Tone(Some("loud".into())));
+        let bad = execute(&ctx, &Live::idle(), ScenarioCmd::Tone(Some("loud".into())));
         assert!(bad.notices.concat().contains("plain or adventure"));
-        assert!(execute(&ctx, ScenarioCmd::Usage)
+        assert!(execute(&ctx, &Live::idle(), ScenarioCmd::Usage)
             .notices
             .concat()
             .contains("drop"));
         let d = execute(
             &ctx,
+            &Live::idle(),
             ScenarioCmd::Drop {
                 id: None,
                 confirmed: false,
