@@ -300,13 +300,14 @@ fn sweep_with(
 ) {
     let store = Store::new(project_root);
     let tag = project_tag(project_root);
-    // Before the record pass: a cut-short proof's record is what names its image, and
-    // that pass deletes the record.
-    crate::scenario::leftovers::sweep_images(global, docker, &store.all(), alive);
     let Ok(containers) = list_labeled(docker, &tag) else {
         return;
     };
+    // A cut-short proof's record is what names its image and the record pass deletes it,
+    // so it is read first; the image goes last, once no container of it is left.
+    let records = store.all();
     execute(&store, docker, &tag, &containers, alive, today, ask);
+    crate::scenario::leftovers::sweep_images(global, docker, &records, alive);
 }
 
 fn mark_foreign(store: &Store, run_id: &str, package: &str, today: &str) {

@@ -234,6 +234,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// The loops keep a failed `/scenario` turn (pinned in `lifecycle`), so its marker
+    /// still bounds the lines: the earlier task's talk is not the new run's evidence.
+    #[test]
+    fn a_failed_start_turn_does_not_save_the_previous_tasks_lines_under_the_new_run() {
+        let root = crate::scenario::package::tests::tmp("slot_said_failed");
+        let s = Slot::new(
+            Path::new("/nonexistent-g"),
+            &root,
+            "linux",
+            Arc::new(NoModel),
+        );
+        let store = Store::new(&root);
+        store
+            .save(&crate::scenario::store::RunRecord {
+                run_id: "new".into(),
+                package: "t-b".into(),
+                topic: "linux".into(),
+                tone: "plain".into(),
+                state: RunState::Active,
+                owner_pid: s.ctx.pid,
+                started: "2026-11-04".into(),
+                updated: "2026-11-04".into(),
+                reference: "usta-aaaa1111-new".into(),
+                access: String::new(),
+                env: "conversation".into(),
+                last_check: None,
+            })
+            .unwrap();
+        let marker = |id: &str| {
+            Message::user(format!(
+                "[SCENARIO START] The learner x the task \"T\" ({id}). Task: y"
+            ))
+        };
+        let history = vec![
+            marker("t-a"),
+            Message::user("the old task's answer"),
+            marker("t-b"), // its model call failed; no reply follows
+        ];
+        s.save_said(&history);
+        assert!(remember(&store, s.ctx.pid, &[]).is_empty());
+        s.save_said(&[history, vec![Message::user("my new answer")]].concat());
+        assert_eq!(
+            remember(&store, s.ctx.pid, &[]),
+            vec!["learner: my new answer".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn session_end_skips_the_pause_while_a_step_is_still_running() {
         let s = slot();

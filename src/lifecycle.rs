@@ -442,6 +442,29 @@ mod tests {
         }
     }
 
+    /// Source pin: a failed `/scenario` turn stays, as a cancelled one does, because its
+    /// marker is what bounds a conversation task's lines. Any other turn is rolled back.
+    #[test]
+    fn a_failed_scenario_turn_keeps_its_marker() {
+        for (name, src) in [
+            ("tui/run.rs", include_str!("tui/run.rs")),
+            ("plain.rs", include_str!("plain.rs")),
+        ] {
+            let prod = src.split("#[cfg(test)]").next().unwrap();
+            let kept = prod
+                .find("from_scenario => {")
+                .or(prod.find("if from_scenario {"))
+                .expect(name);
+            let reset = prod[kept..].find("backend.reset_session();").expect(name);
+            let undo = prod[kept..].find("rollback_turn(").expect(name);
+            assert!(reset < undo, "{name}");
+            assert!(
+                prod.contains("let from_scenario = scenario_turn.is_some();"),
+                "{name}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn maybe_compact_reports_whether_it_compacted() {
         let mut backend = Backend::Cli {

@@ -1,6 +1,6 @@
 //! What a crash or a quit mid-proof leaves outside the run records: `val-` proof
-//! images, `-bld` temporary tags (`sweep_images`, run by the sweep right before it may
-//! delete the record naming them), drafts in `scenarios/staging`, and `validate/`
+//! images, `-bld` temporary tags (`sweep_images`, run by the Docker sweep from the
+//! records it read before its record pass), drafts in `scenarios/staging`, and `validate/`
 //! scratch. Only `usta-` names and Usta's own folders are touched, and nothing with a
 //! live owner: a second session's sweep must not pull the floor from under a proof.
 

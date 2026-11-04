@@ -350,6 +350,7 @@ pub async fn run(
                             // /exam: echo the literal command, gate on goal presence, then swap the
                             // outgoing text and fall through to the normal ask flow below.
                             let images = if crate::slash::is_exam_command(&line) || game_cmd.is_some() || scenario_turn.is_some() { Vec::new() } else { editor.take_images() };
+                            let from_scenario = scenario_turn.is_some();
                             let outgoing = if let Some(t) = scenario_turn {
                                 t
                             } else if crate::slash::is_exam_command(&line) {
@@ -403,6 +404,11 @@ pub async fn run(
                                     backend.reset_session();
                                     if crate::shutdown::is_requested() { break; } // terminal gone: save below
                                     crate::tui::page::page_warn(&mut tui, "response cancelled — your message is kept, continue if you like")?;
+                                }
+                                // A `/scenario` turn stays, as a cancelled one does: its marker bounds the task's lines.
+                                Err(e) if from_scenario => {
+                                    backend.reset_session();
+                                    crate::tui::page::page_error(&mut tui, &format!("error: {e}"))?;
                                 }
                                 Err(e) => {
                                     crate::lifecycle::rollback_turn(&mut session, &recorder, mark);

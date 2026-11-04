@@ -360,6 +360,7 @@ pub(crate) async fn run_plain_loop(
                     }
                     // /exam and /game on|off: swap the outgoing text and fall through to the
                     // normal ask flow below — the typed command is already echoed by rustyline.
+                    let from_scenario = scenario_turn.is_some();
                     let line = if let Some(t) = scenario_turn {
                         t
                     } else if is_exam_command(&line) {
@@ -396,7 +397,12 @@ pub(crate) async fn run_plain_loop(
                                 trigger_auto_visual(backend, session, ctx.project_root, ctx.topic, show_topic).await;
                             }
                             Err(e) => {
-                                rollback_turn(session, ctx.recorder, mark);
+                                // A `/scenario` turn stays: its marker bounds the task's lines.
+                                if from_scenario {
+                                    backend.reset_session();
+                                } else {
+                                    rollback_turn(session, ctx.recorder, mark);
+                                }
                                 ui::warn(&format!("error: {e}"));
                             }
                         }

@@ -1831,7 +1831,24 @@ fn a_dead_proof_record_outlives_a_launch_without_docker_and_goes_after_its_image
 }
 
 #[test]
-fn an_in_session_sweep_runs_the_image_pass_before_it_deletes_a_proof_record() {
+fn a_dead_proofs_container_goes_before_its_image() {
+    let w = World::new("flow_proof_order");
+    w.start(Some(BACKUP));
+    crashed_proof(&w);
+    let tag = project_tag(&w.project);
+    let name = format!("usta-{tag}-val-gen-x-1-r0");
+    let left = (false, tag);
+    w.daemon.borrow_mut().boxes.insert(name.clone(), left);
+    w.relaunch();
+    let calls = w.docker.calls();
+    let at = |what: &str| calls.iter().position(|c| c.starts_with(what));
+    let (rm, rmi) = (at(&format!("rm -fv {name}")), at("rmi "));
+    assert!(rm.is_some() && rmi.is_some(), "{calls:?}");
+    assert!(rm < rmi, "{calls:?}");
+}
+
+#[test]
+fn an_in_session_sweep_runs_the_image_pass_of_a_dead_proof_record() {
     let w = World::new("flow_proof_in_session");
     w.start(Some(BACKUP));
     crashed_proof(&w);
