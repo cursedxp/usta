@@ -206,7 +206,7 @@ Model-written content is untrusted.
 - The folder environment writes data files only, inside the project's task folder. If its check needs a script, the script runs in a throwaway container with the task folder mounted read-only. Otherwise the check is a rubric.
 - Package paths cannot leave the package. `lint` runs at load, for every package, and a failed package is reported, not silently skipped.
 - Generated containers keep every limit in Container lifecycle. Network is off at run time unless declared.
-- Building a generated image needs network, and a build step can reach the local network and host services. Usta limits what it can: an allowlist of official base images, no host mounts, no raw sockets, bounded time and disk. This is accepted, since a container here protects against mistakes, not malicious code.
+- Building a generated image needs network, and a build step can reach the local network and host services. Usta limits what it can: an allowlist of official base images, no host mounts, no raw sockets, a time budget, and a disk check between steps. A single step is limited only by the time budget. This is accepted, since a container here protects against mistakes, not malicious code.
 
 ## Build order
 
