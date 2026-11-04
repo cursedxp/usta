@@ -6,6 +6,7 @@
 
 pub(crate) mod engine;
 pub(crate) mod env;
+pub(crate) mod ledger;
 pub(crate) mod package;
 pub(crate) mod select;
 pub(crate) mod store;
