@@ -2,7 +2,8 @@
 //! it; a failure goes back for at most `FEEDBACK_ROUNDS` rounds, then it is
 //! discarded. Blocking; runs off the UI task. Staging is never loaded, so a crash
 //! leaves nothing a learner can reach. Only a package that passed its proof is
-//! installed into the library.
+//! installed into the library, with one named exception: `fallback_talk`, whose
+//! fixed text holds no model-written file and so has nothing to prove.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -14,12 +15,13 @@ use crate::scenario::env::CONVERSATION;
 use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
 use crate::scenario::lint::learner_word_problems;
-use crate::scenario::model::{Cancel, Model};
+use crate::scenario::model::{model_failed, Cancel, Model};
 use crate::scenario::package::Package;
 use crate::scenario::prompt::{self, Brief};
 use crate::scenario::validate::{Proof, Prover};
 
 pub(crate) const FEEDBACK_ROUNDS: usize = 3;
+/// Soft limit: checked between rounds, so one slow round can run past it.
 const BUDGET: Duration = Duration::from_secs(30 * 60);
 
 pub(crate) const SAY_WRITING: &str = "Writing a new task for you; this can take a few minutes…";
@@ -187,13 +189,19 @@ pub(crate) fn run(job: &Job, prover: &mut dyn Prover) -> Result<Outcome> {
     let id = free_id(job.global, format!("gen-{}-{}", job.brief.topic, job.stamp));
     let staged = library::staging_root(job.global).join(&id);
     let _open = job.cancel.open();
-    let out = rounds(job, prover, &id);
+    let out = rounds(job, prover, &id, BUDGET);
     // After an install the folder is already gone; on every other way out it is the draft.
     let _ = std::fs::remove_dir_all(&staged);
+    // An Esc during the last proof, or one followed by an error, still ends as a cancel.
+    // `seal` cleared the state on the install path, so a `Ready` is never overridden.
+    if job.cancel.requested() {
+        return Ok(Outcome::Cancelled);
+    }
     out
 }
 
-fn rounds(job: &Job, prover: &mut dyn Prover, id: &str) -> Result<Outcome> {
+/// `budget` is checked between rounds only: a round already under way is not interrupted.
+fn rounds(job: &Job, prover: &mut dyn Prover, id: &str, budget: Duration) -> Result<Outcome> {
     let system = prompt::generate_system(job.brief);
     let begun = Instant::now();
     let mut log = Vec::new();
@@ -203,7 +211,7 @@ fn rounds(job: &Job, prover: &mut dyn Prover, id: &str) -> Result<Outcome> {
         if job.cancel.requested() {
             return Ok(Outcome::Cancelled);
         }
-        if crate::shutdown::is_requested() || begun.elapsed() >= BUDGET {
+        if crate::shutdown::is_requested() || begun.elapsed() >= budget {
             log.push("stopped before the last round: shutdown or time budget".to_string());
             break;
         }
@@ -214,7 +222,7 @@ fn rounds(job: &Job, prover: &mut dyn Prover, id: &str) -> Result<Outcome> {
             (job.say)(&say_again(round));
             prompt::retry(job.brief, &last, &problems)
         };
-        let reply = job.model.ask(&system, &text)?;
+        let reply = job.model.ask(&system, &text).map_err(model_failed)?;
         if job.cancel.requested() {
             return Ok(Outcome::Cancelled);
         }
@@ -232,8 +240,9 @@ fn rounds(job: &Job, prover: &mut dyn Prover, id: &str) -> Result<Outcome> {
 const FALLBACK_INSTRUCTION: &str =
     "Tell Usta here, in your own words, how you would approach this, and why:";
 
-/// A conversation task from fixed text, so a topic is never left with nothing, even
-/// when every generated package failed. No model-written file in it.
+/// The one install that is not proven: a conversation task from fixed text, so a topic
+/// is never left with nothing, even when every generated package failed. No
+/// model-written file in it. A blank skill falls back to the topic.
 #[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) fn fallback_talk(
     global: &Path,
@@ -244,6 +253,11 @@ pub(crate) fn fallback_talk(
     let id = free_id(global, format!("gen-{topic}-talk-{stamp}"));
     let staged = library::staging_root(global).join(&id);
     let line = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = if line.is_empty() {
+        topic.to_string()
+    } else {
+        line
+    };
     let keyword = toml::Value::String(line.to_lowercase());
     let title = toml::Value::String(format!("Talk it through: {line}"));
     let task = format!(
@@ -277,6 +291,7 @@ pub(crate) fn fallback_talk(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     use super::*;
@@ -290,6 +305,7 @@ mod tests {
         proofs: VecDeque<Proof>,
         rounds: Vec<usize>,
         cancel_while_proving: Option<Arc<Cancel>>,
+        cancel_from_round: usize,
         discarded: usize,
         fail: bool,
     }
@@ -297,7 +313,11 @@ mod tests {
     impl Prover for Script {
         fn prove(&mut self, _: &Package, round: usize) -> Result<Proof> {
             self.rounds.push(round);
-            if let Some(c) = &self.cancel_while_proving {
+            if let Some(c) = self
+                .cancel_while_proving
+                .as_ref()
+                .filter(|_| round >= self.cancel_from_round)
+            {
                 c.request();
             }
             if self.fail {
@@ -315,6 +335,7 @@ mod tests {
             proofs: p.into(),
             rounds: vec![],
             cancel_while_proving: None,
+            cancel_from_round: 0,
             discarded: 0,
             fail: false,
         }
@@ -699,6 +720,187 @@ mod tests {
             again.id, p.id,
             "a second fallback never meets an existing package"
         );
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn esc_during_the_last_proof_is_cancelled_not_failed() {
+        let g = tmp("gen_esc_last");
+        let m = FakeModel::with(&[REPLY, REPLY, REPLY, REPLY]);
+        let cancel = Arc::new(Cancel::default());
+        let say = |_: &str| {};
+        let b = brief();
+        let l = Ledger::default();
+        let bad = || Proof::Problems(vec!["x".into()]);
+        let mut p = prover(vec![bad(), bad(), bad(), bad()]);
+        p.cancel_while_proving = Some(cancel.clone());
+        p.cancel_from_round = FEEDBACK_ROUNDS;
+        let job = Job {
+            brief: &b,
+            global: &g,
+            stamp: "1",
+            model: &m,
+            say: &say,
+            ledger: &l,
+            cancel: &cancel,
+        };
+        assert!(matches!(run(&job, &mut p).unwrap(), Outcome::Cancelled));
+        nothing_left(&g);
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn esc_followed_by_a_prover_error_is_cancelled() {
+        let g = tmp("gen_esc_err");
+        let m = FakeModel::with(&[REPLY]);
+        let cancel = Arc::new(Cancel::default());
+        let say = |_: &str| {};
+        let b = brief();
+        let l = Ledger::default();
+        let mut p = prover(vec![]);
+        p.cancel_while_proving = Some(cancel.clone());
+        p.fail = true;
+        let job = Job {
+            brief: &b,
+            global: &g,
+            stamp: "1",
+            model: &m,
+            say: &say,
+            ledger: &l,
+            cancel: &cancel,
+        };
+        assert!(matches!(run(&job, &mut p).unwrap(), Outcome::Cancelled));
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn a_model_outage_is_typed_so_it_is_not_taken_for_a_dead_runtime() {
+        let g = tmp("gen_down_typed");
+        let m = FakeModel::default();
+        m.replies
+            .lock()
+            .unwrap()
+            .push_back(Err("rate limited".into()));
+        let said = Default::default();
+        let e = go(
+            &m,
+            &g,
+            &mut prover(vec![]),
+            &brief(),
+            &Ledger::default(),
+            &said,
+        )
+        .unwrap_err();
+        assert!(
+            e.downcast_ref::<crate::scenario::model::ModelFailed>()
+                .is_some(),
+            "{e:#}"
+        );
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn a_blank_skill_falls_back_to_the_topic_and_still_loads_clean() {
+        let g = tmp("gen_blank_skill");
+        let p = fallback_talk(&g, "1", "marketing", " \n\t ").unwrap();
+        assert!(p.title.contains("marketing"), "{}", p.title);
+        assert!(
+            p.skills.iter().all(|k| !k.trim().is_empty()),
+            "{:?}",
+            p.skills
+        );
+        assert_eq!(p.lint(), Vec::<String>::new());
+        assert_eq!(library::load_all(&g, "marketing").unwrap().pkgs.len(), 1);
+        assert!(library::load_all(&g, "marketing").unwrap().bad.is_empty());
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn a_cut_off_reply_is_feedback_and_never_parsed() {
+        let g = tmp("gen_truncated");
+        let m = FakeModel::default();
+        m.replies.lock().unwrap().push_back(Ok(REPLY.to_string()));
+        m.replies.lock().unwrap().push_back(Ok(REPLY.to_string()));
+        let mut p = prover(vec![]);
+        let truncating = Truncating {
+            inner: &m,
+            left: std::sync::atomic::AtomicUsize::new(1),
+        };
+        let say = |_: &str| {};
+        let (b, l, cancel) = (brief(), Ledger::default(), Cancel::default());
+        let job = Job {
+            brief: &b,
+            global: &g,
+            stamp: "1",
+            model: &truncating,
+            say: &say,
+            ledger: &l,
+            cancel: &cancel,
+        };
+        assert!(matches!(run(&job, &mut p).unwrap(), Outcome::Ready(_)));
+        assert_eq!(
+            p.rounds,
+            vec![1],
+            "the cut-off reply never reached the prover"
+        );
+        assert!(m.prompts.lock().unwrap()[1].1.contains("cut off"));
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    /// Marks the first `left` replies of the inner model as cut off.
+    struct Truncating<'a> {
+        inner: &'a FakeModel,
+        left: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Model for Truncating<'_> {
+        fn ask(&self, s: &str, p: &str) -> Result<crate::scenario::model::ModelText> {
+            let mut r = self.inner.ask(s, p)?;
+            r.truncated = self.left.load(Ordering::SeqCst) > 0;
+            let _ = self
+                .left
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+            Ok(r)
+        }
+    }
+
+    #[test]
+    fn an_exhausted_budget_stops_before_another_round_and_says_so() {
+        let g = tmp("gen_budget");
+        let m = FakeModel::with(&[REPLY]);
+        let mut p = prover(vec![]);
+        let (b, l, cancel) = (brief(), Ledger::default(), Cancel::default());
+        let say = |_: &str| {};
+        let job = Job {
+            brief: &b,
+            global: &g,
+            stamp: "1",
+            model: &m,
+            say: &say,
+            ledger: &l,
+            cancel: &cancel,
+        };
+        let Outcome::Failed(log) = rounds(&job, &mut p, "gen-x-1", Duration::ZERO).unwrap() else {
+            panic!()
+        };
+        assert!(log.concat().contains("time budget"), "{log:?}");
+        assert!(m.prompts.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn a_failed_install_discards_the_image_and_the_draft() {
+        let g = tmp("gen_install_fail");
+        // A file where the library folder should be: the install cannot create it.
+        std::fs::create_dir_all(g.join("scenarios")).unwrap();
+        std::fs::write(library::library_root(&g), "x").unwrap();
+        let m = FakeModel::with(&[REPLY]);
+        let mut p = prover(vec![]);
+        let said = Default::default();
+        assert!(go(&m, &g, &mut p, &brief(), &Ledger::default(), &said).is_err());
+        assert_eq!(p.discarded, 1);
+        let staged = std::fs::read_dir(library::staging_root(&g)).map_or(0, |d| d.count());
+        assert_eq!(staged, 0);
         let _ = std::fs::remove_dir_all(g);
     }
 }
