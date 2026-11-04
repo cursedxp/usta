@@ -138,7 +138,6 @@ impl Cancel {
 
 /// What a command gets from the live session.
 #[derive(Clone)]
-#[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) struct Live {
     pub model: Arc<dyn Model>,
     /// The conversation since the task opened; evidence for a conversation task.
@@ -148,7 +147,7 @@ pub(crate) struct Live {
 }
 
 impl Live {
-    #[allow(dead_code)] // reached from the command layer in Task 12
+    #[cfg(test)]
     pub fn idle() -> Live {
         Live {
             model: Arc::new(NoModel),

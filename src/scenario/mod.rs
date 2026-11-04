@@ -24,6 +24,7 @@ pub(crate) mod route;
 pub(crate) mod rubric;
 pub(crate) mod select;
 pub(crate) mod slot;
+pub(crate) mod start;
 pub(crate) mod steps;
 pub(crate) mod store;
 pub(crate) mod sweep;

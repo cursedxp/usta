@@ -56,7 +56,7 @@ impl ContainerEnv<'_> {
 
     /// Refuse while ANOTHER Usta project has a scenario container running.
     /// Our own project's running containers are paused by the engine first.
-    fn guard_single(&self) -> Result<()> {
+    pub(crate) fn guard_single(&self) -> Result<()> {
         let o = self.must(&[
             "ps",
             "--filter",

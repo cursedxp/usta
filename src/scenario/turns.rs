@@ -2,7 +2,7 @@
 //! not the learner, but they tell it to keep the infrastructure words out of its replies.
 
 use crate::anthropic::Message;
-use crate::scenario::env::FOLDER;
+use crate::scenario::env::{CONTAINER, FOLDER};
 use crate::scenario::package::{Package, Tone};
 
 /// How much of the conversation a conversation task's judge reads.
@@ -76,6 +76,22 @@ pub(crate) fn conversation(history: &[Message]) -> Vec<String> {
     lines[lines.len().saturating_sub(SAID_LIMIT)..].to_vec()
 }
 
+fn workplace(pkg: &Package) -> &'static str {
+    match pkg.environment.kind.as_str() {
+        CONTAINER => "They work in a terminal on the task's server that you cannot see and will run /scenario check themselves; the shell reports the result.",
+        FOLDER => "They work in a task folder in their own editor that you cannot see and will run /scenario check themselves; the shell reports the result.",
+        _ => "They work here in this conversation and will run /scenario check when they have answered; the shell reports the result. Do not do the task for them.",
+    }
+}
+
+fn check_note(pkg: &Package) -> &'static str {
+    if pkg.is_rubric() {
+        "This was a rubric check, Usta's judgment, which is weaker evidence than a script. At the closing flush it can raise these skills to seen at most, never to settled."
+    } else {
+        "Treat this as evidence for these skills and reflect it in the curriculum map at the closing flush under the usual evidence rules."
+    }
+}
+
 pub(crate) fn start_turn(pkg: &Package, instruction: &str, tone: Tone, world: &str) -> String {
     let world = if world.is_empty() {
         String::new()
@@ -86,14 +102,15 @@ pub(crate) fn start_turn(pkg: &Package, instruction: &str, tone: Tone, world: &s
         "[SCENARIO START] The learner just started the task \"{}\" ({}). Skills it exercises: {}. \
          The shell already showed them the opening in {} tone; do not repeat or paraphrase it. \
          {world}Task: {instruction} \
-         They work in a terminal on the task's server that you cannot see and will run /scenario check themselves; the shell reports the result. \
+         {} \
          Say task or server to the learner; never container, image or Docker. \
          Mentor Socratically as usual: never give the fix, ask what they see, hint by the ladder. \
          Reply with ONE short sentence that invites the first step.",
         pkg.title,
         pkg.id,
         pkg.skills.join(", "),
-        tone.as_str()
+        tone.as_str(),
+        workplace(pkg)
     )
 }
 
@@ -103,13 +120,12 @@ pub(crate) fn resume_turn(
     last_check: Option<&str>,
     restarted: bool,
 ) -> String {
-    // A folder task has no server: only its files survive, and nothing was restarted.
-    let survived = if pkg.environment.kind == FOLDER {
-        "Their files in the task folder are as they left them".to_string()
-    } else if restarted {
-        "Their work on the server survived; its services were restarted".to_string()
-    } else {
-        "Their work on the server survived; its services did not come back up, possibly because of their unfinished work; they are on the server and can look into it".to_string()
+    // Only a container task has a server: nothing else was restarted.
+    let survived = match pkg.environment.kind.as_str() {
+        FOLDER => "Their files in the task folder are as they left them",
+        CONTAINER if restarted => "Their work on the server survived; its services were restarted",
+        CONTAINER => "Their work on the server survived; its services did not come back up, possibly because of their unfinished work; they are on the server and can look into it",
+        _ => "Their answers so far are in this conversation",
     };
     format!(
         "[SCENARIO RESUME] The learner came back to the unfinished task \"{}\" ({}). Task: {instruction} \
@@ -126,11 +142,13 @@ pub(crate) fn resume_turn(
 pub(crate) fn done_turn(pkg: &Package) -> String {
     format!(
         "[SCENARIO DONE] The check passed for \"{}\" ({}). Skills exercised: {}. The shell already showed the closing. \
-         Treat this as evidence for these skills and reflect it in the curriculum map at the closing flush under the usual evidence rules. \
+         {} \
+         Say task or server to the learner; never container, image or Docker. \
          Reply with one sentence of acknowledgement, no recap.",
         pkg.title,
         pkg.id,
-        pkg.skills.join(", ")
+        pkg.skills.join(", "),
+        check_note(pkg)
     )
 }
 

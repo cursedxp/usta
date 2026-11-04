@@ -88,7 +88,6 @@ pub(crate) fn install(global: &Path, staged: &Path, id: &str) -> Result<Package>
 }
 
 /// A generated task speaks of the company of the world it was written for.
-#[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) fn fits_world(p: &Package, ledger: &Ledger) -> bool {
     !p.is_generated()
         || match (&p.story.company, &ledger.company) {

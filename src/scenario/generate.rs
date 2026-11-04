@@ -47,7 +47,6 @@ pub(crate) struct Job<'a> {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // reached from the command layer in Task 12
 #[allow(clippy::large_enum_variant)] // one value per generation; the interface hands over the Package itself
 pub(crate) enum Outcome {
     Ready(Package),
@@ -184,7 +183,6 @@ fn free_id(global: &Path, base: String) -> String {
 }
 
 /// `Err` = the model could not be reached (or the prover broke); no round is spent on it.
-#[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) fn run(job: &Job, prover: &mut dyn Prover) -> Result<Outcome> {
     let id = free_id(job.global, format!("gen-{}-{}", job.brief.topic, job.stamp));
     let staged = library::staging_root(job.global).join(&id);
@@ -243,7 +241,6 @@ const FALLBACK_INSTRUCTION: &str =
 /// The one install that is not proven: a conversation task from fixed text, so a topic
 /// is never left with nothing, even when every generated package failed. No
 /// model-written file in it. A blank skill falls back to the topic.
-#[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) fn fallback_talk(
     global: &Path,
     stamp: &str,

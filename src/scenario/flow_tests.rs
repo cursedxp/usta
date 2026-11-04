@@ -2,15 +2,21 @@
 //! that behaves like a tiny daemon. No Docker, no real window, no real waiting.
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
-use crate::scenario::command::{run_with, Ctx, Reply, ScenarioCmd, Seams};
+use crate::scenario::command::{failure, run_with, Ctx, Reply, ScenarioCmd, Seams};
 use crate::scenario::docker::fake::{fail, ok, FakeDocker};
 use crate::scenario::docker::{Out, RuntimeStarter};
+use crate::scenario::draft::tests::{
+    container_reply, folder_rubric_reply, folder_script_reply, met, REPLY, REVIEW_OK,
+};
 use crate::scenario::ledger::{Ledger, Thread};
-use crate::scenario::model::Live;
+use crate::scenario::library;
+use crate::scenario::model::fake::FakeModel;
+use crate::scenario::model::{Cancel, Live};
 use crate::scenario::package::tests::tmp;
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::scenario::sweep;
@@ -26,7 +32,11 @@ struct Daemon {
     /// name -> (running, project tag)
     boxes: BTreeMap<String, (bool, String)>,
     check_code: i32,
+    /// Answers for the check script, in order; then `check_code`.
+    check_codes: VecDeque<i32>,
     start_script_fails: bool,
+    /// The runtime stops answering the moment a check has run.
+    dies_at_check: bool,
 }
 
 fn word_after<'a>(line: &'a str, key: &str) -> &'a str {
@@ -89,8 +99,18 @@ impl Daemon {
             } else {
                 fail(1, "No such object")
             }
+        } else if l.contains(" timeout ") && l.contains(".usta-solution") {
+            ok("")
         } else if l.contains(" timeout ") {
-            let c = self.check_code;
+            let check = l.contains(".usta-check");
+            let c = match self.check_codes.pop_front() {
+                Some(c) if check => c,
+                other => {
+                    self.check_codes.extend(other);
+                    self.check_code
+                }
+            };
+            self.up = !(check && self.dies_at_check);
             Out {
                 code: c,
                 stdout: if c == 1 {
@@ -137,10 +157,18 @@ struct World {
     topic: String,
     daemon: Rc<RefCell<Daemon>>,
     docker: FakeDocker,
+    missing: Rc<Cell<bool>>,
     starter: Starter,
     windows: Windows,
     pid: Rc<Cell<u32>>,
-    live: Live,
+    model: Arc<FakeModel>,
+    calls_seen: Cell<usize>,
+    /// What the live session reported, and the line that presses Esc.
+    progress: Arc<Mutex<Vec<String>>>,
+    esc_at: Arc<Mutex<Option<String>>>,
+    cancel: Arc<Cancel>,
+    conversation: RefCell<Vec<String>>,
+    stopping: Cell<bool>,
 }
 
 impl World {
@@ -153,21 +181,101 @@ impl World {
             ..Daemon::default()
         }));
         let d2 = daemon.clone();
+        let missing = Rc::new(Cell::new(false));
         World {
             global: base.join("global"),
             base,
             project,
             topic: "linux".into(),
-            docker: FakeDocker::new(move |l| d2.borrow_mut().answer(l)),
+            docker: FakeDocker::switchable(missing.clone(), move |l| d2.borrow_mut().answer(l)),
+            missing,
             starter: Starter {
                 daemon: daemon.clone(),
                 calls: Cell::new(0),
             },
             windows: Windows::default(),
             pid: Rc::new(Cell::new(101)),
-            live: Live::idle(),
+            model: Arc::default(),
+            calls_seen: Cell::new(0),
+            progress: Arc::default(),
+            esc_at: Arc::default(),
+            cancel: Arc::default(),
+            conversation: RefCell::default(),
+            stopping: Cell::new(false),
             daemon,
         }
+    }
+
+    fn live(&self) -> Live {
+        let (said, esc_at, cancel) = (
+            self.progress.clone(),
+            self.esc_at.clone(),
+            self.cancel.clone(),
+        );
+        Live {
+            model: self.model.clone(),
+            said: self.conversation.borrow().clone(),
+            progress: Arc::new(move |m: &str| {
+                said.lock().unwrap().push(m.to_string());
+                if esc_at
+                    .lock()
+                    .unwrap()
+                    .as_deref()
+                    .is_some_and(|t| m.contains(t))
+                {
+                    cancel.request();
+                }
+            }),
+            cancel: self.cancel.clone(),
+        }
+    }
+
+    fn topic_is(&mut self, topic: &str) {
+        self.topic = topic.into();
+    }
+
+    fn model_says(&self, replies: &[&str]) {
+        let mut queue = self.model.replies.lock().unwrap();
+        queue.extend(replies.iter().map(|r| Ok(r.to_string())));
+    }
+
+    fn model_fails(&self, why: &str) {
+        let mut queue = self.model.replies.lock().unwrap();
+        queue.push_back(Err(why.to_string()));
+    }
+
+    /// The system prompt and the request of the `i`th model call.
+    fn model_prompt(&self, i: usize) -> (String, String) {
+        self.model.prompts.lock().unwrap()[i].clone()
+    }
+
+    fn model_calls_since_mark(&self) -> usize {
+        let all = self.model.prompts.lock().unwrap().len();
+        all - self.calls_seen.replace(all)
+    }
+
+    fn cancel_when_said(&self, text: &str) {
+        *self.esc_at.lock().unwrap() = Some(text.to_string());
+    }
+
+    /// The progress lines the session showed.
+    fn said(&self) -> Vec<String> {
+        self.progress.lock().unwrap().clone()
+    }
+
+    /// The learner answers in the conversation.
+    fn say(&self, text: &str) {
+        self.conversation
+            .borrow_mut()
+            .push(format!("learner: {text}"));
+    }
+
+    fn docker_missing(&self) {
+        self.missing.set(true);
+    }
+
+    fn windows_opened(&self) -> u32 {
+        self.windows.0.get()
     }
 
     /// Every story prerequisite met, so any package can be started.
@@ -193,13 +301,15 @@ impl World {
         };
         let pid = self.pid.clone();
         let alive = move |p: u32| p == pid.get();
+        let live = self.live();
         let seams = Seams {
             docker: &self.docker,
             starter: &self.starter,
             launcher: &self.windows,
             alive: &alive,
             sleep: &|_| {},
-            live: &self.live,
+            stopping: &|| self.stopping.get(),
+            live: &live,
         };
         run_with(&ctx, cmd, &seams)
     }
@@ -405,13 +515,15 @@ fn a_runtime_that_cannot_start_leaves_the_record_active_and_names_no_wrong_comma
         topic: "linux".into(),
         pid: w.pid.get(),
     };
+    let live = w.live();
     let seams = Seams {
         docker: &w.docker,
         starter: &Never,
         launcher: &w.windows,
         alive: &|_| true,
         sleep: &|_| {},
-        live: &w.live,
+        stopping: &|| false,
+        live: &live,
     };
     for cmd in [ScenarioCmd::Pause, ScenarioCmd::Check] {
         let e = run_with(&ctx, cmd, &seams).err().unwrap().to_string();
@@ -761,4 +873,543 @@ fn an_own_active_folder_task_says_back_in_and_wakes_nothing() {
     assert_eq!(r.turn, None);
     assert_eq!(w.windows.0.get(), 0);
     assert_eq!(w.only_run().state, RunState::Active);
+}
+
+#[test]
+fn any_topic_gets_a_task_on_start_with_no_package_at_all() {
+    let mut w = World::new("flow_gen_rubric");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(None);
+    assert!(
+        says(&r, "Who is it for?") && says(&r, "/scenario check"),
+        "{:?}",
+        r.notices
+    );
+    assert!(turn(&r).contains("in this conversation"));
+    assert_eq!(w.only_run().env, "conversation");
+    assert_eq!(w.box_count(), 0, "a conversation task starts no server");
+    assert!(w.said().iter().any(|s| s.contains("Writing a new task")));
+}
+
+#[test]
+fn a_used_up_topic_generates_the_next_task_and_the_library_keeps_it() {
+    let mut w = World::new("flow_gen_next");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.start(None);
+    assert_eq!(
+        library::load_all(&w.global, "pottery").unwrap().pkgs.len(),
+        1
+    );
+    w.say("Bakers, for the price.");
+    w.model_says(&[&met(&["a", "b"]), &met(&["a", "b"])]);
+    w.model_calls_since_mark();
+    let done = w.cmd(ScenarioCmd::Check);
+    assert!(says(&done, "check: rubric"), "{:?}", done.notices);
+    assert!(!says(&done, "check: script"), "{:?}", done.notices);
+    assert!(turn(&done).contains("seen"), "{}", turn(&done));
+    assert_eq!(w.model_calls_since_mark(), 2);
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.start(None);
+    assert_eq!(w.runs().len(), 2);
+}
+
+#[test]
+fn a_package_that_never_proves_itself_is_discarded_and_talk_is_offered() {
+    let mut w = World::new("flow_gen_fail");
+    w.topic_is("nginx-ops");
+    let c = container_reply();
+    w.model_says(&[&c, &c, &c, &c]);
+    w.daemon.borrow_mut().check_code = 0; // the check passes on a fresh task, every round
+    let r = w.start(None);
+    assert!(says(&r, "/scenario talk"), "{:?}", r.notices);
+    assert!(!says(&r, "no tasks"));
+    assert!(w.runs().is_empty());
+    let left = library::load_all(&w.global, "nginx-ops").unwrap().pkgs;
+    assert!(left.is_empty());
+    assert_eq!(w.box_count(), 0, "validation left nothing behind");
+    let log = std::fs::read_to_string(w.project.join(".usta/scenarios/last-error.log")).unwrap();
+    assert!(log.contains("already passes"), "{log}");
+}
+
+#[test]
+fn a_proven_container_task_starts_on_the_validated_image() {
+    let mut w = World::new("flow_gen_box");
+    w.topic_is("nginx-ops");
+    w.model_says(&[&container_reply()]);
+    w.daemon.borrow_mut().check_codes.extend([1, 1, 0]);
+    let r = w.start(None);
+    assert!(says(&r, "terminal window"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "container");
+    assert_eq!(w.running().len(), 1);
+    assert!(w.runs().iter().all(|r| !r.run_id.starts_with("val-")));
+}
+
+#[test]
+fn talk_works_with_no_runtime_and_falls_back_to_fixed_text() {
+    let mut w = World::new("flow_talk_fallback");
+    w.topic_is("pottery");
+    w.docker_missing();
+    w.model_says(&["nonsense", "nonsense", "nonsense", "nonsense"]);
+    let r = w.cmd(ScenarioCmd::Talk(Some("glazing".into())));
+    assert!(says(&r, "glazing"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "conversation");
+}
+
+#[test]
+fn talk_that_generates_starts_that_task_without_the_runtime() {
+    let mut w = World::new("flow_talk_gen");
+    w.topic_is("pottery");
+    w.docker_missing();
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.cmd(ScenarioCmd::Talk(None));
+    assert!(says(&r, "Who is it for?"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "conversation");
+}
+
+#[test]
+fn a_model_that_asks_for_a_system_during_talk_still_gets_the_fallback() {
+    let mut w = World::new("flow_talk_needs");
+    w.topic_is("pottery");
+    w.model_says(&[r#"{"kind":"needs_system","why":"a kiln must run"}"#]);
+    let r = w.cmd(ScenarioCmd::Talk(Some("glazing".into())));
+    assert!(says(&r, "glazing"), "{:?}", r.notices);
+    assert_eq!(w.only_run().env, "conversation");
+}
+
+#[test]
+fn esc_during_talk_installs_no_fallback() {
+    let mut w = World::new("flow_talk_esc");
+    w.topic_is("pottery");
+    w.cancel_when_said("Writing a new task");
+    w.model_says(&["nonsense"]);
+    let r = w.cmd(ScenarioCmd::Talk(Some("glazing".into())));
+    assert!(r.turn.is_none() && r.notices.is_empty(), "{:?}", r.notices);
+    assert!(w.runs().is_empty());
+    let left = library::load_all(&w.global, "pottery").unwrap().pkgs;
+    assert!(left.is_empty(), "nothing was installed");
+}
+
+#[test]
+fn a_shutdown_during_talk_installs_no_fallback() {
+    let mut w = World::new("flow_talk_stop");
+    w.topic_is("pottery");
+    w.stopping.set(true);
+    w.model_says(&["nonsense", "nonsense", "nonsense", "nonsense"]);
+    let r = w.cmd(ScenarioCmd::Talk(Some("glazing".into())));
+    assert!(r.turn.is_none(), "{:?}", r.notices);
+    assert!(w.runs().is_empty());
+    let left = library::load_all(&w.global, "pottery").unwrap().pkgs;
+    assert!(left.is_empty(), "nothing was installed");
+}
+
+#[test]
+fn without_docker_a_generated_task_needs_none_and_usta_says_so_once() {
+    let mut w = World::new("flow_no_docker");
+    w.topic_is("pottery");
+    w.docker_missing();
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let first = w.start(None);
+    assert!(says(&first, "needs none"), "{:?}", first.notices);
+    assert!(w.model_prompt(0).0.contains("cannot run a server now"));
+    w.cmd(ScenarioCmd::Drop {
+        id: None,
+        confirmed: true,
+    });
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let second = w.start(Some("another one"));
+    assert!(!says(&second, "needs none"), "{:?}", second.notices);
+}
+
+#[test]
+fn a_bare_start_with_only_server_tasks_and_no_docker_generates_instead_of_refusing() {
+    let w = World::new("flow_no_docker_library");
+    w.docker_missing();
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(None);
+    assert_eq!(w.only_run().env, "conversation", "{:?}", r.notices);
+    assert!(!says(&r, "docs.docker.com"), "{:?}", r.notices);
+}
+
+#[test]
+fn an_explicit_pick_of_a_server_task_without_docker_gets_install_guidance() {
+    let w = World::new("flow_no_docker_explicit");
+    w.docker_missing();
+    let e = w
+        .try_cmd(ScenarioCmd::Start(Some(BACKUP.into())))
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("docs.docker.com"), "{e}");
+    assert!(w.runs().is_empty());
+}
+
+#[test]
+fn a_runtime_that_cannot_come_up_sends_a_bare_start_to_a_task_that_needs_none() {
+    let w = World::new("flow_runtime_stuck");
+    w.docker_off();
+    struct Never;
+    impl RuntimeStarter for Never {
+        fn start(&self) -> bool {
+            false
+        }
+    }
+    let ctx = Ctx {
+        global: w.global.clone(),
+        project_root: w.project.clone(),
+        topic: "linux".into(),
+        pid: w.pid.get(),
+    };
+    let live = w.live();
+    let seams = Seams {
+        docker: &w.docker,
+        starter: &Never,
+        launcher: &w.windows,
+        alive: &|_| true,
+        sleep: &|_| {},
+        stopping: &|| false,
+        live: &live,
+    };
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = run_with(&ctx, ScenarioCmd::Start(None), &seams).unwrap();
+    assert_eq!(w.only_run().env, "conversation", "{:?}", r.notices);
+}
+
+#[test]
+fn a_subject_that_truly_needs_a_system_gets_install_guidance_and_the_talk_offer() {
+    let mut w = World::new("flow_needs_system");
+    w.topic_is("nginx-ops");
+    w.docker_missing();
+    w.model_says(&[r#"{"kind":"needs_system","why":"nginx must run"}"#]);
+    let r = w.start(None);
+    assert!(
+        says(&r, "docs.docker.com") && says(&r, "/scenario talk"),
+        "{:?}",
+        r.notices
+    );
+    assert!(!says(&r, "needs none"), "{:?}", r.notices);
+}
+
+#[test]
+fn a_folder_task_never_needs_the_runtime_and_keeps_the_running_task_rule() {
+    let mut w = World::new("flow_folder");
+    w.topic_is("marketing");
+    w.model_says(&[
+        &folder_rubric_reply(),
+        REVIEW_OK,
+        &met(&["a", "b"]),
+        &met(&["a", "b"]),
+    ]);
+    w.docker_missing();
+    let r = w.start(None);
+    assert!(says(&r, "usta-tasks"), "{:?}", r.notices);
+    assert!(says(&r, "your files move to usta-tasks/done/"));
+    let run = w.only_run();
+    let dir = w.project.join("usta-tasks").join(&run.run_id);
+    assert!(dir.join("brief.md").is_file());
+    let p = w.cmd(ScenarioCmd::Pause);
+    assert!(says(&p, "Paused"));
+    let b = w.cmd(ScenarioCmd::Resume(None));
+    assert!(says(&b, "usta-tasks"));
+    assert_eq!(w.windows_opened(), 0);
+    let warned = w.cmd(ScenarioCmd::Drop {
+        id: None,
+        confirmed: false,
+    });
+    assert!(
+        says(&warned, "usta-tasks/done/") && !says(&warned, "for good"),
+        "{:?}",
+        warned.notices
+    );
+    std::fs::write(dir.join("plan.md"), "mine\n").unwrap();
+    let dropped = w.cmd(ScenarioCmd::Drop {
+        id: None,
+        confirmed: true,
+    });
+    assert!(
+        says(&dropped, "kept in usta-tasks/done/"),
+        "{:?}",
+        dropped.notices
+    );
+    assert!(!says(&dropped, "server"), "{:?}", dropped.notices);
+    assert!(!dir.exists());
+    let done = w.project.join("usta-tasks/done").join(&run.run_id);
+    assert!(done.join("plan.md").is_file());
+}
+
+#[test]
+fn a_finished_folder_task_keeps_the_learners_work() {
+    let mut w = World::new("flow_folder_done");
+    w.topic_is("marketing");
+    w.model_says(&[
+        &folder_rubric_reply(),
+        REVIEW_OK,
+        &met(&["a", "b"]),
+        &met(&["a", "b"]),
+    ]);
+    w.start(None);
+    let run = w.only_run();
+    let dir = w.project.join("usta-tasks").join(&run.run_id);
+    std::fs::write(dir.join("plan.md"), "mine\n").unwrap();
+    w.docker_missing();
+    w.model_says(&[&met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.cmd(ScenarioCmd::Check);
+    assert!(says(&r, "kept in usta-tasks/done/"), "{:?}", r.notices);
+    assert!(says(&r, "check: rubric") && !says(&r, "check: script"));
+    assert!(!dir.exists());
+    let kept = w
+        .project
+        .join("usta-tasks/done")
+        .join(&run.run_id)
+        .join("plan.md");
+    assert_eq!(std::fs::read_to_string(kept).unwrap(), "mine\n");
+}
+
+#[test]
+fn a_rubric_failure_is_labelled_as_judgment_not_script() {
+    let mut w = World::new("flow_rubric_fail");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.start(None);
+    let r = w.cmd(ScenarioCmd::Check);
+    assert!(says(&r, "Not yet. check: rubric"), "{:?}", r.notices);
+}
+
+#[test]
+fn a_conversation_task_needs_no_runtime_for_any_command() {
+    let mut w = World::new("flow_talk_no_runtime");
+    w.topic_is("pottery");
+    w.docker_missing();
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.start(None);
+    assert!(says(&r, "Answer here"), "{:?}", r.notices);
+    assert!(says(&w.cmd(ScenarioCmd::Pause), "Paused"));
+    let back = w.cmd(ScenarioCmd::Resume(None));
+    assert!(says(&back, "Resumed"), "{:?}", back.notices);
+    assert!(says(&back, "Answer here"), "{:?}", back.notices);
+    assert!(turn(&back).starts_with("[SCENARIO RESUME]"));
+    assert!(!turn(&back).contains("server survived"), "{}", turn(&back));
+    assert_eq!(w.windows_opened(), 0);
+    let again = w.cmd(ScenarioCmd::Resume(None));
+    assert!(
+        turn(&again).starts_with("[SCENARIO RESUME]"),
+        "a fresh mentor turn"
+    );
+    w.say("Bakers.");
+    w.model_says(&[&met(&["a", "b"]), &met(&["a", "b"])]);
+    assert!(says(&w.cmd(ScenarioCmd::Check), "check: rubric"));
+    assert_eq!(w.windows_opened(), 0);
+}
+
+#[test]
+fn dropping_a_conversation_task_promises_nothing_about_a_server_or_files() {
+    let mut w = World::new("flow_talk_drop");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.start(None);
+    let warned = w.cmd(ScenarioCmd::Drop {
+        id: None,
+        confirmed: false,
+    });
+    assert!(
+        !says(&warned, "server") && !says(&warned, "files"),
+        "{:?}",
+        warned.notices
+    );
+    let gone = w.cmd(ScenarioCmd::Drop {
+        id: None,
+        confirmed: true,
+    });
+    assert_eq!(gone.notices, vec!["Dropped 'T'.".to_string()]);
+}
+
+#[test]
+fn a_crashed_session_leaves_a_folder_task_resumable_without_docker() {
+    let w = folder_world("flow_folder_crash");
+    w.start(Some("demo-pkg"));
+    w.docker_missing();
+    w.relaunch();
+    assert_eq!(
+        w.only_run().state,
+        RunState::Active,
+        "no sweep without a runtime"
+    );
+    let back = w.cmd(ScenarioCmd::Resume(None));
+    assert!(turn(&back).starts_with("[SCENARIO RESUME]"));
+    assert_eq!(w.only_run().owner_pid, w.pid.get());
+}
+
+#[test]
+fn a_paused_server_task_does_not_make_a_folder_resume_wait_for_the_runtime() {
+    let w = folder_world("flow_folder_beside_box");
+    w.start(Some("demo-pkg"));
+    let folder = w.only_run().run_id;
+    w.cmd(ScenarioCmd::Pause);
+    let mut paused = Store::new(&w.project).load(&folder).unwrap();
+    paused.run_id = "other-run".into();
+    paused.env = "container".into();
+    paused.reference = format!("usta-{}-other-run", project_tag(&w.project));
+    Store::new(&w.project).save(&paused).unwrap();
+    w.docker_missing();
+    let back = w.cmd(ScenarioCmd::Resume(Some(folder)));
+    assert!(says(&back, "usta-tasks"), "{:?}", back.notices);
+}
+
+#[test]
+fn leaving_a_running_server_task_for_a_folder_task_stops_it_first() {
+    let mut w = World::new("flow_box_then_folder");
+    w.start(Some(BACKUP));
+    w.docker_off();
+    w.topic = "marketing".into();
+    let src = w.base.join("src");
+    let pkg = crate::scenario::lint::tests::folder_pkg(&src);
+    let lib = library::library_root(&w.global).join("demo-pkg");
+    crate::scenario::folder::copy_data(&pkg, &lib).unwrap();
+    let r = w.start(Some("demo-pkg"));
+    assert!(says(&r, "was running, so it is paused"), "{:?}", r.notices);
+    assert_eq!(
+        w.starter.calls.get(),
+        1,
+        "the runtime came up for the pause"
+    );
+    assert!(w.docker.calls().iter().any(|c| c.starts_with("stop ")));
+}
+
+#[test]
+fn no_runc_warning_is_looked_for_on_a_task_that_needs_no_runtime() {
+    let w = folder_world("flow_no_runc");
+    w.start(Some("demo-pkg"));
+    let asked = w.docker.calls();
+    assert!(
+        asked
+            .iter()
+            .all(|c| !c.contains("{{json .Server.Components}}")),
+        "{asked:?}"
+    );
+    assert_eq!(w.starter.calls.get(), 0);
+}
+
+#[test]
+fn esc_during_generation_changes_nothing_the_learner_can_see() {
+    let w = World::new("flow_esc");
+    w.open_the_story();
+    w.start(Some(BACKUP));
+    let running = w.only_run();
+    w.cancel_when_said("Writing a new task");
+    w.model_says(&[REPLY]);
+    let r = w.start(Some("something new"));
+    assert!(r.turn.is_none() && r.notices.is_empty(), "{:?}", r.notices);
+    assert_eq!(w.only_run().run_id, running.run_id, "no new run");
+    assert_eq!(
+        w.only_run().state,
+        RunState::Active,
+        "the running task was not paused"
+    );
+    assert_eq!(w.running().len(), 1);
+    let all = library::load_all(&w.global, "linux").unwrap().pkgs;
+    assert!(all.iter().all(|p| !p.is_generated()));
+}
+
+#[test]
+fn a_script_proof_pauses_the_running_task_and_says_so_even_if_it_then_fails() {
+    let w = World::new("flow_pause_late");
+    w.open_the_story();
+    w.start(Some(BACKUP));
+    let c = container_reply();
+    w.model_says(&[&c, &c, &c, &c]);
+    w.daemon.borrow_mut().check_code = 0; // every round fails: the check passes on a fresh task
+    let r = w.start(Some("something new"));
+    assert!(says(&r, "paused now"), "{:?}", r.notices);
+    assert_eq!(w.only_run().state, RunState::Paused);
+}
+
+#[test]
+fn a_folder_script_check_starts_the_runtime_but_a_folder_rubric_does_not() {
+    let mut w = World::new("flow_folder_script");
+    w.topic_is("marketing");
+    w.model_says(&[&folder_script_reply()]);
+    w.daemon.borrow_mut().check_codes.extend([1, 1, 0]);
+    let r = w.start(None);
+    assert_eq!(w.only_run().env, "folder", "{:?}", r.notices);
+    w.docker_off();
+    w.daemon.borrow_mut().check_codes.push_back(1);
+    let r = w.cmd(ScenarioCmd::Check);
+    assert!(says(&r, "Not yet. check: script"), "{:?}", r.notices);
+    assert!(w.starter.calls.get() > 0);
+}
+
+#[test]
+fn a_bad_library_package_is_reported_on_start() {
+    let w = World::new("flow_bad_pkg");
+    library::sync(&w.global).unwrap();
+    let broken = library::library_root(&w.global).join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("task.toml"), "not toml [").unwrap();
+    let r = w.start(None);
+    assert!(says(&r, "could not be used"), "{:?}", r.notices);
+}
+
+#[test]
+fn an_unreachable_model_gets_one_plain_sentence_and_changes_nothing() {
+    let mut w = World::new("flow_model_down");
+    w.topic_is("pottery");
+    w.model_fails("401 invalid x-api-key SECRET");
+    let r = w.start(None);
+    assert!(
+        says(&r, "could not reach the model") && !says(&r, "SECRET"),
+        "{:?}",
+        r.notices
+    );
+    assert_eq!(r.notices.len(), 1, "{:?}", r.notices);
+    assert!(w.runs().is_empty());
+    let log = std::fs::read_to_string(w.project.join(".usta/scenarios/last-error.log")).unwrap();
+    assert!(log.contains("SECRET"), "{log}");
+}
+
+#[test]
+fn a_dead_runtime_during_a_proof_is_not_called_a_model_outage() {
+    let w = World::new("flow_dead_runtime");
+    w.open_the_story();
+    w.start(Some(BACKUP));
+    w.daemon.borrow_mut().dies_at_check = true;
+    w.model_says(&[&container_reply()]);
+    let r = w.start(Some("something new"));
+    assert!(!says(&r, "could not reach the model"), "{:?}", r.notices);
+    assert!(says(&r, "stopped answering"), "{:?}", r.notices);
+    assert!(says(&r, "paused now"), "{:?}", r.notices);
+}
+
+#[test]
+fn a_model_outage_on_check_keeps_the_task_and_never_says_no_task_was_started() {
+    let mut w = World::new("flow_check_outage");
+    w.topic_is("pottery");
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    w.start(None);
+    w.say("Bakers.");
+    w.model_fails("502 SECRET");
+    let e = w.try_cmd(ScenarioCmd::Check).err().unwrap();
+    let ctx = Ctx {
+        global: w.global.clone(),
+        project_root: w.project.clone(),
+        topic: w.topic.clone(),
+        pid: w.pid.get(),
+    };
+    let r = failure(&ctx, e);
+    assert!(
+        says(&r, "was not judged") && !says(&r, "no task was started"),
+        "{:?}",
+        r.notices
+    );
+    assert!(!says(&r, "SECRET"), "{:?}", r.notices);
+    assert_eq!(w.only_run().state, RunState::Active);
+}
+
+#[test]
+fn a_check_on_gone_files_keeps_its_own_sentence() {
+    let w = folder_world("flow_check_gone");
+    w.start(Some("demo-pkg"));
+    let dir = Store::new(&w.project).tasks_dir().join(w.only_run().run_id);
+    std::fs::remove_dir_all(dir).unwrap();
+    let e = w.try_cmd(ScenarioCmd::Check).err().unwrap().to_string();
+    assert!(e.contains("files for this task are gone"), "{e}");
 }

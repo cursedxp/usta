@@ -253,7 +253,6 @@ pub(crate) fn prove_rubric(model: &dyn Model, pkg: &Package) -> Result<Proof> {
     }
 }
 
-#[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) struct RealProver<'a> {
     pub docker: &'a dyn Docker,
     pub store: &'a Store,
@@ -266,7 +265,6 @@ pub(crate) struct RealProver<'a> {
     pub free_server: &'a mut dyn FnMut() -> Result<()>,
 }
 
-#[allow(dead_code)] // reached from the command layer in Task 12
 impl RealProver<'_> {
     /// Record first, so a crash here is resolved by the sweep like an interrupted prepare,
     /// and a live owner keeps a second sweep's hands off the container.
@@ -288,7 +286,6 @@ impl RealProver<'_> {
     }
 }
 
-#[allow(dead_code)] // reached from the command layer in Task 12
 impl Prover for RealProver<'_> {
     fn prove(&mut self, pkg: &Package, round: usize) -> Result<Proof> {
         // Only Usta-assigned ids take the capped build; a built-in id would reach the

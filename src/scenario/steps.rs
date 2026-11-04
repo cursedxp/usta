@@ -6,9 +6,10 @@ use anyhow::{anyhow, Result};
 use crate::progress;
 use crate::scenario::command::{Ctx, Reply, Seams};
 use crate::scenario::container::ContainerEnv;
+use crate::scenario::docker::{ensure_ready, START_POLL, START_TIMEOUT};
 use crate::scenario::engine::{self, Tick};
-use crate::scenario::env::FOLDER;
-use crate::scenario::folder::gone_error;
+use crate::scenario::env::{CONTAINER, FOLDER};
+use crate::scenario::folder::{gone_error, DONE_DIR, TASKS_DIR};
 use crate::scenario::ledger;
 use crate::scenario::package::Package;
 use crate::scenario::route::Router;
@@ -16,12 +17,21 @@ use crate::scenario::store::{RunRecord, RunState, Store};
 use crate::scenario::terminal::{window_notice, WindowReq};
 use crate::scenario::turns::resume_turn;
 
+pub(crate) const NO_RUNTIME: &str = "Usta cannot start a practice server on this computer right now, so it picked a task that needs none.";
+
+const MODEL_DOWN: &str = "Usta could not reach the model just now, so no task was started. Try again in a moment; details are in .usta/scenarios/last-error.log";
+
 pub(crate) fn log_error(ctx: &Ctx, text: &str) {
     let p = ctx.project_root.join(".usta/scenarios/last-error.log");
     if let Some(d) = p.parent() {
         let _ = std::fs::create_dir_all(d);
     }
     let _ = std::fs::write(p, format!("{text}\n"));
+}
+
+pub(crate) fn model_failed(ctx: &Ctx, e: &anyhow::Error) -> Reply {
+    log_error(ctx, &format!("{e:#}"));
+    Reply::note(MODEL_DOWN)
 }
 
 /// A paused task whose server no longer exists cannot be woken. Say so in one
@@ -65,6 +75,23 @@ pub(crate) struct Step<'a> {
     pub pkgs: &'a [Package],
 }
 
+pub(crate) fn ready(s: &Step) -> Result<()> {
+    let m = s.seams;
+    ensure_ready(m.docker, m.starter, START_TIMEOUT, START_POLL, m.sleep)
+}
+
+/// Starting or waking any task pauses a running server task, and only the runtime can
+/// stop that server, whatever the new task needs.
+pub(crate) fn ready_to_release(s: &Step, except: Option<&str>) -> Result<()> {
+    let running = s.store.all().into_iter().any(|r| {
+        r.state == RunState::Active && r.env == CONTAINER && Some(r.run_id.as_str()) != except
+    });
+    if running {
+        ready(s)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn title_of(pkgs: &[Package], package: &str) -> String {
     pkgs.iter()
         .find(|p| p.id == package)
@@ -89,7 +116,50 @@ pub(crate) fn pause_notices(s: &Step, except: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// Bring `rec` back and open its window. A closed window leaves an own active
+/// How the learner reaches the task: a window, a folder or this conversation.
+pub(crate) fn open_notices(s: &Step, pkg: &Package, rec: &RunRecord) -> Vec<String> {
+    match rec.env.as_str() {
+        CONTAINER => {
+            let scratch = s.ctx.project_root.join(".usta/scenarios");
+            let req = WindowReq {
+                command_line: &rec.access,
+                run_id: &rec.run_id,
+                scratch: &scratch,
+            };
+            vec![window_notice(s.seams.launcher, &req)]
+        }
+        FOLDER => vec![format!(
+            "Your task folder is {}. Work there in your own editor; when the task ends, your files move to {TASKS_DIR}/{DONE_DIR}/.{}",
+            s.store.tasks_dir().join(&rec.run_id).display(),
+            deliverables_note(pkg)
+        )],
+        _ => vec!["Answer here, in this conversation.".to_string()],
+    }
+}
+
+fn deliverables_note(pkg: &Package) -> String {
+    if pkg.check.deliverables.is_empty() {
+        String::new()
+    } else {
+        format!(" Write: {}.", pkg.check.deliverables.join(", "))
+    }
+}
+
+/// Where a finished or dropped folder task's files are now. A failed move leaves them in place.
+pub(crate) fn kept_notice(s: &Step, rec: &RunRecord, warning: Option<&str>) -> String {
+    match warning {
+        None => format!("Your files are kept in {TASKS_DIR}/{DONE_DIR}/."),
+        Some(raw) => {
+            log_error(s.ctx, raw);
+            format!(
+                "Your files could not be moved, so they are still in {}.",
+                s.store.tasks_dir().join(&rec.run_id).display()
+            )
+        }
+    }
+}
+
+/// Bring `rec` back and show how to reach it. A closed window leaves an own active
 /// run with a healthy server: that one only gets a new window.
 pub(crate) fn resume_run(
     s: &Step,
@@ -97,46 +167,42 @@ pub(crate) fn resume_run(
     pkg: &Package,
     mut rec: RunRecord,
 ) -> Result<Reply> {
-    let folder = rec.env == FOLDER;
-    // A folder task has no server: its files are the state, so container logic must not judge it.
-    if folder {
-        if !env.folder.dir(&rec.handle())?.is_dir() {
-            return Err(gone_error(&rec.run_id));
+    // Only a container task has a server, so container logic must not judge the others.
+    let woke = match rec.env.as_str() {
+        CONTAINER => {
+            if let Some(e) = server_gone_error(&env.container, &rec) {
+                return Err(e);
+            }
+            !already_running(&env.container, &rec)
         }
-    } else if let Some(e) = server_gone_error(&env.container, &rec) {
-        return Err(e);
-    }
-    let woke = if folder {
-        rec.state != RunState::Active
-    } else {
-        !already_running(&env.container, &rec)
+        FOLDER => {
+            if !env.folder.dir(&rec.handle())?.is_dir() {
+                return Err(gone_error(&rec.run_id));
+            }
+            rec.state != RunState::Active
+        }
+        // A conversation has nothing to wake: resuming is a fresh mentor turn.
+        _ => true,
     };
     let mut restarted = true;
     let mut paused = Vec::new();
     if woke {
+        ready_to_release(s, Some(&rec.run_id))?;
         paused = pause_notices(s, Some(&rec.run_id));
         if let Some(w) = engine::resume(env, s.store, pkg, &mut rec, s.tick)? {
             log_error(s.ctx, &w);
             restarted = false;
         }
     }
-    let mut notices = vec![if folder {
-        let dir = s.store.tasks_dir().join(&rec.run_id);
-        folder_resume_notice(&pkg.title, woke, &dir)
-    } else {
+    let mut notices = vec![if rec.env == CONTAINER {
         resume_notice(&pkg.title, woke, restarted)
+    } else if woke {
+        format!("Resumed: {}.", pkg.title)
+    } else {
+        format!("Back in: {}.", pkg.title)
     }];
     notices.extend(paused);
-    // A folder task has no terminal: the learner works in their own editor.
-    if !folder {
-        let scratch = s.ctx.project_root.join(".usta/scenarios");
-        let req = WindowReq {
-            command_line: &rec.access,
-            run_id: &rec.run_id,
-            scratch: &scratch,
-        };
-        notices.push(window_notice(s.seams.launcher, &req));
-    }
+    notices.extend(open_notices(s, pkg, &rec));
     // The mentor turn says the services restarted: only true when we woke them.
     let turn = if woke {
         Some(resume_turn(
@@ -164,12 +230,4 @@ pub(crate) fn resume_notice(title: &str, woke: bool, restarted: bool) -> String 
     } else {
         format!("Back in: {title}. Your task is still running; opened a new terminal window.")
     }
-}
-
-pub(crate) fn folder_resume_notice(title: &str, woke: bool, dir: &std::path::Path) -> String {
-    let verb = if woke { "Resumed" } else { "Back in" };
-    format!(
-        "{verb}: {title}. Your files are as you left them, in {}.",
-        dir.display()
-    )
 }

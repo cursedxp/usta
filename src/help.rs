@@ -21,7 +21,7 @@ pub fn help_text() -> &'static str {
      \x20\x20/show [topic]    animated visual explainer (opens in browser)\n\
      \x20\x20/exam            goal mode: timed mock exam from your map\n\
      \x20\x20/game on|off     XP, levels, badges (ADHD-safe)\n\
-     \x20\x20/scenario        practice tasks: start | resume | check | pause | drop | tone\n\
+     \x20\x20/scenario        practice tasks on any subject: start | talk | resume | check | pause | drop | tone\n\
      \x20\x20/context         what fills the context window (exact bytes; token counts are estimates)\n\
      \x20\x20/help            this help\n\
      \x20\x20/quit            end the session\n\

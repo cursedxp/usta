@@ -9,7 +9,7 @@ use chrono::NaiveDate;
 use crate::scenario::container::{list_labeled, Found};
 use crate::scenario::docker::{probe, Docker, RealDocker, Runtime};
 use crate::scenario::engine::{self, Tick};
-use crate::scenario::env::Environment;
+use crate::scenario::env::{Environment, CONTAINER};
 use crate::scenario::route::Router;
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::ui;
@@ -145,6 +145,20 @@ pub(crate) fn drop_foreign(project_root: &Path, today: &str) {
     for a in plan(&store.all(), &[], dead, today, &tag) {
         if let Action::DropForeign { run_id, package } = a {
             mark_foreign(&store, &run_id, &package, today);
+        }
+    }
+}
+
+/// A folder or conversation run has no server, so parking a dead owner's record needs
+/// no runtime. Without this it could not be resumed on a computer with no Docker.
+pub(crate) fn park_serverless(store: &Store, today: &str, alive: &dyn Fn(u32) -> bool) {
+    for mut r in store.all() {
+        let dead = r.owner_pid == 0 || !alive(r.owner_pid);
+        if r.state == RunState::Active && r.env != CONTAINER && dead {
+            r.state = RunState::Paused;
+            r.owner_pid = 0;
+            r.updated = today.to_string();
+            let _ = store.save(&r);
         }
     }
 }

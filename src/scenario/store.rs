@@ -145,6 +145,17 @@ impl Store {
         std::fs::write(self.root.join("tone"), t.as_str())?;
         Ok(())
     }
+
+    /// True the first time only, per project.
+    pub fn note_once(&self, name: &str) -> bool {
+        let f = self.root.join(format!("said-{name}"));
+        if f.exists() {
+            return false;
+        }
+        let _ = std::fs::create_dir_all(&self.root);
+        let _ = std::fs::write(f, "");
+        true
+    }
 }
 
 /// The project's identity: labels every container so one project's cleanup can

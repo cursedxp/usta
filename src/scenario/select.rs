@@ -2,7 +2,8 @@
 //! lines (map items are free text written by the model). A finished skill is
 //! skipped; a package already finished is not offered again while a new one
 //! exists; a package whose story prerequisites (`story.needs`) are not open
-//! yet is `Later`. Due-return is not built here (the map carries no `due:`).
+//! yet is `Later`. When nothing suitable is left the answer is to generate one,
+//! never "no tasks". Due-return is not built here (the map carries no `due:`).
 
 use crate::scenario::package::Package;
 use crate::tokens;
@@ -62,43 +63,50 @@ pub(crate) fn tag(pkg: &Package, map: &str, finished: &[String], threads: &[Stri
     }
 }
 
-/// Pick a package. `arg` = 1-based number or id (explicit picks are honoured
-/// even for done/skipped, but not for a task that is later in the story);
-/// `None` = the first `New` one.
+pub(crate) enum Pick<'a> {
+    Package(&'a Package),
+    /// Nothing suitable is left, or the learner asked for something new.
+    Generate {
+        request: Option<String>,
+    },
+}
+
+/// `arg` = 1-based number, id, or free text; `None` = the first `New` one that can run
+/// here. Explicit picks are honoured even for done or skipped tasks, and even when they
+/// need a runtime that is missing (the install guidance is the answer then), but not
+/// for a task that is later in the story.
 pub(crate) fn resolve<'a>(
     pkgs: &'a [Package],
     arg: Option<&str>,
     map: &str,
     finished: &[String],
     open: &[String],
-) -> Result<&'a Package, String> {
-    if pkgs.is_empty() {
-        return Err("no tasks for this topic yet".into());
-    }
+    runtime: bool,
+) -> Result<Pick<'a>, String> {
     let threads = threads_available(pkgs, map, open);
-    let picked = match arg {
-        Some(a) => {
-            let found = match a.parse::<usize>() {
-                Ok(n) => n.checked_sub(1).and_then(|i| pkgs.get(i)),
-                Err(_) => pkgs.iter().find(|p| p.id == a),
-            };
-            let p = found.ok_or_else(|| format!("no task '{a}'; see /scenario"))?;
-            if tag(p, map, finished, &threads) == Tag::Later {
-                return Err(
-                    "that task comes later in the story; finish the earlier ones first".into(),
-                );
-            }
-            p
-        }
-        None => pkgs
-            .iter()
-            .find(|p| tag(p, map, finished, &threads) == Tag::New)
-            .ok_or_else(|| {
-                "no new task for this topic: all are done, settled, or later in the story"
-                    .to_string()
-            })?,
+    let Some(a) = arg else {
+        let next = pkgs.iter().find(|p| {
+            tag(p, map, finished, &threads) == Tag::New && (runtime || !p.needs_runtime())
+        });
+        return Ok(next.map_or(Pick::Generate { request: None }, Pick::Package));
     };
-    Ok(picked)
+    let found = match a.parse::<usize>() {
+        Ok(n) => Some(
+            n.checked_sub(1)
+                .and_then(|i| pkgs.get(i))
+                .ok_or_else(|| format!("no task '{a}'; see /scenario"))?,
+        ),
+        Err(_) => pkgs.iter().find(|p| p.id == a),
+    };
+    let Some(p) = found else {
+        return Ok(Pick::Generate {
+            request: Some(a.to_string()),
+        });
+    };
+    if tag(p, map, finished, &threads) == Tag::Later {
+        return Err("that task comes later in the story; finish the earlier ones first".into());
+    }
+    Ok(Pick::Package(p))
 }
 
 #[cfg(test)]
@@ -116,6 +124,13 @@ mod tests {
         p.id = id.into();
         p.skills = skills.iter().map(|s| s.to_string()).collect();
         p
+    }
+
+    fn picked<'a>(r: Result<Pick<'a>, String>) -> &'a str {
+        match r.unwrap() {
+            Pick::Package(p) => &p.id,
+            Pick::Generate { .. } => panic!("expected a package"),
+        }
     }
 
     fn opens(p: &mut Package, id: &str) {
@@ -167,7 +182,7 @@ mod tests {
         let pkgs = vec![pkg("a", &["x1"]), pkg("b", &["x2"])];
         let fin = vec!["a".to_string()];
         assert_eq!(tag(&pkgs[0], "", &fin, &[]), Tag::Done);
-        assert_eq!(resolve(&pkgs, None, "", &fin, &[]).unwrap().id, "b");
+        assert_eq!(picked(resolve(&pkgs, None, "", &fin, &[], true)), "b");
     }
 
     #[test]
@@ -178,7 +193,7 @@ mod tests {
         b.story.needs = vec!["t1".into()];
         let pkgs = vec![a, b];
         assert_eq!(tag(&pkgs[1], "", &[], &[]), Tag::Later);
-        assert_eq!(resolve(&pkgs, None, "", &[], &[]).unwrap().id, "a");
+        assert_eq!(picked(resolve(&pkgs, None, "", &[], &[], true)), "a");
         let open = vec!["t1".to_string()];
         assert_eq!(
             tag(&pkgs[1], "", &[], &threads_available(&pkgs, "", &open)),
@@ -194,33 +209,58 @@ mod tests {
         b.story.needs = vec!["t1".into()];
         let pkgs = vec![a, b];
         assert_eq!(threads_available(&pkgs, MAP, &[]), vec!["t1".to_string()]);
-        assert_eq!(resolve(&pkgs, None, MAP, &[], &[]).unwrap().id, "b");
+        assert_eq!(picked(resolve(&pkgs, None, MAP, &[], &[], true)), "b");
     }
 
     #[test]
     fn resolve_by_number_and_id_even_for_done_or_skipped() {
         let pkgs = vec![pkg("a", &["permission"]), pkg("b", &["x2"])];
-        assert_eq!(resolve(&pkgs, Some("1"), MAP, &[], &[]).unwrap().id, "a");
-        assert_eq!(resolve(&pkgs, Some("b"), MAP, &[], &[]).unwrap().id, "b");
-        assert!(resolve(&pkgs, Some("9"), MAP, &[], &[]).is_err());
-        assert!(resolve(&pkgs, Some("zzz"), MAP, &[], &[]).is_err());
+        assert_eq!(picked(resolve(&pkgs, Some("1"), MAP, &[], &[], true)), "a");
+        assert_eq!(picked(resolve(&pkgs, Some("b"), MAP, &[], &[], true)), "b");
     }
 
     #[test]
     fn an_explicit_pick_of_a_later_task_is_refused() {
         let mut b = pkg("b", &["x2"]);
         b.story.needs = vec!["t1".into()];
-        let err = resolve(&[b], Some("b"), "", &[], &[]).unwrap_err();
+        let pkgs = [b];
+        let err = resolve(&pkgs, Some("b"), "", &[], &[], true).err().unwrap();
         assert!(err.contains("later in the story"), "{err}");
     }
 
     #[test]
-    fn nothing_new_gives_a_clear_message() {
+    fn nothing_left_means_generate_never_an_error() {
+        assert!(matches!(
+            resolve(&[], None, "", &[], &[], true).unwrap(),
+            Pick::Generate { request: None }
+        ));
         let pkgs = vec![pkg("a", &["x1"])];
-        let err = resolve(&pkgs, None, "", &["a".to_string()], &[]).unwrap_err();
-        assert!(err.contains("no new task"), "{err}");
-        assert!(resolve(&[], None, "", &[], &[])
-            .unwrap_err()
-            .contains("no tasks"));
+        let fin = vec!["a".to_string()];
+        assert!(matches!(
+            resolve(&pkgs, None, "", &fin, &[], true).unwrap(),
+            Pick::Generate { request: None }
+        ));
+    }
+
+    #[test]
+    fn free_text_is_a_request_and_a_bad_number_stays_an_error() {
+        let pkgs = vec![pkg("a", &["x1"])];
+        let Pick::Generate { request } =
+            resolve(&pkgs, Some("price anchoring"), "", &[], &[], true).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(request.as_deref(), Some("price anchoring"));
+        assert!(resolve(&pkgs, Some("9"), "", &[], &[], true).is_err());
+    }
+
+    #[test]
+    fn without_a_runtime_a_bare_start_passes_over_what_needs_one() {
+        let pkgs = vec![pkg("a", &["x1"])];
+        assert!(matches!(
+            resolve(&pkgs, None, "", &[], &[], false).unwrap(),
+            Pick::Generate { .. }
+        ));
+        assert_eq!(picked(resolve(&pkgs, Some("a"), "", &[], &[], false)), "a");
     }
 }

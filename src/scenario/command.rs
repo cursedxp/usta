@@ -13,41 +13,45 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 
-use crate::scenario::docker::{
-    ensure_ready, runc_warning, Docker, RealDocker, RuntimeStarter, SystemStarter, START_POLL,
-    START_TIMEOUT,
-};
+use crate::scenario::docker::{Docker, RealDocker, RuntimeStarter, SystemStarter};
 use crate::scenario::engine::{self, Tick};
-use crate::scenario::env::FOLDER;
-use crate::scenario::env::{CheckOutcome, Internal};
+use crate::scenario::env::{CheckOutcome, Internal, CONTAINER, FOLDER};
+use crate::scenario::folder::{DONE_DIR, TASKS_DIR};
 use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
 use crate::scenario::model::Live;
 use crate::scenario::model::ModelFailed;
 use crate::scenario::package::{Package, Tone};
-use crate::scenario::pick::{open_runs, own_active, pick_resumable, pick_unfinished};
+use crate::scenario::pick::{own_active, pick_resumable, pick_unfinished};
 use crate::scenario::route::Router;
 use crate::scenario::select::{self, Tag};
+use crate::scenario::start;
 use crate::scenario::steps::{
-    finished_ids, log_error, map_text, pause_notices, resume_run, sync_ledger, title_of, Step,
+    finished_ids, kept_notice, log_error, map_text, ready, resume_run, sync_ledger, title_of, Step,
 };
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::scenario::sweep;
-use crate::scenario::terminal::{window_notice, Launcher, SystemLauncher, WindowReq};
-use crate::scenario::turns::{done_turn, start_turn};
+use crate::scenario::terminal::{Launcher, SystemLauncher};
+use crate::scenario::turns::done_turn;
 
-const USAGE: &str = "scenario commands: /scenario (list) · start [number|id] · resume [id] · check · pause · drop [id] · tone plain|adventure";
+const USAGE: &str = "scenario commands: /scenario (list) · start [number|id|what you want] · talk [skill] · resume [id] · check · pause · drop [id] · tone plain|adventure";
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ScenarioCmd {
     List,
     Start(Option<String>),
+    Talk(Option<String>),
     Resume(Option<String>),
     Check,
     Pause,
     Drop { id: Option<String>, confirmed: bool },
     Tone(Option<String>),
     Usage,
+}
+
+fn rest_of<'a>(it: impl Iterator<Item = &'a str>) -> Option<String> {
+    let words: Vec<&str> = it.collect();
+    (!words.is_empty()).then(|| words.join(" "))
 }
 
 /// `/scenario ...` only; lookalikes (`/scenarios`) and ordinary text return None.
@@ -61,7 +65,8 @@ pub(crate) fn parse(line: &str) -> Option<ScenarioCmd> {
     let mut it = rest.split_whitespace();
     Some(match it.next() {
         None | Some("list") => ScenarioCmd::List,
-        Some("start") => ScenarioCmd::Start(it.next().map(String::from)),
+        Some("start") => ScenarioCmd::Start(rest_of(it)),
+        Some("talk") => ScenarioCmd::Talk(rest_of(it)),
         Some("resume") => ScenarioCmd::Resume(it.next().map(String::from)),
         Some("check") => ScenarioCmd::Check,
         Some("pause") => ScenarioCmd::Pause,
@@ -85,6 +90,7 @@ pub(crate) fn parse(line: &str) -> Option<ScenarioCmd> {
 pub(crate) fn busy_note(cmd: &ScenarioCmd) -> Option<&'static str> {
     match cmd {
         ScenarioCmd::Start(_) => Some("preparing your task… the first start can take a few minutes while its server is set up"),
+        ScenarioCmd::Talk(_) => Some("preparing your task…"),
         ScenarioCmd::Resume(_) => Some("resuming your task…"),
         ScenarioCmd::Check => Some("running the check…"),
         ScenarioCmd::Pause => Some("pausing your task…"),
@@ -125,10 +131,11 @@ pub(crate) fn render_list(
     unfinished: &[RunRecord],
     tone: Tone,
 ) -> String {
-    if pkgs.is_empty() {
-        return format!("No tasks for '{topic}' yet.\nTone: {}", tone.as_str());
-    }
-    let mut out = format!("Tasks for '{topic}':\n");
+    let mut out = if pkgs.is_empty() {
+        format!("Nothing prepared for '{topic}' yet.\n")
+    } else {
+        format!("Tasks for '{topic}':\n")
+    };
     for (i, p) in pkgs.iter().enumerate() {
         let t = match select::tag(p, map, finished, threads) {
             Tag::New => "new",
@@ -150,15 +157,22 @@ pub(crate) fn render_list(
         }
         out.push_str("Give one up with /scenario drop [id].\n");
     }
-    out.push_str(&format!(
-        "Start one with /scenario start [number|id]. Tone: {} (change: /scenario tone plain|adventure)",
-        tone.as_str()
-    ));
+    out.push_str(&if pkgs.is_empty() {
+        format!(
+            "/scenario start makes a task for you, or say what you want: /scenario start <what you want>.\nTone: {}",
+            tone.as_str()
+        )
+    } else {
+        format!(
+            "Start one with /scenario start [number|id], or ask for something new: /scenario start <what you want>. Tone: {} (change: /scenario tone plain|adventure)",
+            tone.as_str()
+        )
+    });
     out
 }
 
 /// Internal errors (tool output) go to the log; the learner reads one plain sentence.
-fn failure(ctx: &Ctx, e: anyhow::Error) -> Reply {
+pub(crate) fn failure(ctx: &Ctx, e: anyhow::Error) -> Reply {
     if e.downcast_ref::<Internal>().is_some() {
         log_error(ctx, &format!("{e:#}"));
         Reply::note("scenario: something went wrong with the task; details are in .usta/scenarios/last-error.log")
@@ -191,6 +205,8 @@ pub(crate) struct Seams<'a> {
     pub launcher: &'a dyn Launcher,
     pub alive: &'a dyn Fn(u32) -> bool,
     pub sleep: &'a dyn Fn(Duration),
+    /// A shutdown signal arrived: no new work on the learner's behalf.
+    pub stopping: &'a dyn Fn() -> bool,
     pub live: &'a Live,
 }
 
@@ -204,6 +220,7 @@ fn run(ctx: &Ctx, live: &Live, cmd: ScenarioCmd) -> Result<Reply> {
             launcher: &SystemLauncher,
             alive: &crate::lock::pid_alive,
             sleep: &std::thread::sleep,
+            stopping: &crate::shutdown::is_requested,
             live,
         },
     )
@@ -225,6 +242,24 @@ fn bad_notice(ctx: &Ctx, bad: &[library::Bad]) -> Option<String> {
     ))
 }
 
+fn check_label(pkg: &Package) -> &'static str {
+    if pkg.is_rubric() {
+        "check: rubric (Usta judged your work, which is less certain than a script, so one pass does not settle the skill)"
+    } else {
+        "check: script (it looked at the system state, not at the commands you typed)"
+    }
+}
+
+/// A folder task's files outlive it and a conversation leaves none; only a server is removed.
+fn drop_warning(rec: &RunRecord, title: &str) -> String {
+    let id = &rec.run_id;
+    match rec.env.as_str() {
+        CONTAINER => format!("This removes your work on '{title}' for good, and nothing from it counts toward your progress. To go ahead: /scenario drop {id} confirm"),
+        FOLDER => format!("This ends '{title}', and nothing from it counts toward your progress. Your files move to {TASKS_DIR}/{DONE_DIR}/. To go ahead: /scenario drop {id} confirm"),
+        _ => format!("This ends '{title}', and nothing from it counts toward your progress. To go ahead: /scenario drop {id} confirm"),
+    }
+}
+
 pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Reply> {
     let store = Store::new(&ctx.project_root);
     let today = crate::lifecycle::today();
@@ -243,69 +278,49 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                 t.as_str()
             )));
         }
-        ScenarioCmd::List => {
-            library::sync(&ctx.global)?;
-            let loaded = library::load_all(&ctx.global, &ctx.topic)?;
-            let notice = bad_notice(ctx, &loaded.bad);
-            let pkgs = loaded.pkgs;
-            sync_ledger(ctx, &store, &pkgs, &today);
-            let map = map_text(ctx);
-            let threads = select::threads_available(
-                &pkgs,
-                &map,
-                &Ledger::load(&ctx.project_root, &ctx.topic).open_ids(),
-            );
-            let unfinished: Vec<RunRecord> = store
-                .all()
-                .into_iter()
-                .filter(|r| {
-                    library::topic_matches(&r.topic, &ctx.topic)
-                        && matches!(r.state, RunState::Paused | RunState::Active)
-                })
-                .collect();
-            let mut text = render_list(
-                &ctx.topic,
-                &pkgs,
-                &map,
-                &finished_ids(&store),
-                &threads,
-                &unfinished,
-                store.tone(),
-            );
-            if let Some(n) = notice {
-                text.push_str(&format!("\n\n{n}"));
-            }
-            return Ok(Reply::note(text));
-        }
         _ => {}
     }
 
-    let docker = seams.docker;
-    let ready = || {
-        ensure_ready(
-            docker,
-            seams.starter,
-            START_TIMEOUT,
-            START_POLL,
-            seams.sleep,
-        )
-    };
-    match &cmd {
-        ScenarioCmd::Start(_) | ScenarioCmd::Resume(_) => {
-            ready()?;
-            // Never prompts or reads stdin, so it is safe inside the session UI.
-            sweep::sweep_docker(&ctx.project_root, &today, docker, seams.alive);
-        }
-        // Pause too: the record may only turn paused once the server really stopped.
-        // Nothing active means nothing to do, so the runtime is not started for it.
-        ScenarioCmd::Check | ScenarioCmd::Pause => {
-            own_active(&store, ctx.pid)?;
-            ready()?;
-        }
-        // Drop works without the runtime: a clean that cannot run is retried at the next start.
-        _ => {}
-    }
     library::sync(&ctx.global)?;
+    let loaded = library::load_all(&ctx.global, &ctx.topic)?;
+    let pkgs = loaded.pkgs;
+    let bad = || bad_notice(ctx, &loaded.bad);
+    if matches!(cmd, ScenarioCmd::List) {
+        sync_ledger(ctx, &store, &pkgs, &today);
+        let map = map_text(ctx);
+        let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
+        // The same list `start` picks from, so `/scenario start 2` means the second line.
+        let offered: Vec<Package> = pkgs
+            .iter()
+            .filter(|p| library::fits_world(p, &ledger))
+            .cloned()
+            .collect();
+        let threads = select::threads_available(&offered, &map, &ledger.open_ids());
+        let unfinished: Vec<RunRecord> = store
+            .all()
+            .into_iter()
+            .filter(|r| {
+                library::topic_matches(&r.topic, &ctx.topic)
+                    && matches!(r.state, RunState::Paused | RunState::Active)
+            })
+            .collect();
+        let mut text = render_list(
+            &ctx.topic,
+            &offered,
+            &map,
+            &finished_ids(&store),
+            &threads,
+            &unfinished,
+            store.tone(),
+        );
+        if let Some(n) = bad() {
+            text.push_str(&format!("\n\n{n}"));
+        }
+        return Ok(Reply::note(text));
+    }
+
+    let docker = seams.docker;
+    sweep::park_serverless(&store, &today, seams.alive);
     let mut env = Router::new(
         docker,
         &project_tag(&ctx.project_root),
@@ -320,8 +335,6 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         stamp: &stamp,
         today: &today,
     };
-    let loaded = library::load_all(&ctx.global, &ctx.topic)?;
-    let pkgs = loaded.pkgs;
     let find_pkg = |id: &str| -> Result<&Package> {
         pkgs.iter().find(|p| p.id == id).ok_or_else(|| {
             if loaded.bad.iter().any(|b| b.dir == id) {
@@ -331,7 +344,6 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             }
         })
     };
-    let scratch = ctx.project_root.join(".usta/scenarios");
     let step = Step {
         ctx,
         seams,
@@ -341,82 +353,56 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
     };
 
     match cmd {
-        ScenarioCmd::Start(sel) => {
-            sync_ledger(ctx, &store, &pkgs, &today);
-            let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
-            let finished = finished_ids(&store);
-            let pkg = select::resolve(
-                &pkgs,
-                sel.as_deref(),
-                &map_text(ctx),
-                &finished,
-                &ledger.open_ids(),
-            )
-            .map_err(|m| anyhow!(m))?;
-            let unfinished = open_runs(&store, &ctx.topic, ctx.pid)
-                .into_iter()
-                .filter(|r| r.package == pkg.id)
-                .max_by_key(|r| r.state == RunState::Active);
-            if let Some(rec) = unfinished {
-                let note = format!(
-                    "You already have '{}' unfinished, so Usta continued it instead of starting over. To start fresh: /scenario drop {} confirm",
-                    pkg.title, rec.run_id
-                );
-                let mut reply = resume_run(&step, &mut env, pkg, rec)?;
-                reply.notices.insert(0, note);
-                return Ok(reply);
-            }
-            let tone = store.tone();
-            let mut notices = Vec::new();
-            if let Some(w) = runc_warning(docker) {
-                notices.push(w);
-            }
-            let paused = pause_notices(&step, None);
-            let rec = engine::start(&mut env, &store, pkg, tone, &tick)?;
-            notices.extend(paused);
-            notices.push(pkg.tone_text(tone, "open")?);
-            if rec.env == FOLDER {
-                // No terminal for a folder task: the learner works in their own editor.
-                let dir = store.tasks_dir().join(&rec.run_id);
-                notices.push(format!("Your files are in {}.", dir.display()));
-            } else {
-                let req = WindowReq {
-                    command_line: &rec.access,
-                    run_id: &rec.run_id,
-                    scratch: &scratch,
-                };
-                notices.push(window_notice(seams.launcher, &req));
-            }
-            notices.push("When you think it is solved: /scenario check".into());
-            Ok(Reply {
-                notices,
-                turn: Some(start_turn(
-                    pkg,
-                    &pkg.instruction()?,
-                    tone,
-                    &ledger.summary(),
-                )),
-            })
+        ScenarioCmd::Start(sel) => start::start(&step, &mut env, sel, bad().into_iter().collect()),
+        ScenarioCmd::Talk(skill) => {
+            start::talk(&step, &mut env, skill, bad().into_iter().collect())
         }
         ScenarioCmd::Resume(sel) => {
-            let rec = pick_resumable(&store, sel.as_deref(), &ctx.topic, ctx.pid)?;
+            let pick = || pick_resumable(&store, sel.as_deref(), &ctx.topic, ctx.pid);
+            let rec = match pick() {
+                Ok(r) if r.env != CONTAINER => r,
+                other => {
+                    let waiting = store.all().iter().any(|r| {
+                        r.env == CONTAINER
+                            && matches!(
+                                r.state,
+                                RunState::Preparing | RunState::Active | RunState::Paused
+                            )
+                    });
+                    if !waiting {
+                        other?
+                    } else {
+                        ready(&step)?;
+                        // Never prompts or reads stdin, so it is safe inside the session UI.
+                        // It is what parks an active run whose owner died, so it comes before the pick.
+                        sweep::sweep_docker(&ctx.project_root, &today, docker, seams.alive);
+                        pick()?
+                    }
+                }
+            };
             resume_run(&step, &mut env, find_pkg(&rec.package)?, rec)
         }
         ScenarioCmd::Check => {
             let mut rec = own_active(&store, ctx.pid)?;
             let pkg = find_pkg(&rec.package)?;
+            if rec.env == CONTAINER || pkg.needs_runtime() {
+                ready(&step)?;
+            }
+            // A model outage here is an `Err` for `failure`, which says it was not judged.
             let report = engine::check(&mut env, &store, pkg, &mut rec, &tick)?;
             match report.outcome {
                 CheckOutcome::Pass => {
                     let tone = Tone::parse(&rec.tone).unwrap_or(Tone::Plain);
-                    let mut notices = vec![pkg.tone_text(tone, "close")?, "check: script (it looked at the system state, not at the commands you typed)".into()];
+                    let mut notices = vec![pkg.tone_text(tone, "close")?, check_label(pkg).into()];
                     let mut ledger = Ledger::load(&ctx.project_root, &ctx.topic);
                     if ledger.apply_finished(&pkg.story, &rec.run_id, &today)
                         && ledger.save(&ctx.project_root, &ctx.topic).is_err()
                     {
                         notices.push("the story notes could not be saved this time; they are added at the next start".into());
                     }
-                    if let Some(w) = report.clean_warning {
+                    if rec.env == FOLDER {
+                        notices.push(kept_notice(&step, &rec, report.clean_warning.as_deref()));
+                    } else if let Some(w) = report.clean_warning {
                         notices.push(clean_notice(ctx, &w));
                     }
                     Ok(Reply {
@@ -425,12 +411,21 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                     })
                 }
                 CheckOutcome::Fail { output } => {
-                    Ok(Reply::note(format!("Not yet. check: script\n{output}")))
+                    let label = if pkg.is_rubric() {
+                        "rubric, Usta's judgment"
+                    } else {
+                        "script"
+                    };
+                    Ok(Reply::note(format!("Not yet. check: {label}\n{output}")))
                 }
             }
         }
         ScenarioCmd::Pause => {
             let mut rec = own_active(&store, ctx.pid)?;
+            // The record may only turn paused once the server really stopped.
+            if rec.env == CONTAINER {
+                ready(&step)?;
+            }
             engine::pause(&mut env, &store, &mut rec, &tick)?;
             Ok(Reply::note(format!(
                 "Paused. Continue later with /scenario resume {}",
@@ -441,16 +436,20 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             let mut rec = pick_unfinished(&store, id.as_deref(), &ctx.topic, ctx.pid)?;
             let title = title_of(&pkgs, &rec.package);
             if !confirmed {
-                return Ok(Reply::note(format!(
-                    "This removes your work on '{title}' for good, and nothing from it counts toward your progress. To go ahead: /scenario drop {} confirm",
-                    rec.run_id
-                )));
+                return Ok(Reply::note(drop_warning(&rec, &title)));
             }
-            let mut notices = vec![format!("Dropped '{title}'. Its server was removed.")];
-            if let Some(w) = engine::drop_run(&mut env, &store, &mut rec, &tick)? {
-                log_error(ctx, &w);
-                notices = vec![format!("Dropped '{title}'. Its server could not be removed right now; Usta will try again at the next start.")];
-            }
+            // Drop works without the runtime: a clean that cannot run is retried at the next start.
+            let warning = engine::drop_run(&mut env, &store, &mut rec, &tick)?;
+            let dropped = format!("Dropped '{title}'.");
+            let notices = match (rec.env.as_str(), warning) {
+                (FOLDER, w) => vec![dropped, kept_notice(&step, &rec, w.as_deref())],
+                (CONTAINER, None) => vec![format!("{dropped} Its server was removed.")],
+                (CONTAINER, Some(w)) => {
+                    log_error(ctx, &w);
+                    vec![format!("{dropped} Its server could not be removed right now; Usta will try again at the next start.")]
+                }
+                (_, _) => vec![dropped],
+            };
             Ok(Reply {
                 notices,
                 turn: None,
@@ -470,7 +469,7 @@ mod tests {
     use crate::scenario::package::tests::{tmp, write_pkg};
     use crate::scenario::steps::{already_running, resume_notice, server_gone_error};
     use crate::scenario::store::{RunRecord, RunState};
-    use crate::scenario::turns::resume_turn;
+    use crate::scenario::turns::{resume_turn, start_turn};
 
     /// `name` must be unique per test: `tmp` keys by process id and name.
     fn pkg(name: &str) -> Package {
@@ -617,9 +616,85 @@ mod tests {
     }
 
     #[test]
-    fn list_without_packages_says_so() {
+    fn start_keeps_the_whole_request_and_talk_parses() {
+        assert_eq!(
+            parse("/scenario start Price Anchoring"),
+            Some(ScenarioCmd::Start(Some("price anchoring".into())))
+        );
+        assert_eq!(parse("/scenario talk"), Some(ScenarioCmd::Talk(None)));
+        assert_eq!(
+            parse("/scenario talk cold email"),
+            Some(ScenarioCmd::Talk(Some("cold email".into())))
+        );
+    }
+
+    #[test]
+    fn an_empty_list_offers_to_make_a_task() {
         let out = render_list("rust", &[], "", &[], &[], &[], Tone::Plain);
-        assert!(out.contains("No tasks for 'rust' yet"), "{out}");
+        assert!(!out.to_lowercase().contains("no tasks"), "{out}");
+        assert!(out.contains("/scenario start"), "{out}");
+        assert!(out.contains("Tone: plain"), "{out}");
+    }
+
+    #[test]
+    fn an_unfinished_task_stays_listed_when_nothing_else_is_offered() {
+        let paused = rec("linux-b-2026", RunState::Paused, 0);
+        let out = render_list("rust", &[], "", &[], &[], &[paused], Tone::Plain);
+        assert!(out.contains("/scenario resume linux-b-2026"), "{out}");
+    }
+
+    #[test]
+    fn a_full_list_also_says_new_tasks_can_be_asked_for() {
+        let out = render_list(
+            "linux",
+            &[pkg("cmd_pkg_hint")],
+            "",
+            &[],
+            &[],
+            &[],
+            Tone::Plain,
+        );
+        assert!(out.contains("/scenario start <what you want>"), "{out}");
+    }
+
+    #[test]
+    fn turns_keep_the_rule_for_every_kind() {
+        use crate::scenario::lint::tests::folder_pkg;
+        let root = tmp("cmd_turn_kinds");
+        let container = Package::load(&write_pkg(&root.join("c"))).unwrap();
+        let folder = Package::load(&folder_pkg(&root.join("f"))).unwrap();
+        let mut talk = folder.clone();
+        talk.environment.kind = "conversation".into();
+        for p in [&container, &folder, &talk] {
+            for t in [
+                start_turn(p, "Fix it.", Tone::Plain, ""),
+                resume_turn(p, "Fix it.", None, true),
+                done_turn(p),
+            ] {
+                assert!(t.contains("never container, image or Docker"), "{t}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn each_kind_gets_its_own_workplace_and_a_rubric_pass_is_seen_at_most() {
+        use crate::scenario::lint::tests::folder_pkg;
+        let root = tmp("cmd_turn_work");
+        let container = Package::load(&write_pkg(&root.join("c"))).unwrap();
+        let folder = Package::load(&folder_pkg(&root.join("f"))).unwrap();
+        let mut talk = folder.clone();
+        talk.environment.kind = "conversation".into();
+        let start = |p: &Package| start_turn(p, "x", Tone::Plain, "");
+        assert!(start(&container).contains("in a terminal"));
+        assert!(start(&folder).contains("task folder") && !start(&folder).contains("terminal"));
+        assert!(start(&talk).contains("in this conversation"));
+        assert!(!resume_turn(&talk, "x", None, true).contains("server survived"));
+        assert!(!resume_turn(&talk, "x", None, true).contains("files"));
+        assert!(done_turn(&folder).contains("seen at most"));
+        assert!(done_turn(&talk).contains("never to settled"));
+        assert!(!done_turn(&container).contains("seen at most"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -650,12 +725,22 @@ mod tests {
     fn learner_text_avoids_infrastructure_words() {
         for c in [
             ScenarioCmd::Start(None),
+            ScenarioCmd::Talk(None),
             ScenarioCmd::Resume(None),
             ScenarioCmd::Check,
         ] {
             assert!(!bad_words(busy_note(&c).unwrap()));
         }
         assert!(!bad_words(USAGE));
+        use crate::scenario::generate::{SAY_PROVING, SAY_RUBRIC, SAY_WRITING};
+        for s in [
+            SAY_WRITING,
+            SAY_RUBRIC,
+            SAY_PROVING,
+            crate::scenario::steps::NO_RUNTIME,
+        ] {
+            assert!(!bad_words(s), "{s}");
+        }
         let mut a = pkg("cmd_pkg_words");
         a.id = "linux-a".into();
         let out = render_list(

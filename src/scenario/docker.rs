@@ -273,7 +273,8 @@ pub(crate) fn runc_warning(d: &dyn Docker) -> Option<String> {
 
 #[cfg(test)]
 pub(crate) mod fake {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     use super::*;
 
@@ -281,7 +282,7 @@ pub(crate) mod fake {
     pub(crate) struct FakeDocker {
         pub calls: RefCell<Vec<String>>,
         respond: Box<dyn Fn(&str) -> Out>,
-        missing: bool,
+        missing: Rc<Cell<bool>>,
     }
 
     impl FakeDocker {
@@ -289,7 +290,17 @@ pub(crate) mod fake {
             FakeDocker {
                 calls: RefCell::new(vec![]),
                 respond: Box::new(respond),
-                missing: false,
+                missing: Rc::default(),
+            }
+        }
+        /// Answers from a closure, and behaves like `missing` while the cell is set.
+        pub fn switchable(
+            missing: Rc<Cell<bool>>,
+            respond: impl Fn(&str) -> Out + 'static,
+        ) -> FakeDocker {
+            FakeDocker {
+                missing,
+                ..FakeDocker::new(respond)
             }
         }
         /// The docker CLI is not installed: every call errors.
@@ -301,7 +312,7 @@ pub(crate) mod fake {
                     stdout: String::new(),
                     stderr: String::new(),
                 }),
-                missing: true,
+                missing: Rc::new(Cell::new(true)),
             }
         }
         pub fn calls(&self) -> Vec<String> {
@@ -313,7 +324,7 @@ pub(crate) mod fake {
         fn run(&self, args: &[&str]) -> Result<Out> {
             let line = args.join(" ");
             self.calls.borrow_mut().push(line.clone());
-            if self.missing {
+            if self.missing.get() {
                 bail!("docker: command not found");
             }
             Ok((self.respond)(&line))

@@ -148,6 +148,62 @@ pub(crate) mod tests {
           {"path":"tone/adventure.md","content":"## open\nGo.\n\n## close\nDone.\n"},
           {"path":"solution/answer.md","content":"Bakers, because of price.\n"}]}"###;
 
+    pub(crate) const REVIEW_OK: &str = r#"{"ok":true,"problems":[]}"#;
+
+    /// A judge's reply with every named criterion met.
+    pub(crate) fn met(ids: &[&str]) -> String {
+        let criteria: Vec<_> = ids
+            .iter()
+            .map(|id| serde_json::json!({"id": id, "met": true, "note": ""}))
+            .collect();
+        serde_json::json!({ "criteria": criteria }).to_string()
+    }
+
+    fn reply_with(task_toml: &str, files: &[(&str, &str)]) -> String {
+        let mut all = vec![
+            ("instruction.md", "Fix the task.\n"),
+            ("tone/adventure.md", "## open\nGo.\n\n## close\nDone.\n"),
+        ];
+        all.extend_from_slice(files);
+        let files: Vec<_> = all
+            .iter()
+            .map(|(path, content)| serde_json::json!({"path": path, "content": content}))
+            .collect();
+        serde_json::json!({"kind": "package", "task_toml": task_toml, "files": files}).to_string()
+    }
+
+    pub(crate) fn container_reply() -> String {
+        reply_with(
+            "title = \"Serve it\"\nskills = [\"serving\"]\n\n[environment]\nkind = \"container\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n",
+            &[
+                ("environment/Dockerfile", "FROM debian:12-slim\nRUN true\n"),
+                ("solution/solve.sh", "#!/bin/sh\ntrue\n"),
+                ("tests/check.sh", "#!/bin/sh\nexit 1\n"),
+            ],
+        )
+    }
+
+    pub(crate) fn folder_rubric_reply() -> String {
+        reply_with(
+            "title = \"Plan it\"\nskills = [\"positioning\"]\n\n[environment]\nkind = \"folder\"\n\n[check]\nkind = \"rubric\"\ndeliverables = [\"plan.md\"]\nwhy_rubric = \"judgment\"\n\n[[check.rubric]]\nid = \"a\"\ntext = \"names one audience\"\nevidence = [\"brief.md\"]\n\n[[check.rubric]]\nid = \"b\"\ntext = \"gives a reason\"\nevidence = [\"brief.md\"]\n",
+            &[
+                ("environment/files/brief.md", "Audience: bakers.\n"),
+                ("solution/files/plan.md", "Bakers, because of price.\n"),
+            ],
+        )
+    }
+
+    pub(crate) fn folder_script_reply() -> String {
+        reply_with(
+            "title = \"Count it\"\nskills = [\"counting\"]\n\n[environment]\nkind = \"folder\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n",
+            &[
+                ("environment/files/brief.md", "Count the rows.\n"),
+                ("solution/files/answer.txt", "3\n"),
+                ("tests/check.sh", "#!/bin/sh\nexit 1\n"),
+            ],
+        )
+    }
+
     #[test]
     fn usta_assigns_identity_and_the_model_cannot() {
         let d = tmp("draft_id");
