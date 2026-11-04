@@ -1,12 +1,14 @@
 //! The scenario library. Built-in packages are embedded in the binary and
 //! synced to `<global>/scenarios/library/` on first `/scenario` use (code-owned,
-//! like the brain files); packages generated in step 2 will land in the same tree.
+//! like the brain files); generated packages (`gen-` ids) land in the same tree, but
+//! only after they passed their proof.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::config::needs_sync;
+use crate::scenario::ledger::Ledger;
 use crate::scenario::package::Package;
 
 struct Embedded {
@@ -70,6 +72,29 @@ pub(crate) fn embedded_ids() -> Vec<&'static str> {
 
 pub(crate) fn library_root(global: &Path) -> PathBuf {
     global.join("scenarios/library")
+}
+
+pub(crate) fn staging_root(global: &Path) -> PathBuf {
+    global.join("scenarios/staging")
+}
+
+/// Move a proven package into the library. The rename is the install: anything in
+/// the library has passed.
+pub(crate) fn install(global: &Path, staged: &Path, id: &str) -> Result<Package> {
+    let dest = library_root(global).join(id);
+    std::fs::create_dir_all(library_root(global))?;
+    std::fs::rename(staged, &dest).with_context(|| format!("cannot add {id} to the library"))?;
+    Package::load(&dest)
+}
+
+/// A generated task speaks of the company of the world it was written for.
+#[allow(dead_code)] // reached from the command layer in Task 12
+pub(crate) fn fits_world(p: &Package, ledger: &Ledger) -> bool {
+    !p.is_generated()
+        || match (&p.story.company, &ledger.company) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        }
 }
 
 /// Write embedded packages that are missing or differ from the binary's copy.
@@ -313,6 +338,37 @@ mod tests {
             }
             assert!(text.contains("exit 0") && text.contains("exit 1"), "{id}");
         }
+        let _ = std::fs::remove_dir_all(g);
+    }
+
+    #[test]
+    fn another_worlds_generated_task_is_hidden_but_handwritten_ones_never_are() {
+        let root = tmp("lib_world");
+        let mut p = Package::load(&crate::scenario::package::tests::write_pkg(&root)).unwrap();
+        let mine = Ledger {
+            company: Some("Shopwell".into()),
+            ..Ledger::default()
+        };
+        p.story.company = Some("Other Inc".into());
+        assert!(fits_world(&p, &mine), "handwritten");
+        p.id = "gen-x-1".into();
+        assert!(!fits_world(&p, &mine));
+        assert!(fits_world(&p, &Ledger::default()));
+        p.story.company = None;
+        assert!(fits_world(&p, &mine));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn install_moves_the_staged_package_into_the_library() {
+        let g = tmp("lib_install");
+        let staged = staging_root(&g).join("demo-pkg");
+        let src = crate::scenario::package::tests::write_pkg(&g.join("src"));
+        std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        std::fs::rename(&src, &staged).unwrap();
+        let p = install(&g, &staged, "demo-pkg").unwrap();
+        assert_eq!(p.id, "demo-pkg");
+        assert!(!staged.exists() && library_root(&g).join("demo-pkg/task.toml").exists());
         let _ = std::fs::remove_dir_all(g);
     }
 }

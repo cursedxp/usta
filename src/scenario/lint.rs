@@ -253,7 +253,6 @@ fn cap_problems(p: &Package) -> Vec<String> {
 }
 
 /// `allow` is the topic plus the learner's request: a Docker lesson may say Docker.
-#[allow(dead_code)] // Task 11 calls it during generation
 pub(crate) fn learner_word_problems(p: &Package, allow: &str) -> Vec<String> {
     let allow = allow.to_ascii_lowercase();
     let mut files = vec![

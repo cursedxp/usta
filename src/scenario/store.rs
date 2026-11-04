@@ -81,7 +81,6 @@ impl Store {
     }
 
     /// Scratch space for validation. Under `.usta`, so the learner and the watcher stay out.
-    #[allow(dead_code)] // consumed by later steps
     pub fn scratch_dir(&self) -> PathBuf {
         self.root.join("validate")
     }

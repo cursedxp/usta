@@ -191,7 +191,6 @@ pub(crate) struct Seams<'a> {
     pub launcher: &'a dyn Launcher,
     pub alive: &'a dyn Fn(u32) -> bool,
     pub sleep: &'a dyn Fn(Duration),
-    #[allow(dead_code)] // consumed by later steps
     pub live: &'a Live,
 }
 

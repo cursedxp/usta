@@ -188,7 +188,7 @@ impl Ledger {
     }
 
     /// What the generator must stay consistent with. Unlike `summary`, this carries thread ids.
-    #[allow(dead_code)] // consumed by Task 11
+    #[allow(dead_code)] // reached from the command layer in Task 12
     pub fn for_generation(&self) -> String {
         let mut out = Vec::new();
         if let Some(c) = &self.company {

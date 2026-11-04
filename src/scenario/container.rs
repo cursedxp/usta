@@ -12,7 +12,6 @@ use crate::scenario::package::Package;
 /// Check scripts enter the container only here, at check time, and are removed right after.
 pub(crate) const CHECK_DIR: &str = "/opt/.usta-check";
 /// Reference solution location, certification only.
-#[allow(dead_code)] // consumed by later steps
 pub(crate) const SOLUTION_DIR: &str = "/opt/.usta-solution";
 
 /// Bound on a generated setup, start or solution script.
@@ -103,7 +102,6 @@ impl ContainerEnv<'_> {
     }
 
     /// What a learner's window and every check need. `None` when all are there.
-    #[allow(dead_code)] // consumed by later steps
     pub fn missing_tools(&self, name: &str) -> Option<String> {
         let found = self
             .docker
@@ -143,7 +141,6 @@ impl ContainerEnv<'_> {
     }
 
     /// Certification only (not one of the five operations): run the reference solution inside.
-    #[allow(dead_code)] // consumed by later steps
     pub fn apply_solution(&self, pkg: &Package, h: &EnvHandle) -> Result<()> {
         let src = format!("{}/.", pkg.dir.join("solution").display());
         let dest = format!("{}:{SOLUTION_DIR}", h.reference);

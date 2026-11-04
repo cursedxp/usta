@@ -17,7 +17,6 @@ pub(crate) fn judge_system() -> String {
     )
 }
 
-#[allow(dead_code)] // consumed by later steps
 pub(crate) fn review_system() -> String {
     format!(
         "You check a rubric for a practice task before any learner sees it. Every criterion must be answerable from the task text and the listed files alone. \
@@ -27,7 +26,6 @@ pub(crate) fn review_system() -> String {
     )
 }
 
-#[allow(dead_code)] // consumed by Task 11
 pub(crate) struct Brief {
     pub topic: String,
     pub request: Option<String>,
@@ -39,27 +37,22 @@ pub(crate) struct Brief {
     pub talk_only: bool,
 }
 
-#[allow(dead_code)] // consumed by Task 11
 const KINDS_WITH_RUNTIME: &str = "Environment kinds you may use: \"container\", \"folder\", \"conversation\". \
     Decide for this one task, not for the subject: any subject gets a container when the task needs one. A marketing task with a tool to run or a script check is a \"container\" or \"folder\" task like a Linux task is. \
     Prefer a script check whenever the task allows one: rubric checks are the weak link. Use a rubric only when the result is truly a matter of judgment, and say why in check.why_rubric.";
 
-#[allow(dead_code)] // consumed by Task 11
 const KINDS_NO_RUNTIME: &str = "This computer cannot run a server now. Environment kinds you may use: \"folder\" with a rubric check, and \"conversation\". \
     If the skill can only be practised on a running system, reply {\"kind\":\"needs_system\",\"why\":\"<one sentence>\"} instead of a package.";
 
-#[allow(dead_code)] // consumed by Task 11
 const KINDS_TALK: &str =
     "Use only \"conversation\": the learner answers in the chat and Usta judges.";
 
-#[allow(dead_code)] // consumed by Task 11
 const RULES: &str = "Check scripts look at system state, never the commands typed, and accept every valid solution, not only yours. They exit 0 when solved and exit 1 when not, and no other exit code. They first clear stale state from earlier attempts, then check the system state itself. They print only lines safe to show the learner. \
     A rubric has at least 2 criteria, each with an id and text, resting only on material in the task. Measure process and decision quality, never outcome. Each criterion lists in evidence the files it rests on. \
     Never invent results such as a traffic number after a decision. Finance, health and law tasks use past or fictional data only; never advise on a real position, and never use real money. A task with a real-money risk runs in a simulated world. \
     Keep the story continuous: use the company and open threads given. story.needs and story.closes may name only open threads. story.opens uses new lowercase ids. Skills are short lowercase keywords taken from the curriculum map where possible. \
     Write learner text in the learner's language, as their profile shows, else English. Keep the whole package small. Do not browse the web.";
 
-#[allow(dead_code)] // consumed by Task 11
 fn shapes(b: &Brief) -> String {
     let head = "Package shapes. Every package has instruction.md and tone/adventure.md with \"## open\" and \"## close\" sections. ";
     let container = format!(
@@ -80,7 +73,6 @@ fn shapes(b: &Brief) -> String {
     }
 }
 
-#[allow(dead_code)] // consumed by Task 11
 fn kinds(b: &Brief) -> &'static str {
     if b.talk_only {
         KINDS_TALK
@@ -91,7 +83,6 @@ fn kinds(b: &Brief) -> &'static str {
     }
 }
 
-#[allow(dead_code)] // consumed by Task 11
 pub(crate) fn generate_system(b: &Brief) -> String {
     format!(
         "You write one practice task for Usta, a terminal mentor. A task has a role, a situation, a task and a check. \
@@ -137,7 +128,6 @@ fn block(name: &str, text: &str) -> String {
     )
 }
 
-#[allow(dead_code)] // consumed by Task 11
 fn inputs(b: &Brief) -> String {
     let mut out = block("topic", &b.topic);
     if let Some(r) = &b.request {
@@ -153,7 +143,6 @@ fn inputs(b: &Brief) -> String {
     out
 }
 
-#[allow(dead_code)] // consumed by Task 11
 pub(crate) fn request(b: &Brief) -> String {
     format!(
         "{}\nWrite the next task: the one that moves this learner forward most.",
@@ -161,7 +150,6 @@ pub(crate) fn request(b: &Brief) -> String {
     )
 }
 
-#[allow(dead_code)] // consumed by Task 11
 pub(crate) fn retry(b: &Brief, last: &str, problems: &[String]) -> String {
     format!(
         "{}{}{}\nIt failed. Fix every problem listed and send the whole package again.",

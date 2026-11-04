@@ -1,7 +1,6 @@
 //! How scenario code reaches the model: blocking, one self-contained prompt per
 //! call, no session. Feedback rounds put everything into the next prompt, so the
 //! CLI and API backends behave the same.
-#![allow(dead_code)] // consumed by later steps (generation, judge)
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -139,6 +138,7 @@ impl Cancel {
 
 /// What a command gets from the live session.
 #[derive(Clone)]
+#[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) struct Live {
     pub model: Arc<dyn Model>,
     /// The conversation since the task opened; evidence for a conversation task.
@@ -148,6 +148,7 @@ pub(crate) struct Live {
 }
 
 impl Live {
+    #[allow(dead_code)] // reached from the command layer in Task 12
     pub fn idle() -> Live {
         Live {
             model: Arc::new(NoModel),

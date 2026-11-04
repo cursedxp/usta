@@ -3,8 +3,6 @@
 //! check fails; after the reference solution it passes. Rubric checks: the rubric
 //! rests only on the task's material, and the reference answer meets it.
 
-#![allow(dead_code)] // consumed by later steps (Task 11)
-
 use anyhow::Result;
 use serde::Deserialize;
 
@@ -122,6 +120,7 @@ fn two_conditions(env: &mut dyn Certify, pkg: &Package, h: &EnvHandle) -> Result
     }
 }
 
+#[cfg(test)]
 pub(crate) fn prove_script(env: &mut dyn Certify, pkg: &Package, run_id: &str) -> Result<Proof> {
     prove_and_clean(env, pkg, run_id).0
 }
@@ -254,6 +253,7 @@ pub(crate) fn prove_rubric(model: &dyn Model, pkg: &Package) -> Result<Proof> {
     }
 }
 
+#[allow(dead_code)] // reached from the command layer in Task 12
 pub(crate) struct RealProver<'a> {
     pub docker: &'a dyn Docker,
     pub store: &'a Store,
@@ -266,6 +266,7 @@ pub(crate) struct RealProver<'a> {
     pub free_server: &'a mut dyn FnMut() -> Result<()>,
 }
 
+#[allow(dead_code)] // reached from the command layer in Task 12
 impl RealProver<'_> {
     /// Record first, so a crash here is resolved by the sweep like an interrupted prepare,
     /// and a live owner keeps a second sweep's hands off the container.
@@ -287,8 +288,17 @@ impl RealProver<'_> {
     }
 }
 
+#[allow(dead_code)] // reached from the command layer in Task 12
 impl Prover for RealProver<'_> {
     fn prove(&mut self, pkg: &Package, round: usize) -> Result<Proof> {
+        // Only Usta-assigned ids take the capped build; a built-in id would reach the
+        // unlimited `docker build` path.
+        if !pkg.is_generated() {
+            return Err(internal(format!(
+                "validation refused '{}': not a generated package",
+                pkg.id
+            )));
+        }
         if pkg.is_rubric() {
             (self.say)(crate::scenario::generate::SAY_RUBRIC);
             return prove_rubric(self.model, pkg);
@@ -442,6 +452,18 @@ mod tests {
         Package::load(&write_pkg(&root)).unwrap()
     }
 
+    /// What the prover accepts: the same package under a Usta-assigned id.
+    fn as_generated(p: Package) -> Package {
+        let to = p.dir.with_file_name("gen-demo");
+        let _ = std::fs::remove_dir_all(&to);
+        std::fs::rename(&p.dir, &to).unwrap();
+        let file = to.join("task.toml");
+        let text = std::fs::read_to_string(&file).unwrap();
+        let text = text.replace(&format!("id = \"{}\"", p.id), "id = \"gen-demo\"");
+        std::fs::write(&file, text).unwrap();
+        Package::load(&to).unwrap()
+    }
+
     #[test]
     fn a_good_package_passes_and_is_cleaned() {
         let mut f = Fake::new(fail(), CheckOutcome::Pass);
@@ -524,7 +546,7 @@ mod tests {
         let root = tmp("val_lint");
         let d = write_pkg(&root);
         std::fs::remove_file(d.join("tone/adventure.md")).unwrap();
-        let p = Package::load(&d).unwrap();
+        let p = as_generated(Package::load(&d).unwrap());
         let mut f = Fake::new(fail(), CheckOutcome::Pass);
         let Proof::Problems(x) = prove_script(&mut f, &p, "v").unwrap() else {
             panic!()
@@ -716,14 +738,30 @@ mod tests {
     }
 
     #[test]
+    fn a_package_that_is_not_generated_is_refused_before_anything_runs() {
+        let root = tmp("val_not_gen");
+        let p = Package::load(&write_pkg(&root)).unwrap();
+        assert!(!p.is_generated());
+        let d = FakeDocker::new(|_| ok("true"));
+        let (r, store) = prover_with(&root, &d, |pr| pr.prove(&p, 0));
+        assert!(
+            r.is_err(),
+            "a built-in id would take the unlimited build path"
+        );
+        assert!(d.calls().is_empty(), "{:?}", d.calls());
+        assert!(store.all().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn the_image_is_removed_after_a_problem_and_an_error_and_kept_after_a_pass() {
         // Problems: the check never passes.
         let root = tmp("val_img_problem");
-        let p = Package::load(&write_pkg(&root)).unwrap();
+        let p = as_generated(Package::load(&write_pkg(&root)).unwrap());
         let d = FakeDocker::new(|l| {
             if l.starts_with("ps ") {
                 ok("")
-            } else if l.contains(" timeout ") {
+            } else if l.contains(" sh /opt/.usta-check/check.sh") {
                 dfail(1, "not yet")
             } else {
                 ok("true")
@@ -750,7 +788,7 @@ mod tests {
             if l.starts_with("ps ") {
                 return ok("");
             }
-            if l.contains(" timeout ") {
+            if l.contains(" sh /opt/.usta-check/check.sh") {
                 n.set(n.get() + 1);
                 // Two fresh runs fail, the one after the solution passes.
                 return if n.get() <= 2 {
@@ -770,13 +808,13 @@ mod tests {
     #[test]
     fn a_failed_clean_keeps_the_record_for_the_sweep() {
         let root = tmp("val_keep_rec");
-        let p = Package::load(&write_pkg(&root)).unwrap();
+        let p = as_generated(Package::load(&write_pkg(&root)).unwrap());
         let d = FakeDocker::new(|l| {
             if l.starts_with("ps ") {
                 ok("")
             } else if l.starts_with("rm ") {
                 dfail(1, "permission denied")
-            } else if l.contains(" timeout ") {
+            } else if l.contains(" sh /opt/.usta-check/check.sh") {
                 dfail(1, "not yet")
             } else {
                 ok("true")
@@ -809,7 +847,7 @@ mod tests {
     #[test]
     fn a_real_proof_writes_a_record_first_and_leaves_none() {
         let root = tmp("val_rec");
-        let p = Package::load(&write_pkg(&root)).unwrap();
+        let p = as_generated(Package::load(&write_pkg(&root)).unwrap());
         let store = Store::new(&root);
         let seen = store.clone();
         let d = FakeDocker::new(move |l| {
@@ -853,7 +891,8 @@ mod tests {
     #[test]
     fn a_running_task_is_paused_only_when_a_script_proof_needs_a_server() {
         let root = tmp("val_free");
-        let p = Package::load(&crate::scenario::lint::tests::folder_pkg(&root)).unwrap();
+        let p =
+            as_generated(Package::load(&crate::scenario::lint::tests::folder_pkg(&root)).unwrap());
         let store = Store::new(&root);
         let d = FakeDocker::new(|_| ok(""));
         let alive: &dyn Fn(u32) -> bool = &|_| true;
@@ -887,7 +926,7 @@ mod tests {
     #[test]
     fn a_runtime_that_died_is_an_error_not_a_round() {
         let root = tmp("val_dead");
-        let p = Package::load(&write_pkg(&root)).unwrap();
+        let p = as_generated(Package::load(&write_pkg(&root)).unwrap());
         let store = Store::new(&root);
         let d = FakeDocker::new(|l| {
             if l.starts_with("ps ") {

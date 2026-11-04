@@ -177,7 +177,6 @@ impl Package {
     }
 
     /// Container tasks, and folder tasks whose script check runs in a throwaway container.
-    #[allow(dead_code)] // consumed by later steps
     pub fn needs_runtime(&self) -> bool {
         self.environment.kind == CONTAINER || self.check.kind == "script"
     }

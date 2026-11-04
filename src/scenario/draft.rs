@@ -1,8 +1,6 @@
 //! The model's reply as a package on disk. Everything here is untrusted: files land
 //! only under the known package folders, and the identity fields are Usta's.
 
-#![allow(dead_code)] // consumed by Task 11
-
 use std::path::Path;
 
 use serde::Deserialize;
@@ -139,7 +137,7 @@ pub(crate) fn stage(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::scenario::package::tests::tmp;
     use crate::scenario::package::Package;
