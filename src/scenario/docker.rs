@@ -43,6 +43,8 @@ impl Docker for RealDocker {
 /// work that legitimately takes time (image builds, setup and check scripts).
 fn time_limit(args: &[&str]) -> Duration {
     let secs = match args.first().copied() {
+        // `-s` walks the container's files: slow after a big step.
+        Some("inspect") if args.contains(&"-s") => 60,
         Some("version" | "ps" | "inspect" | "image") => 10,
         Some("stop") => 15,
         Some("rm") => 30,
@@ -594,6 +596,7 @@ mod tests {
         ] {
             assert!(secs(quick) <= 10, "{quick:?}");
         }
+        assert_eq!(secs(&["inspect", "-s", "-f", "{{.SizeRw}}", "n"]), 60);
         assert!(secs(&["stop", "-t", "2", "n"]) <= 15);
         assert!(secs(&["rm", "-f", "n"]) <= 30);
         assert!(secs(&["start", "n"]) <= 60);

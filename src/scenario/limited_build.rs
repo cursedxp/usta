@@ -97,7 +97,9 @@ fn publish(d: &dyn Docker, temp: &str, image: &str) -> Result<()> {
         return Err(too_large());
     }
     must(d, &["tag", temp, image])?;
-    must(d, &["rmi", temp]).map(|_| ())
+    // The real name exists now; a leftover temporary tag is harmless.
+    let _ = d.run(&["rmi", temp]);
+    Ok(())
 }
 
 fn run_recipe(
@@ -391,5 +393,20 @@ mod tests {
         let d = FakeDocker::new(|_| ok(""));
         ensure_image(&d, "debian:12-slim").unwrap();
         assert_eq!(d.calls(), vec!["image inspect debian:12-slim".to_string()]);
+    }
+
+    #[test]
+    fn a_failed_cleanup_of_the_temporary_tag_does_not_fail_the_build() {
+        let (root, p) = pkg_with("lb_rmi", "FROM debian:12-slim\n");
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("rmi") {
+                fail(1, "conflict")
+            } else {
+                small(l)
+            }
+        });
+        build(&d, &p, "i:v1", "t").unwrap();
+        assert!(d.calls().iter().any(|l| l == "tag i:v1-bld i:v1"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

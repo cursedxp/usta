@@ -156,9 +156,10 @@ pub(crate) fn parse(text: &str) -> Result<Recipe, Vec<String>> {
             w[1].to_string()
         }
         _ => {
-            problems.push(
-                "the first line must be FROM <official-image>:<version>, version not latest".into(),
-            );
+            problems.push(format!(
+                "the first line must be FROM <image>:<version> with an image from {}, version not latest",
+                BASES.join(", ")
+            ));
             String::new()
         }
     };
@@ -238,6 +239,14 @@ mod tests {
             "",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_base_refusal_names_the_allowed_images() {
+        let e = parse("FROM mycompany-api:dev\n").unwrap_err().join("\n");
+        for b in BASES {
+            assert!(e.contains(b), "{b}: {e}");
         }
     }
 }
