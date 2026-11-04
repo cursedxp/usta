@@ -171,10 +171,20 @@ pub(crate) fn start_turn(pkg: &Package, instruction: &str, tone: Tone, world: &s
     )
 }
 
-pub(crate) fn resume_turn(pkg: &Package, instruction: &str, last_check: Option<&str>) -> String {
+pub(crate) fn resume_turn(
+    pkg: &Package,
+    instruction: &str,
+    last_check: Option<&str>,
+    restarted: bool,
+) -> String {
+    let services = if restarted {
+        "its services were restarted"
+    } else {
+        "its services did not come back up, possibly because of their unfinished work; they are on the server and can look into it"
+    };
     format!(
         "[SCENARIO RESUME] The learner came back to the unfinished task \"{}\" ({}). Task: {instruction} \
-         Their last check: {}. Their work on the server survived; its services were restarted. \
+         Their last check: {}. Their work on the server survived; {services}. \
          Say task or server to the learner; never container, image or Docker. \
          In two sentences, say where they left off if this conversation shows it, otherwise restate the task. \
          Do not give the fix.",
@@ -385,8 +395,12 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
             }
             // A closed window leaves an own active run with a healthy server: only reopen it.
             let woke = !already_running(&env, &rec);
+            let mut restarted = true;
             if woke {
-                engine::resume(&mut env, &store, pkg, &mut rec, &tick)?;
+                if let Some(w) = engine::resume(&mut env, &store, pkg, &mut rec, &tick)? {
+                    log_error(ctx, &w);
+                    restarted = false;
+                }
             }
             let req = WindowReq {
                 command_line: &rec.access,
@@ -394,7 +408,7 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
                 scratch: &scratch,
             };
             let notices = vec![
-                resume_notice(&pkg.title, woke),
+                resume_notice(&pkg.title, woke, restarted),
                 window_notice(&SystemLauncher, &req),
             ];
             // The mentor turn says the services restarted: only true when we woke them.
@@ -403,6 +417,7 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
                     pkg,
                     &pkg.instruction()?,
                     rec.last_check.as_deref(),
+                    restarted,
                 ))
             } else {
                 None
@@ -486,8 +501,10 @@ fn already_running(env: &ContainerEnv, rec: &RunRecord) -> bool {
     rec.state == RunState::Active && env.is_running(&rec.reference)
 }
 
-fn resume_notice(title: &str, woke: bool) -> String {
-    if woke {
+fn resume_notice(title: &str, woke: bool, restarted: bool) -> String {
+    if !restarted {
+        format!("Resumed: {title}. Your files are as you left them, but its programs did not come back up; you are in, so you can look into it. Details are in .usta/scenarios/last-error.log")
+    } else if woke {
         format!("Resumed: {title}. Your files are as you left them; its programs were restarted.")
     } else {
         format!("Back in: {title}. Your task is still running; opened a new terminal window.")
@@ -727,7 +744,7 @@ mod tests {
         assert!(s.contains("task or server") && !s.to_lowercase().contains("container terminal"));
         assert!(!s.contains("SECRET-FIX-LINE"));
         assert!(!start_turn(&p, "Fix it.", Tone::Plain, "").contains("World so far"));
-        let r = resume_turn(&p, "Fix it.", Some("fail"));
+        let r = resume_turn(&p, "Fix it.", Some("fail"), true);
         assert!(r.starts_with("[SCENARIO RESUME]") && r.contains("Their last check: fail"));
         let d = done_turn(&p);
         assert!(d.starts_with("[SCENARIO DONE]") && d.contains("permission"));
@@ -973,7 +990,11 @@ mod tests {
         assert!(!already_running(&env(&off), &r));
         r.state = RunState::Paused;
         assert!(!already_running(&env(&on), &r));
-        assert!(!resume_notice("T", false).contains("restarted"));
-        assert!(resume_notice("T", true).contains("restarted"));
+        assert!(!resume_notice("T", false, true).contains("restarted"));
+        assert!(resume_notice("T", true, true).contains("restarted"));
+        let broken = resume_notice("T", true, false);
+        assert!(!broken.contains("restarted") && broken.contains("did not come back up"));
+        let turn = resume_turn(&pkg("cmd_turn_broken"), "Fix it.", None, false);
+        assert!(!turn.contains("were restarted") && turn.contains("did not come back up"));
     }
 }

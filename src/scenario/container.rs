@@ -178,14 +178,17 @@ impl Environment for ContainerEnv<'_> {
         self.must(&["stop", "-t", "2", &h.reference]).map(|_| ())
     }
 
-    fn resume(&mut self, pkg: &Package, h: &EnvHandle) -> Result<()> {
+    fn resume(&mut self, pkg: &Package, h: &EnvHandle) -> Result<Option<String>> {
         self.owned(h)?;
         self.guard_single()?;
         self.must(&["start", &h.reference])?;
-        if let Some(s) = &pkg.environment.start {
-            self.run_script(&h.reference, s)?;
-        }
-        Ok(())
+        let Some(s) = &pkg.environment.start else {
+            return Ok(None);
+        };
+        Ok(self
+            .run_script(&h.reference, s)
+            .err()
+            .map(|e| e.to_string()))
     }
 
     fn check(&mut self, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
@@ -674,6 +677,36 @@ mod tests {
         };
         let e = env.check(&pkg(), &handle()).unwrap_err();
         assert!(e.downcast_ref::<Internal>().is_some(), "{e:?}");
+    }
+
+    #[test]
+    fn a_failing_start_script_on_resume_is_a_warning_but_a_failing_start_is_not() {
+        let d = FakeDocker::new(|l| {
+            if l.contains("start.sh") {
+                fail(1, "shopd: bad config")
+            } else {
+                ok("")
+            }
+        });
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        let w = env.resume(&pkg(), &handle()).unwrap().unwrap();
+        assert!(w.contains("shopd: bad config"), "{w}");
+
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("start ") {
+                fail(1, "no such")
+            } else {
+                ok("")
+            }
+        });
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        assert!(env.resume(&pkg(), &handle()).is_err());
     }
 
     #[test]

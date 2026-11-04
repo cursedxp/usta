@@ -97,7 +97,7 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
         .run(&["inspect", "-f", "{{.State.Running}}", &name])
         .unwrap();
     assert_eq!(st.stdout.trim(), "false", "paused container must not run");
-    env.resume(&pkg, &h).unwrap();
+    assert_eq!(env.resume(&pkg, &h).unwrap(), None);
     assert!(
         d.run(&["exec", &name, "test", "-f", "/root/marker"])
             .unwrap()

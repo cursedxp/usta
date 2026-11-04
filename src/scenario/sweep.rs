@@ -19,6 +19,8 @@ pub(crate) const STALE_DAYS: i64 = 14;
 #[derive(Debug, PartialEq)]
 pub(crate) enum Action {
     RemoveContainer(String),
+    /// A paused task's container is running with nobody on it: stop it, keep the work.
+    StopContainer(String),
     PauseRecord {
         run_id: String,
         container: String,
@@ -95,6 +97,9 @@ pub(crate) fn plan(
                 container: r.reference.clone(),
             }),
             RunState::Paused => {
+                if let Some(c) = find(&r.run_id).filter(|c| owner_dead && c.state == "running") {
+                    acts.push(Action::StopContainer(c.name.clone()));
+                }
                 if let Some(days) = age_days(&r.updated, today).filter(|d| *d >= STALE_DAYS) {
                     acts.push(Action::AskStale {
                         run_id: r.run_id.clone(),
@@ -237,6 +242,17 @@ pub(crate) fn execute(
                     continue;
                 }
                 let _ = docker.run(&["rm", "-f", &name]);
+            }
+            Action::StopContainer(name) => {
+                if !name.starts_with(&mine) {
+                    continue;
+                }
+                let stopped = docker
+                    .run(&["stop", "-t", "2", &name])
+                    .is_ok_and(|o| o.ok());
+                if !stopped {
+                    ui::warn("a paused practice task is still running; could not stop it");
+                }
             }
             Action::DeleteRecord(id) => {
                 let _ = store.remove(&id);
@@ -772,5 +788,31 @@ mod tests {
         assert!(d.calls()[0].contains(&filter), "{:?}", d.calls());
         assert_eq!(d.calls().len(), 1, "nothing was removed or stopped");
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_paused_record_with_a_running_container_and_no_live_owner_is_stopped() {
+        let recs = vec![rec("p", RunState::Paused, 0, "2026-11-03")];
+        assert_eq!(
+            p(&recs, &[found("p", "running")], DEAD),
+            vec![Action::StopContainer("usta-aaaa1111-p".into())]
+        );
+        let held = vec![rec("p", RunState::Paused, 4242, "2026-11-03")];
+        let alive: &dyn Fn(u32) -> bool = &|p| p == 4242;
+        assert_eq!(p(&held, &[found("p", "running")], alive), vec![]);
+        assert_eq!(p(&recs, &[found("p", "exited")], DEAD), vec![]);
+    }
+
+    #[test]
+    fn stopping_a_paused_task_keeps_the_container_and_the_record() {
+        let root = tmp("sweep_stop_paused");
+        let store = Store::new(&root);
+        let r = rec("p", RunState::Paused, 0, "2026-11-03");
+        store.save(&r).unwrap();
+        let d = fake();
+        execute(&store, &d, TAG, &[found("p", "running")], DEAD, TODAY, None);
+        assert_eq!(d.calls(), vec!["stop -t 2 usta-aaaa1111-p"]);
+        assert_eq!(store.load("p").unwrap(), r);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

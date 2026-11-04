@@ -47,8 +47,10 @@ pub(crate) trait Environment {
     fn prepare(&mut self, pkg: &Package, run_id: &str) -> Result<EnvHandle>;
     /// Release resources, keep the work.
     fn pause(&mut self, h: &EnvHandle) -> Result<()>;
-    /// Return to the paused state.
-    fn resume(&mut self, pkg: &Package, h: &EnvHandle) -> Result<()>;
+    /// Return to the paused state. `Some(warning)` (raw text, for the log): the
+    /// work is back but its programs did not come up, often because of the
+    /// learner's half-done fix, so they must still be let in.
+    fn resume(&mut self, pkg: &Package, h: &EnvHandle) -> Result<Option<String>>;
     /// Decide whether the task is done. Must not change what the learner built.
     fn check(&mut self, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome>;
     /// Remove what is left after a finished task. Missing is success.

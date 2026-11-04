@@ -86,13 +86,14 @@ pub(crate) fn start(
     }
 }
 
+/// `Some(warning)`: the run is back but its programs are not (see `Environment::resume`).
 pub(crate) fn resume(
     env: &mut dyn Environment,
     store: &Store,
     pkg: &Package,
     rec: &mut RunRecord,
     t: &Tick,
-) -> Result<()> {
+) -> Result<Option<String>> {
     if matches!(
         rec.state,
         RunState::Finished | RunState::Preparing | RunState::Dropped
@@ -110,11 +111,12 @@ pub(crate) fn resume(
             rec.owner_pid
         );
     }
-    env.resume(pkg, &rec.handle())?;
+    let warning = env.resume(pkg, &rec.handle())?;
     rec.state = RunState::Active;
     rec.owner_pid = t.pid;
     rec.updated = t.today.into();
-    store.save(rec)
+    store.save(rec)?;
+    Ok(warning)
 }
 
 pub(crate) fn pause(
@@ -219,6 +221,7 @@ mod tests {
         fail_clean: bool,
         store: Option<Store>,
         state_seen_at_clean: Option<RunState>,
+        resume_warning: Option<String>,
     }
 
     impl FakeEnv {
@@ -230,6 +233,7 @@ mod tests {
                 fail_clean: false,
                 store: None,
                 state_seen_at_clean: None,
+                resume_warning: None,
             }
         }
     }
@@ -249,9 +253,9 @@ mod tests {
             self.calls.push(format!("pause {}", h.reference));
             Ok(())
         }
-        fn resume(&mut self, _p: &Package, h: &EnvHandle) -> Result<()> {
+        fn resume(&mut self, _p: &Package, h: &EnvHandle) -> Result<Option<String>> {
             self.calls.push(format!("resume {}", h.reference));
-            Ok(())
+            Ok(self.resume_warning.clone())
         }
         fn check(&mut self, _p: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
             self.calls.push(format!("check {}", h.reference));
@@ -373,6 +377,19 @@ mod tests {
         let saved = store.load(&rec.run_id).unwrap();
         assert_eq!((saved.state, saved.owner_pid), (RunState::Active, 20));
         assert!(env.calls.contains(&"resume fake-demo-pkg-1".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_resume_warning_still_reactivates_the_run_and_reaches_the_caller() {
+        let (root, store, pkg) = setup("eng_resume_warn");
+        let mut env = FakeEnv::new();
+        env.resume_warning = Some("start.sh failed".into());
+        let mut rec = start(&mut env, &store, &pkg, Tone::Plain, &tick(10, "1", NOBODY)).unwrap();
+        pause(&mut env, &store, &mut rec, &tick(10, "x", NOBODY)).unwrap();
+        let w = resume(&mut env, &store, &pkg, &mut rec, &tick(20, "x", NOBODY)).unwrap();
+        assert_eq!(w.as_deref(), Some("start.sh failed"));
+        assert_eq!(store.load(&rec.run_id).unwrap().state, RunState::Active);
         let _ = std::fs::remove_dir_all(root);
     }
 
