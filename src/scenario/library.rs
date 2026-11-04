@@ -202,8 +202,8 @@ mod tests {
 
     #[test]
     fn check_scripts_exit_only_0_or_1() {
-        // container.rs reads 125-127 and 137 as infrastructure failures, so a check
-        // script must never exit with anything but 0 or 1.
+        // container.rs reads every code but 0, 1 and 124 as an internal failure, so a
+        // check script must never exit with anything but 0 or 1.
         let g = tmp("lib_exit_codes");
         let root = sync(&g).unwrap();
         for id in embedded_ids() {

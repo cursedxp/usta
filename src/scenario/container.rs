@@ -93,10 +93,15 @@ impl ContainerEnv<'_> {
     }
 
     pub fn is_running(&self, name: &str) -> bool {
-        self.docker
-            .run(&["inspect", "-f", "{{.State.Running}}", name])
-            .map(|o| o.ok() && o.stdout.trim() == "true")
-            .unwrap_or(false)
+        self.running(name).unwrap_or(false)
+    }
+
+    /// Like `is_running`, but a runtime that does not answer stays an error.
+    fn running(&self, name: &str) -> Result<bool> {
+        let o = self
+            .docker
+            .run(&["inspect", "-f", "{{.State.Running}}", name])?;
+        Ok(o.ok() && o.stdout.trim() == "true")
     }
 
     /// Certification only (not one of the five operations): run the reference solution inside.
@@ -185,7 +190,7 @@ impl Environment for ContainerEnv<'_> {
 
     fn check(&mut self, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
         self.owned(h)?;
-        if !self.is_running(&h.reference) {
+        if !self.running(&h.reference)? {
             bail!("the task is not running; use /scenario resume");
         }
         let src = format!("{}/.", pkg.dir.join("tests").display());
@@ -197,8 +202,7 @@ impl Environment for ContainerEnv<'_> {
             .docker
             .run(&["exec", &h.reference, "timeout", &secs, "sh", &script]);
         // Asked before cleanup so cleanup stays the last call; only needed on a plain failure.
-        let stopped =
-            matches!(&run, Ok(o) if !matches!(o.code, 0 | 124) && !self.is_running(&h.reference));
+        let stopped = matches!(&run, Ok(o) if o.code == 1 && !self.is_running(&h.reference));
         let _ = self
             .docker
             .run(&["exec", &h.reference, "rm", "-rf", CHECK_DIR]);
@@ -208,20 +212,18 @@ impl Environment for ContainerEnv<'_> {
             124 => CheckOutcome::Fail {
                 output: format!("the check timed out after {secs}s"),
             },
-            // 125-127 and 137 are docker/shell/kill failures, negative is a signal: never the learner's.
-            c if c < 0 || matches!(c, 125..=127 | 137) => {
-                return Err(internal(format!("check run failed ({c}): {}", o.text())))
-            }
             // The daemon reports its own errors as exit 1; a stopped task means this was one.
-            _ if stopped => {
+            1 if stopped => {
                 return Err(internal(format!(
                     "task stopped during the check: {}",
                     o.text()
                 )))
             }
-            _ => CheckOutcome::Fail {
+            1 => CheckOutcome::Fail {
                 output: tail(&o.text(), 20, 1500),
             },
+            // Check scripts exit 0 or 1 only: anything else is a broken script, docker, a signal.
+            c => return Err(internal(format!("check run failed ({c}): {}", o.text()))),
         })
     }
 
@@ -285,6 +287,7 @@ pub(crate) fn tail(text: &str, lines: usize, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::scenario::docker::fake::{fail, ok, FakeDocker};
+    use crate::scenario::env::Internal;
     use crate::scenario::package::{CheckSpec, EnvSpec, StorySpec};
     use std::path::PathBuf;
 
@@ -611,7 +614,7 @@ mod tests {
 
     #[test]
     fn reserved_exit_codes_are_internal_errors_not_learner_failures() {
-        for code in [125, 126, 127, 137, -1] {
+        for code in [2, 3, 42, 125, 126, 127, 128, 137, 139, 255, -1] {
             let d = FakeDocker::new(move |l| {
                 if let Some(o) = running(l) {
                     return o;
@@ -626,7 +629,8 @@ mod tests {
                 project_tag: "aaaa1111".into(),
             };
             let e = env.check(&pkg(), &handle());
-            assert!(e.is_err(), "code {code} gave {e:?}");
+            let is_internal = matches!(&e, Err(x) if x.downcast_ref::<Internal>().is_some());
+            assert!(is_internal, "code {code} gave {e:?}");
             assert!(d
                 .calls()
                 .last()
@@ -652,7 +656,24 @@ mod tests {
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
-        assert!(env.check(&pkg(), &handle()).is_err());
+        let e = env.check(&pkg(), &handle()).unwrap_err();
+        assert!(e.downcast_ref::<Internal>().is_some(), "{e:?}");
+    }
+
+    #[test]
+    fn a_runtime_that_stops_answering_before_the_check_is_an_internal_error() {
+        struct Wedged;
+        impl Docker for Wedged {
+            fn run(&self, _: &[&str]) -> Result<Out> {
+                Err(internal("docker inspect timed out"))
+            }
+        }
+        let mut env = ContainerEnv {
+            docker: &Wedged,
+            project_tag: "aaaa1111".into(),
+        };
+        let e = env.check(&pkg(), &handle()).unwrap_err();
+        assert!(e.downcast_ref::<Internal>().is_some(), "{e:?}");
     }
 
     #[test]
