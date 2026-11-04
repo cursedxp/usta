@@ -123,7 +123,13 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
         && std::io::IsTerminal::is_terminal(&std::io::stdout());
     let ask = |prompt: &str| crate::setup::confirm(prompt, &["y", "yes"]).unwrap_or(false);
     let asker: Option<&dyn Fn(&str) -> bool> = if interactive { Some(&ask) } else { None };
-    docker_sweep(project_root, today, asker);
+    docker_sweep(
+        project_root,
+        today,
+        &RealDocker,
+        &crate::lock::pid_alive,
+        asker,
+    );
 }
 
 /// Record-only sweep, no Docker: unfinished records that point outside this
@@ -147,16 +153,26 @@ pub(crate) fn drop_foreign(project_root: &Path, today: &str) {
 /// task is skipped and asked about at the next launch. It parks an own `Active`
 /// record whose owner is dead, even when the container is gone, so that record
 /// cannot block starting. Failures are warnings, never fatal.
-pub(crate) fn sweep_docker(project_root: &Path, today: &str) {
-    docker_sweep(project_root, today, None);
+pub(crate) fn sweep_docker(
+    project_root: &Path,
+    today: &str,
+    docker: &dyn Docker,
+    alive: &dyn Fn(u32) -> bool,
+) {
+    docker_sweep(project_root, today, docker, alive, None);
 }
 
-fn docker_sweep(project_root: &Path, today: &str, ask: Option<&dyn Fn(&str) -> bool>) {
-    let docker = RealDocker;
-    if !Store::new(project_root).exists() || available(&docker).is_err() {
+fn docker_sweep(
+    project_root: &Path,
+    today: &str,
+    docker: &dyn Docker,
+    alive: &dyn Fn(u32) -> bool,
+    ask: Option<&dyn Fn(&str) -> bool>,
+) {
+    if !Store::new(project_root).exists() || available(docker).is_err() {
         return;
     }
-    sweep_with(project_root, today, &docker, &crate::lock::pid_alive, ask);
+    sweep_with(project_root, today, docker, alive, ask);
 }
 
 fn sweep_with(

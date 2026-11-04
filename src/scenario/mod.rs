@@ -16,6 +16,7 @@ pub(crate) mod slot;
 pub(crate) mod store;
 pub(crate) mod sweep;
 pub(crate) mod terminal;
+pub(crate) mod turns;
 
 #[cfg(test)]
 mod docker_tests;

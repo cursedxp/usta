@@ -1,6 +1,6 @@
-//! `/scenario ...`: parsing, execution (blocking, run off the UI task via
-//! `spawn_blocking`) and the synthesized mentor turns. The session's `Slot`
-//! (which pauses this process's runs on exit) lives in `slot.rs`.
+//! `/scenario ...`: parsing and execution (blocking, run off the UI task via
+//! `spawn_blocking`). The synthesized mentor turns live in `turns.rs`, the
+//! session's `Slot` (which pauses this process's runs on exit) in `slot.rs`.
 //!
 //! Conventions copied from `/game`: slash lines never reach the model; notices
 //! are shell-only; at most one synthesized `[SCENARIO ...]` turn per command
@@ -9,13 +9,15 @@
 //! fallback are the sanctioned exceptions, in `docker.rs` and `terminal.rs`).
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 
 use crate::progress;
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{
-    available, ensure_ready, runc_warning, RealDocker, SystemStarter, START_POLL, START_TIMEOUT,
+    available, ensure_ready, runc_warning, Docker, RealDocker, RuntimeStarter, SystemStarter,
+    START_POLL, START_TIMEOUT,
 };
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::{CheckOutcome, Internal};
@@ -25,7 +27,8 @@ use crate::scenario::package::{Package, Tone};
 use crate::scenario::select::{self, Tag};
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::scenario::sweep;
-use crate::scenario::terminal::{window_notice, SystemLauncher, WindowReq};
+use crate::scenario::terminal::{window_notice, Launcher, SystemLauncher, WindowReq};
+use crate::scenario::turns::{done_turn, resume_turn, start_turn};
 
 const USAGE: &str = "scenario commands: /scenario (list) · start [number|id] · resume [id] · check · pause · drop [id] · tone plain|adventure";
 
@@ -147,64 +150,6 @@ pub(crate) fn render_list(
     out
 }
 
-// The three turn builders below are for the mentor (the model), not the
-// learner, but they tell it to keep the infrastructure words out of its replies.
-
-pub(crate) fn start_turn(pkg: &Package, instruction: &str, tone: Tone, world: &str) -> String {
-    let world = if world.is_empty() {
-        String::new()
-    } else {
-        format!("{world} ")
-    };
-    format!(
-        "[SCENARIO START] The learner just started the task \"{}\" ({}). Skills it exercises: {}. \
-         The shell already showed them the opening in {} tone; do not repeat or paraphrase it. \
-         {world}Task: {instruction} \
-         They work in a terminal on the task's server that you cannot see and will run /scenario check themselves; the shell reports the result. \
-         Say task or server to the learner; never container, image or Docker. \
-         Mentor Socratically as usual: never give the fix, ask what they see, hint by the ladder. \
-         Reply with ONE short sentence that invites the first step.",
-        pkg.title,
-        pkg.id,
-        pkg.skills.join(", "),
-        tone.as_str()
-    )
-}
-
-pub(crate) fn resume_turn(
-    pkg: &Package,
-    instruction: &str,
-    last_check: Option<&str>,
-    restarted: bool,
-) -> String {
-    let services = if restarted {
-        "its services were restarted"
-    } else {
-        "its services did not come back up, possibly because of their unfinished work; they are on the server and can look into it"
-    };
-    format!(
-        "[SCENARIO RESUME] The learner came back to the unfinished task \"{}\" ({}). Task: {instruction} \
-         Their last check: {}. Their work on the server survived; {services}. \
-         Say task or server to the learner; never container, image or Docker. \
-         In two sentences, say where they left off if this conversation shows it, otherwise restate the task. \
-         Do not give the fix.",
-        pkg.title,
-        pkg.id,
-        last_check.unwrap_or("none yet")
-    )
-}
-
-pub(crate) fn done_turn(pkg: &Package) -> String {
-    format!(
-        "[SCENARIO DONE] The check passed for \"{}\" ({}). Skills exercised: {}. The shell already showed the closing. \
-         Treat this as evidence for these skills and reflect it in the curriculum map at the closing flush under the usual evidence rules. \
-         Reply with one sentence of acknowledgement, no recap.",
-        pkg.title,
-        pkg.id,
-        pkg.skills.join(", ")
-    )
-}
-
 fn log_error(ctx: &Ctx, text: &str) {
     let p = ctx.project_root.join(".usta/scenarios/last-error.log");
     if let Some(d) = p.parent() {
@@ -268,7 +213,31 @@ fn sync_ledger(ctx: &Ctx, store: &Store, pkgs: &[Package], today: &str) {
     let _ = ledger::reconcile(&ctx.project_root, &ctx.topic, &store.all(), pkgs, today);
 }
 
+/// Everything a command reaches outside this process, so the whole flow can run
+/// on fakes: no runtime, no real terminal window, no real waiting.
+pub(crate) struct Seams<'a> {
+    pub docker: &'a dyn Docker,
+    pub starter: &'a dyn RuntimeStarter,
+    pub launcher: &'a dyn Launcher,
+    pub alive: &'a dyn Fn(u32) -> bool,
+    pub sleep: &'a dyn Fn(Duration),
+}
+
 fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
+    run_with(
+        ctx,
+        cmd,
+        &Seams {
+            docker: &RealDocker,
+            starter: &SystemStarter,
+            launcher: &SystemLauncher,
+            alive: &crate::lock::pid_alive,
+            sleep: &std::thread::sleep,
+        },
+    )
+}
+
+pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Reply> {
     let store = Store::new(&ctx.project_root);
     let today = crate::lifecycle::today();
     match &cmd {
@@ -316,29 +285,32 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
         _ => {}
     }
 
-    let docker = RealDocker;
+    let docker = seams.docker;
     match &cmd {
         ScenarioCmd::Start(_) | ScenarioCmd::Resume(_) => {
-            ensure_ready(&docker, &SystemStarter, START_TIMEOUT, START_POLL, &|d| {
-                std::thread::sleep(d)
-            })?;
+            ensure_ready(
+                docker,
+                seams.starter,
+                START_TIMEOUT,
+                START_POLL,
+                seams.sleep,
+            )?;
             // Never prompts or reads stdin, so it is safe inside the session UI.
-            sweep::sweep_docker(&ctx.project_root, &today);
+            sweep::sweep_docker(&ctx.project_root, &today, docker, seams.alive);
         }
-        ScenarioCmd::Check | ScenarioCmd::Pause => available(&docker)?,
+        ScenarioCmd::Check | ScenarioCmd::Pause => available(docker)?,
         // Drop works without the runtime: a clean that cannot run is retried at the next start.
         _ => {}
     }
     library::sync(&ctx.global)?;
     let mut env = ContainerEnv {
-        docker: &docker,
+        docker,
         project_tag: project_tag(&ctx.project_root),
     };
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
-    let alive: &dyn Fn(u32) -> bool = &crate::lock::pid_alive;
     let tick = Tick {
         pid: ctx.pid,
-        alive,
+        alive: seams.alive,
         stamp: &stamp,
         today: &today,
     };
@@ -365,7 +337,7 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
             .map_err(|m| anyhow!(m))?;
             let tone = store.tone();
             let mut notices = Vec::new();
-            if let Some(w) = runc_warning(&docker) {
+            if let Some(w) = runc_warning(docker) {
                 notices.push(w);
             }
             let rec = engine::start(&mut env, &store, pkg, tone, &tick)?;
@@ -375,7 +347,7 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
                 run_id: &rec.run_id,
                 scratch: &scratch,
             };
-            notices.push(window_notice(&SystemLauncher, &req));
+            notices.push(window_notice(seams.launcher, &req));
             notices.push("When you think it is solved: /scenario check".into());
             Ok(Reply {
                 notices,
@@ -409,7 +381,7 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
             };
             let notices = vec![
                 resume_notice(&pkg.title, woke, restarted),
-                window_notice(&SystemLauncher, &req),
+                window_notice(seams.launcher, &req),
             ];
             // The mentor turn says the services restarted: only true when we woke them.
             let turn = if woke {
