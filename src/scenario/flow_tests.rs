@@ -456,8 +456,8 @@ fn docker_off_at_launch_touches_nothing_and_resume_brings_it_back() {
     w.relaunch();
     assert_eq!(
         w.only_run().state,
-        RunState::Active,
-        "no sweep without a runtime"
+        RunState::Paused,
+        "the dead owner's record is parked; its box is left for a later sweep"
     );
     assert_eq!(w.box_count(), 1);
     assert_eq!(w.starter.calls.get(), 0, "launch itself starts nothing");
@@ -1401,8 +1401,31 @@ fn a_dead_runtime_during_a_proof_is_not_called_a_model_outage() {
     w.model_says(&[&container_reply()]);
     let r = w.start(Some("something new"));
     assert!(!says(&r, "could not reach the model"), "{:?}", r.notices);
-    assert!(says(&r, "stopped answering"), "{:?}", r.notices);
     assert!(says(&r, "paused now"), "{:?}", r.notices);
+    assert!(
+        w.runs().iter().any(|r| r.env == "conversation"),
+        "a conversation began: {:?}",
+        w.runs()
+    );
+}
+
+#[test]
+fn a_stopped_runtime_and_a_stale_server_record_do_not_block_talk_or_start_docker() {
+    let w = World::new("flow_stopped_talk");
+    w.start(Some(BACKUP));
+    w.daemon.borrow_mut().up = false;
+    w.starter.stuck.set(true);
+    w.relaunch();
+    assert_eq!(
+        w.only_run().state,
+        RunState::Paused,
+        "the dead owner's record is parked"
+    );
+    w.model_says(&[REPLY, REVIEW_OK, &met(&["a", "b"]), &met(&["a", "b"])]);
+    let r = w.cmd(ScenarioCmd::Talk(None));
+    assert!(says(&r, "Who is it for?"), "{:?}", r.notices);
+    assert_eq!(w.starter.calls.get(), 0, "no attempt to start the runtime");
+    assert!(w.runs().iter().any(|r| r.env == "conversation"));
 }
 
 #[test]

@@ -40,7 +40,7 @@ pub(crate) fn sweep_leftovers(
     sweep_staging(global, &owned, idle_since);
     sweep_scratch(store, &records, alive);
     if matches!(probe(docker), Runtime::Ready) {
-        sweep_images(global, docker, &owned);
+        sweep_images(global, docker, &records, alive);
     }
 }
 
@@ -63,50 +63,54 @@ fn sweep_staging(global: &Path, owned: &dyn Fn(&str) -> bool, idle_since: System
 
 /// `.usta/scenarios/validate` holds only proof folders (`val-` runs).
 fn sweep_scratch(store: &Store, records: &[RunRecord], alive: &dyn Fn(u32) -> bool) {
-    let in_use = records
-        .iter()
-        .any(|r| r.run_id.starts_with("val-") && owner_alive(r, alive));
-    if !in_use {
+    let in_use = |recs: &[RunRecord]| {
+        recs.iter()
+            .any(|r| r.run_id.starts_with("val-") && owner_alive(r, alive))
+    };
+    // Read again right before removing: another session may have started a proof since.
+    if !in_use(records) && !in_use(&store.all()) {
         let _ = std::fs::remove_dir_all(store.scratch_dir());
     }
 }
 
-/// `usta-scn-<package>:v<N>` is a proof's image (kept once the package is installed);
-/// `...:v<N>-bld` is a build's temporary tag. Names that are not Usta's generated
-/// ones, including the built-in tasks' images, are never listed for removal.
-fn sweep_images(global: &Path, docker: &dyn Docker, owned: &dyn Fn(&str) -> bool) {
-    let filter = format!("reference={IMAGE_PREFIX}{GENERATED}*");
-    let Ok(out) = docker.run(&[
-        "image",
-        "ls",
-        "--format",
-        "{{.Repository}}:{{.Tag}}",
-        "--filter",
-        &filter,
-    ]) else {
-        return;
-    };
-    if !out.ok() {
-        return;
-    }
-    for line in out.stdout.lines().map(str::trim) {
-        let Some((repo, tag)) = line.split_once(':') else {
+/// A proof record whose owner is dead is positive evidence that a proof was cut short:
+/// its package is `gen-*`, and its image is `usta-scn-<package>:v<round + 1>` with the
+/// build's temporary tag `...-bld` (`generate` stages each round as version round + 1).
+/// Images are machine-wide while the library and records are not, so nothing is decided
+/// from an image's absence from them: no scan, and no record means no removal. A package
+/// that reached the library keeps its image; an unreadable library answers nothing.
+/// Accepted: a crash after a pass and before the install orphans one image.
+fn sweep_images(
+    global: &Path,
+    docker: &dyn Docker,
+    records: &[RunRecord],
+    alive: &dyn Fn(u32) -> bool,
+) {
+    for r in records.iter().filter(|r| r.run_id.starts_with("val-")) {
+        let Some(version) = proof_version(r) else {
             continue;
         };
-        let Some(id) = repo
-            .strip_prefix(IMAGE_PREFIX)
-            .filter(|id| id.starts_with(GENERATED))
-        else {
+        let installed = library::library_root(global).join(&r.package).try_exists();
+        if owner_alive(r, alive) || installed.unwrap_or(true) {
             continue;
-        };
-        let kept = owned(id)
-            || (!tag.ends_with(BUILD_SUFFIX)
-                && (library::library_root(global).join(id).exists()
-                    || library::staging_root(global).join(id).exists()));
-        if !kept {
-            let _ = docker.run(&["rmi", "-f", line]);
         }
+        let image = format!("{IMAGE_PREFIX}{}:v{version}", r.package);
+        let _ = docker.run(&["rmi", "-f", &format!("{image}{BUILD_SUFFIX}")]);
+        let _ = docker.run(&["rmi", "-f", &image]);
     }
+}
+
+/// The version a `val-<package>-r<round>` record proves, when the record is well formed.
+fn proof_version(r: &RunRecord) -> Option<u32> {
+    let (id, round) = r.run_id.strip_prefix("val-")?.rsplit_once("-r")?;
+    let clean = r.package.starts_with(GENERATED)
+        && r.package
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if id != r.package || !clean {
+        return None;
+    }
+    round.parse::<u32>().ok().map(|n| n + 1)
 }
 
 #[cfg(test)]
@@ -161,9 +165,6 @@ mod tests {
             .collect()
     }
 
-    const IMAGES: &str = "usta-scn-gen-a:v1\nusta-scn-gen-a:v1-bld\nusta-scn-gen-lib:v1\n\
-usta-scn-gen-stage:v2\nusta-scn-linux:v2\nkiln-db:1\nusta-scn-gen-b:v1-bld\n";
-
     fn world(name: &str) -> (std::path::PathBuf, std::path::PathBuf, Store) {
         let root = tmp(name);
         let g = root.join("global");
@@ -172,21 +173,58 @@ usta-scn-gen-stage:v2\nusta-scn-linux:v2\nkiln-db:1\nusta-scn-gen-b:v1-bld\n";
         (root.clone(), g, Store::new(&root))
     }
 
+    /// Every image on the machine: the sweep must never ask for this list.
+    const IMAGES: &str = "usta-scn-gen-a:v2\nusta-scn-gen-a:v2-bld\nusta-scn-gen-lib:v2\n\
+usta-scn-gen-other:v1-bld\nusta-scn-linux:v2\nkiln-db:1\n";
+
     #[test]
-    fn proof_images_and_build_tags_without_an_owner_are_removed_and_nothing_else() {
+    fn a_dead_proofs_image_and_build_tag_go_and_nothing_else_is_named() {
         let (root, g, store) = world("lo_images");
+        store.save(&proof_rec("gen-a", 999_999)).unwrap();
         let d = listing(IMAGES);
         sweep_leftovers(&store, &g, &d, DEAD, never());
-        let mut got = rmis(&d);
-        got.sort();
         assert_eq!(
-            got,
-            vec![
-                "rmi -f usta-scn-gen-a:v1",
-                "rmi -f usta-scn-gen-a:v1-bld",
-                "rmi -f usta-scn-gen-b:v1-bld",
-            ],
-            "the library's and the fresh draft's images, built-in ones and other names stay"
+            rmis(&d),
+            vec!["rmi -f usta-scn-gen-a:v2-bld", "rmi -f usta-scn-gen-a:v2"],
+            "{:?}",
+            d.calls()
+        );
+        assert!(
+            d.calls().iter().all(|c| !c.starts_with("image ls")),
+            "no machine-wide scan"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_library_packages_image_and_another_projects_build_are_untouched() {
+        let (root, g, store) = world("lo_images_foreign");
+        // A dead proof of a package that was installed since: its image is the library's.
+        store.save(&proof_rec("gen-lib", 999_999)).unwrap();
+        let d = listing(IMAGES);
+        sweep_leftovers(&store, &g, &d, DEAD, never());
+        assert!(rmis(&d).is_empty(), "{:?}", d.calls());
+        // No record of ours at all: another project's `-bld` tag is none of our business.
+        let (root2, g2, store2) = world("lo_images_none");
+        let d2 = listing(IMAGES);
+        sweep_leftovers(&store2, &g2, &d2, DEAD, never());
+        assert!(rmis(&d2).is_empty(), "{:?}", d2.calls());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(root2);
+    }
+
+    #[test]
+    fn a_library_that_cannot_be_read_keeps_the_image() {
+        let (root, g, store) = world("lo_images_io");
+        std::fs::remove_dir_all(g.join("scenarios/library")).unwrap();
+        std::fs::write(g.join("scenarios/library"), "a file where a folder belongs").unwrap();
+        store.save(&proof_rec("gen-a", 999_999)).unwrap();
+        let d = listing(IMAGES);
+        sweep_leftovers(&store, &g, &d, DEAD, never());
+        assert!(
+            rmis(&d).is_empty(),
+            "an I/O error is not an answer: {:?}",
+            d.calls()
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -197,8 +235,7 @@ usta-scn-gen-stage:v2\nusta-scn-linux:v2\nkiln-db:1\nusta-scn-gen-b:v1-bld\n";
         store.save(&proof_rec("gen-a", 4242)).unwrap();
         let d = listing(IMAGES);
         sweep_leftovers(&store, &g, &d, &|p| p == 4242, never());
-        let got = rmis(&d);
-        assert_eq!(got, vec!["rmi -f usta-scn-gen-b:v1-bld"], "{got:?}");
+        assert!(rmis(&d).is_empty(), "{:?}", d.calls());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -249,6 +286,17 @@ usta-scn-gen-stage:v2\nusta-scn-linux:v2\nkiln-db:1\nusta-scn-gen-b:v1-bld\n";
         assert!(!scratch.exists());
         // The learner's folder next to it is never part of this.
         assert!(store.tasks_dir().parent().unwrap().exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_proof_that_starts_after_the_first_look_keeps_the_scratch() {
+        let (root, _g, store) = world("lo_scratch_race");
+        std::fs::create_dir_all(store.scratch_dir().join("val-gen-a-r1")).unwrap();
+        let stale = store.all(); // taken before the other session wrote its record
+        store.save(&proof_rec("gen-a", 4242)).unwrap();
+        sweep_scratch(&store, &stale, &|p| p == 4242);
+        assert!(store.scratch_dir().join("val-gen-a-r1").is_dir());
         let _ = std::fs::remove_dir_all(root);
     }
 }

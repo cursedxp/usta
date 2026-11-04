@@ -93,15 +93,16 @@ pub(crate) fn ready_unless(s: &Step, stop: &dyn Fn() -> bool) -> Result<()> {
 }
 
 /// Starting or waking any task pauses a running server task, and only the runtime can
-/// stop that server, whatever the new task needs.
-pub(crate) fn ready_to_release(s: &Step, except: Option<&str>) -> Result<()> {
+/// stop that server, whatever the new task needs. A runtime that will not come up is
+/// no reason to stop here: a task that needs no server goes on, and one that does says
+/// so itself when it asks for the runtime.
+pub(crate) fn ready_to_release(s: &Step, except: Option<&str>) {
     let running = s.store.all().into_iter().any(|r| {
         r.state == RunState::Active && r.env == CONTAINER && Some(r.run_id.as_str()) != except
     });
     if running {
-        ready(s)?;
+        let _ = ready(s);
     }
-    Ok(())
 }
 
 pub(crate) fn title_of(pkgs: &[Package], package: &str) -> String {
@@ -224,7 +225,7 @@ pub(crate) fn resume_run(
     let mut restarted = true;
     let mut paused = Vec::new();
     if woke {
-        ready_to_release(s, Some(&rec.run_id))?;
+        ready_to_release(s, Some(&rec.run_id));
         let before = running_now(s);
         let woken = engine::resume(env, s.store, pkg, &mut rec, s.tick);
         paused = pause_notices(s, &before);

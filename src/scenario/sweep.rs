@@ -150,6 +150,21 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
         && std::io::IsTerminal::is_terminal(&std::io::stdout());
     let ask = |prompt: &str| crate::setup::confirm(prompt, &["y", "yes"]).unwrap_or(false);
     let asker: Option<&dyn Fn(&str) -> bool> = if interactive { Some(&ask) } else { None };
+    // Leftovers first: a cut-short proof's record is what names its image, and the
+    // record pass below deletes that record.
+    if let Ok(global) = crate::config::global_root() {
+        let store = Store::new(project_root);
+        if store.exists() {
+            let idle = std::time::SystemTime::now() - crate::scenario::leftovers::DRAFT_IDLE;
+            crate::scenario::leftovers::sweep_leftovers(
+                &store,
+                &global,
+                &RealDocker,
+                &crate::lock::pid_alive,
+                idle,
+            );
+        }
+    }
     sweep_records(
         project_root,
         today,
@@ -164,19 +179,6 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
         &crate::lock::pid_alive,
         asker,
     );
-    if let Ok(global) = crate::config::global_root() {
-        let store = Store::new(project_root);
-        if store.exists() {
-            let idle = std::time::SystemTime::now() - crate::scenario::leftovers::DRAFT_IDLE;
-            crate::scenario::leftovers::sweep_leftovers(
-                &store,
-                &global,
-                &RealDocker,
-                &crate::lock::pid_alive,
-                idle,
-            );
-        }
-    }
 }
 
 /// Record-only sweep, no Docker: unfinished records that point outside this
@@ -220,9 +222,13 @@ pub(crate) fn sweep_records(
     if !store.exists() {
         return;
     }
-    let boxed = |r: &RunRecord| r.env == CONTAINER && r.state == RunState::Active;
-    if store.all().iter().any(boxed) && matches!(probe(docker), Runtime::NotInstalled) {
-        for mut r in store.all().into_iter().filter(boxed) {
+    // A container run whose owner is gone while the runtime does not answer (missing or
+    // stopped) is parked; a still-running container is stopped by a later sweep, when the
+    // runtime is back and the record is `Paused`. A live owner is never parked here.
+    let stale =
+        |r: &RunRecord| r.env == CONTAINER && r.state == RunState::Active && !owner_alive(r, alive);
+    if store.all().iter().any(stale) && !matches!(probe(docker), Runtime::Ready) {
+        for mut r in store.all().into_iter().filter(stale) {
             r.state = RunState::Paused;
             r.owner_pid = 0;
             r.updated = today.to_string();
@@ -1029,6 +1035,25 @@ mod tests {
         assert_eq!(store.load("f").unwrap().state, RunState::Paused);
         let c = store.load("c").unwrap();
         assert_eq!((c.state, c.owner_pid), (RunState::Paused, 0));
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn a_stopped_runtime_parks_a_dead_owner_container_run_and_a_live_owner_is_kept() {
+        let (p, store) = project_with_tag("sw_records_stopped", TAG);
+        store
+            .save(&rec("dead", RunState::Active, 999_999, TODAY))
+            .unwrap();
+        store
+            .save(&rec("live", RunState::Active, 4242, TODAY))
+            .unwrap();
+        let stopped = FakeDocker::new(|_| fail(1, "Cannot connect to the Docker daemon"));
+        sweep_records(&p, TODAY, &stopped, &|pid| pid == 4242, None);
+        assert_eq!(store.load("dead").unwrap().state, RunState::Paused);
+        assert_eq!(store.load("live").unwrap().state, RunState::Active);
+        // Not installed is the same: only a dead owner is parked.
+        sweep_records(&p, TODAY, &missing(), &|pid| pid == 4242, None);
+        assert_eq!(store.load("live").unwrap().state, RunState::Active);
         let _ = std::fs::remove_dir_all(p);
     }
 

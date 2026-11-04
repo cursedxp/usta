@@ -2,9 +2,10 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::scenario::command::{failure, Reply};
+use crate::scenario::command::{failure, Ctx, Reply};
 use crate::scenario::docker::{probe, runc_warning, Runtime};
 use crate::scenario::engine;
+use crate::scenario::env::Internal;
 use crate::scenario::generate::{self, Job, Outcome};
 use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
@@ -79,12 +80,25 @@ impl NoServer {
     }
 }
 
+/// The refusal of `guard_single` is a sentence for the learner; a failed `docker ps` is
+/// tool output, which goes to the log and blocks nothing.
+fn refusal(ctx: &Ctx, e: anyhow::Error) -> Option<NoServer> {
+    if e.downcast_ref::<Internal>().is_some() {
+        log_error(ctx, &format!("{e:#}"));
+        return None;
+    }
+    Some(NoServer::Refused(e))
+}
+
 /// Brings the runtime up: only for a task known to need it.
 fn server_blocked(s: &Step, env: &Router) -> Option<NoServer> {
     if let Err(e) = ready(s) {
         return Some(NoServer::Absent(e));
     }
-    env.container.guard_single().err().map(NoServer::Refused)
+    env.container
+        .guard_single()
+        .err()
+        .and_then(|e| refusal(s.ctx, e))
 }
 
 pub(crate) fn start(
@@ -95,7 +109,7 @@ pub(crate) fn start(
 ) -> Result<Reply> {
     let ctx = s.ctx;
     engine::refuse_other_owner(s.store, s.tick, None)?;
-    ready_to_release(s, None)?;
+    ready_to_release(s, None);
     sync_ledger(ctx, s.store, s.pkgs, s.tick.today);
     let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
     let offered: Vec<Package> = s
@@ -159,7 +173,11 @@ fn generate_and_begin(
             Runtime::Ready => {
                 sweep();
                 // Said now, not after paying for a generation that cannot be proven.
-                blocked = env.container.guard_single().err().map(NoServer::Refused);
+                blocked = env
+                    .container
+                    .guard_single()
+                    .err()
+                    .and_then(|e| refusal(ctx, e));
                 up = true;
             }
             Runtime::NotInstalled => blocked = ready(s).err().map(NoServer::Absent),
@@ -179,8 +197,10 @@ fn generate_and_begin(
                     env.container.guard_single()
                 });
                 if let Err(e) = came_up {
-                    let told = anyhow!("no server for the proof: {e}");
-                    *late = Some(NoServer::Absent(e));
+                    let told = anyhow!("no server for the proof: {e:#}");
+                    if e.downcast_ref::<Internal>().is_none() {
+                        *late = Some(NoServer::Absent(e));
+                    }
                     return Err(told);
                 }
                 up = true;
@@ -202,8 +222,13 @@ fn generate_and_begin(
             }
             return begin(s, env, &p, ledger, notices);
         }
-        Err(e) if late.is_some() => vec![format!("{e:#}")],
-        Err(e) => return Ok(not_generated(s, e, notices)),
+        // Only an unreachable model ends here; every other error (a dead runtime, a disk
+        // error) is logged and the learner still gets a conversation. Esc and a shutdown
+        // were handled above and in `fall_back`.
+        Err(e) if e.downcast_ref::<ModelFailed>().is_some() => {
+            return Ok(not_generated(s, e, notices))
+        }
+        Err(e) => vec![format!("{e:#}")],
         Ok(Outcome::NeedsSystem(why)) => vec![why],
         Ok(Outcome::Failed(log)) => log,
     };
@@ -288,7 +313,7 @@ pub(crate) fn talk(
 ) -> Result<Reply> {
     let ctx = s.ctx;
     engine::refuse_other_owner(s.store, s.tick, None)?;
-    ready_to_release(s, None)?;
+    ready_to_release(s, None);
     sync_ledger(ctx, s.store, s.pkgs, s.tick.today);
     let ledger = Ledger::load(&ctx.project_root, &ctx.topic);
     let b = brief(s, &ledger, skill.clone(), false, true);
@@ -346,4 +371,29 @@ fn begin(
             &ledger.summary(),
         )),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scenario::env::internal;
+    use crate::scenario::package::tests::tmp;
+
+    #[test]
+    fn a_failed_ps_goes_to_the_log_and_only_the_refusal_reaches_the_learner() {
+        let root = tmp("start_refusal");
+        let ctx = Ctx {
+            global: root.join("global"),
+            project_root: root.clone(),
+            topic: "linux".into(),
+            pid: 1,
+        };
+        assert!(refusal(&ctx, internal("docker ps failed: boom")).is_none());
+        let told = refusal(
+            &ctx,
+            anyhow!("another Usta project already has a task running"),
+        );
+        assert!(matches!(told, Some(NoServer::Refused(_))));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
