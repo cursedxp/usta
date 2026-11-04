@@ -107,6 +107,16 @@ When a subject needs a tool, Usta chooses in this order:
 
 Installing a tool can itself be a scenario, since it is a skill worth learning.
 
+## No work for the learner
+
+The learner never needs to know Docker. They never see or type a Docker command.
+
+- Usta starts the container runtime if it is installed but not running.
+- Usta opens a new terminal window already inside the task. If it cannot open one on that system, it falls back to showing the command.
+- Learner-facing text speaks of the task or the server, never containers or images.
+- An embedded terminal pane inside Usta is a later step. It would give one window and let Usta see the session.
+- Installing the runtime is the one remaining manual step. Removing it is a later step; the environment contract allows other runtimes.
+
 ## Check scripts
 
 Prior art shows two opposite failures: checks that reject valid solutions, and checks that can be bypassed.
