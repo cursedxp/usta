@@ -126,20 +126,60 @@ impl Store {
 }
 
 /// The project's identity: labels every container so one project's cleanup can
-/// never touch another project's. Read from `.usta/scenarios/tag`, created from
-/// the path the first time, so a moved folder still matches its records and
-/// containers.
+/// never touch another project's. `.usta/scenarios/tag` holds the tag and the
+/// folder it belongs to (an older file holds only the tag). When the folder is
+/// somewhere else, the old location decides: gone means it moved, so the tag
+/// stays and records and containers still match; still there means this is a
+/// copy, which gets a fresh tag so neither folder's cleanup can touch the other's
+/// work. Its copied records then count as foreign, and foreign records never
+/// lead to a removal.
 pub(crate) fn project_tag(project_root: &Path) -> String {
     let file = project_root.join(".usta/scenarios/tag");
-    if let Ok(text) = std::fs::read_to_string(&file) {
-        let t = text.trim();
-        if t.len() == 8 && t.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
-            return t.to_string();
-        }
-    }
-    let tag = path_tag(project_root);
-    let _ = write_atomic(&file, &tag);
+    let here = canon(project_root);
+    let tag = match read_tag(&file) {
+        Some((tag, Some(path))) if path == here => return tag,
+        Some((tag, Some(path))) if is_original(&path, &here, &tag) => fresh_tag(&here, &tag),
+        Some((tag, _)) => tag,
+        None => path_tag(project_root),
+    };
+    let _ = write_atomic(&file, &format!("{tag}\n{}\n", here.display()));
     tag
+}
+
+fn canon(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The tag and, when the file has one, the folder it was written for. None when
+/// the file is missing or its tag is damaged.
+fn read_tag(file: &Path) -> Option<(String, Option<PathBuf>)> {
+    let text = std::fs::read_to_string(file).ok()?;
+    let mut lines = text.lines();
+    let tag = lines.next()?.trim();
+    if tag.len() != 8 || !tag.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+        return None;
+    }
+    let path = lines.next().filter(|p| !p.is_empty()).map(PathBuf::from);
+    Some((tag.to_string(), path))
+}
+
+/// True when `stored` is the live folder this one was copied from. Another name
+/// for the same folder is not, and neither is an unrelated project that took over
+/// the path after a move (it holds a different tag).
+fn is_original(stored: &Path, here: &Path, tag: &str) -> bool {
+    let scenarios = stored.join(".usta/scenarios");
+    scenarios.is_dir()
+        && canon(stored) != here
+        && read_tag(&scenarios.join("tag")).is_none_or(|(t, _)| t == tag)
+}
+
+/// Not the plain path hash: a copy can land on the path the original's tag was
+/// hashed from.
+fn fresh_tag(here: &Path, old: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    path_tag(&here.join(format!("{old}-{nanos}")))
 }
 
 /// 8-hex hash of the project root (FNV-1a).
@@ -259,14 +299,21 @@ mod tests {
         std::fs::create_dir_all(&old).unwrap();
         let tag = project_tag(&old);
         assert_eq!(tag, path_tag(&old), "first call derives it from the path");
-        let saved = std::fs::read_to_string(old.join(".usta/scenarios/tag")).unwrap();
-        assert_eq!(saved.trim(), tag);
+        assert_eq!(
+            stored(&old),
+            (tag.clone(), canon(&old).display().to_string())
+        );
         std::fs::rename(&old, &new).unwrap();
         assert_ne!(path_tag(&new), tag, "the new path hashes differently");
         assert_eq!(
             project_tag(&new),
             tag,
             "the moved folder keeps its identity"
+        );
+        assert_eq!(
+            stored(&new).1,
+            canon(&new).display().to_string(),
+            "path updated"
         );
         let _ = std::fs::remove_dir_all(base);
     }
@@ -280,5 +327,94 @@ mod tests {
             assert_eq!(project_tag(&root), path_tag(&root), "{bad:?}");
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The two lines of the tag file.
+    fn stored(root: &Path) -> (String, String) {
+        let text = std::fs::read_to_string(root.join(".usta/scenarios/tag")).unwrap();
+        let mut l = text.lines();
+        (l.next().unwrap().into(), l.next().unwrap_or("").into())
+    }
+
+    fn copy_tag_file(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to.join(".usta/scenarios")).unwrap();
+        std::fs::copy(
+            from.join(".usta/scenarios/tag"),
+            to.join(".usta/scenarios/tag"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_copied_folder_gets_a_fresh_tag_and_the_original_keeps_its_own() {
+        let base = tmp("store_tag_copy");
+        let (orig, copy) = (base.join("orig"), base.join("copy"));
+        std::fs::create_dir_all(&orig).unwrap();
+        std::fs::create_dir_all(&copy).unwrap();
+        let tag = project_tag(&orig);
+        copy_tag_file(&orig, &copy);
+        let fresh = project_tag(&copy);
+        assert_ne!(fresh, tag);
+        assert_eq!(
+            stored(&copy),
+            (fresh.clone(), canon(&copy).display().to_string())
+        );
+        assert_eq!(project_tag(&copy), fresh, "stable after the first read");
+        assert_eq!(project_tag(&orig), tag);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_copy_made_at_the_path_the_tag_was_hashed_from_still_differs() {
+        let base = tmp("store_tag_copy_back");
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        let tag = project_tag(&a);
+        std::fs::rename(&a, &b).unwrap();
+        assert_eq!(project_tag(&b), tag);
+        std::fs::create_dir_all(&a).unwrap();
+        copy_tag_file(&b, &a);
+        assert_ne!(project_tag(&a), tag);
+        assert_eq!(project_tag(&b), tag);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_old_tag_only_format_keeps_its_tag_and_gains_the_path() {
+        let root = tmp("store_tag_old");
+        std::fs::create_dir_all(root.join(".usta/scenarios")).unwrap();
+        std::fs::write(root.join(".usta/scenarios/tag"), "abcd1234\n").unwrap();
+        assert_eq!(project_tag(&root), "abcd1234");
+        assert_eq!(
+            stored(&root),
+            ("abcd1234".to_string(), canon(&root).display().to_string())
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_same_folder_through_a_symlink_is_not_a_copy() {
+        let base = tmp("store_tag_link");
+        let (real, link) = (base.join("real"), base.join("link"));
+        std::fs::create_dir_all(&real).unwrap();
+        let tag = project_tag(&real);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(project_tag(&link), tag);
+        assert_eq!(project_tag(&real), tag);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_different_project_at_the_old_path_does_not_make_a_move_a_copy() {
+        let base = tmp("store_tag_reused");
+        let (old, new) = (base.join("old"), base.join("new"));
+        std::fs::create_dir_all(&old).unwrap();
+        let tag = project_tag(&old);
+        std::fs::rename(&old, &new).unwrap();
+        std::fs::create_dir_all(old.join(".usta/scenarios")).unwrap();
+        std::fs::write(old.join(".usta/scenarios/tag"), "abcd1234\n").unwrap();
+        assert_eq!(project_tag(&new), tag);
+        let _ = std::fs::remove_dir_all(base);
     }
 }

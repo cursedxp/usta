@@ -564,3 +564,56 @@ fn a_subtopic_session_finds_the_packages_and_its_own_runs() {
         "for good"
     ));
 }
+
+#[test]
+fn a_copied_project_and_its_original_never_touch_each_others_work() {
+    let mut w = World::new("flow_copied");
+    w.start(Some(BACKUP));
+    w.cmd(ScenarioCmd::Pause);
+    let original = w.project.clone();
+    let tag = project_tag(&original);
+    let kept = w.only_run();
+
+    let copy = w.base.join("copy");
+    let cp = std::process::Command::new("cp")
+        .arg("-R")
+        .arg(&original)
+        .arg(&copy)
+        .status()
+        .unwrap();
+    assert!(cp.success());
+
+    // The copy opens: fresh identity, and the copied record is foreign, not resumable.
+    w.project = copy.clone();
+    w.relaunch();
+    let fresh = project_tag(&copy);
+    assert_ne!(fresh, tag);
+    assert_eq!(w.only_run().state, RunState::Dropped);
+    assert_eq!(w.box_count(), 1, "the original's container is untouched");
+
+    // Its own new task runs under the fresh tag.
+    let r = w.start(Some(BACKUP));
+    assert!(!says(&r, "instead of starting over"), "{:?}", r.notices);
+    w.cmd(ScenarioCmd::Pause);
+    assert_eq!(w.box_count(), 2);
+    let copys_box = format!("usta-{fresh}-");
+    let has_box = w
+        .daemon
+        .borrow()
+        .boxes
+        .keys()
+        .any(|n| n.starts_with(&copys_box));
+    assert!(has_box);
+
+    // The original's sweep sees none of that, and its own task is as it was.
+    w.project = original;
+    w.relaunch();
+    assert_eq!(project_tag(&w.project), tag);
+    assert_eq!(w.box_count(), 2);
+    assert!(!w.removed_anything(), "{:?}", w.docker.calls());
+    assert_eq!(w.only_run().state, RunState::Paused);
+    assert_eq!(w.only_run().reference, kept.reference);
+    assert!(turn(&w.cmd(ScenarioCmd::Resume(None))).starts_with("[SCENARIO RESUME]"));
+    assert_eq!(w.box_count(), 2);
+    assert!(!w.removed_anything());
+}
