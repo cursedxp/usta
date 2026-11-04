@@ -125,6 +125,10 @@ fn rubric_problems(p: &Package) -> Vec<String> {
 }
 
 fn script_problems(p: &Package) -> Vec<String> {
+    // An unsafe name is already reported by `lint`; never read through it.
+    if p.check.script.contains('/') || !safe_rel(&p.check.script) {
+        return vec![];
+    }
     match std::fs::read_to_string(p.dir.join("tests").join(&p.check.script)) {
         Err(_) => vec![format!("missing tests/{}", p.check.script)],
         Ok(t) if reads_history(&t) => {
@@ -592,6 +596,93 @@ evidence = ["competitors.csv"]
         let p = Package::load(&d).unwrap();
         assert!(!learner_word_problems(&p, "marketing").is_empty());
         assert!(learner_word_problems(&p, "docker-basics").is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_hostile_script_path_is_not_read() {
+        let root = tmp("lint_hostile");
+        let d = write_pkg(&root);
+        std::fs::write(root.join("secret.sh"), "grep x ~/.bash_history\n").unwrap();
+        let mut p = Package::load(&d).unwrap();
+        p.check.script = "../../secret.sh".into();
+        let problems = p.lint().join("\n");
+        assert!(problems.contains("check.script"), "{problems}");
+        assert!(!problems.contains("shell history"), "{problems}");
+        p.check.script = root.join("secret.sh").display().to_string();
+        let problems = p.lint().join("\n");
+        assert!(!problems.contains("shell history"), "{problems}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_generated_rubric_needs_why_and_a_sound_rubric() {
+        let root = tmp("lint_rubric_bad");
+        let mut p = Package::load(&folder_pkg(&root)).unwrap();
+        p.id = "gen-x-1".into();
+        p.check.why_rubric = None;
+        assert!(p.lint().join("\n").contains("why_rubric"));
+        p.check.why_rubric = Some("no fixed answer".into());
+        p.check.rubric.truncate(1);
+        assert!(p.lint().join("\n").contains("at least 2"));
+        p.check.rubric = vec![p.check.rubric[0].clone(), p.check.rubric[0].clone()];
+        assert!(p.lint().join("\n").contains("unique id"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unsafe_evidence_and_deliverable_paths_are_refused() {
+        let root = tmp("lint_unsafe_paths");
+        let mut p = Package::load(&folder_pkg(&root)).unwrap();
+        p.check.rubric[0].evidence = vec!["../../etc/passwd".into()];
+        p.check.deliverables = vec!["../out.md".into()];
+        let problems = p.lint().join("\n");
+        assert!(problems.contains("../../etc/passwd"), "{problems}");
+        assert!(problems.contains("deliverable '../out.md'"), "{problems}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn all_four_kind_pairs_are_accepted() {
+        let root = tmp("lint_four");
+        // container + script
+        let p = Package::load(&write_pkg(&root)).unwrap();
+        assert_eq!(p.lint(), Vec::<String>::new());
+        assert!(p.needs_runtime());
+        let _ = std::fs::remove_dir_all(&root);
+        // folder + script
+        let root = tmp("lint_four");
+        let d = folder_pkg(&root);
+        let toml = RUBRIC_TOML.split("[check]").next().unwrap().to_string()
+            + "[check]\nkind = \"script\"\nscript = \"check.sh\"\n";
+        std::fs::write(d.join("task.toml"), toml).unwrap();
+        std::fs::create_dir_all(d.join("tests")).unwrap();
+        std::fs::write(d.join("tests/check.sh"), "exit 0\n").unwrap();
+        let p = Package::load(&d).unwrap();
+        assert_eq!(p.lint(), Vec::<String>::new());
+        assert!(p.needs_runtime() && !p.is_rubric());
+        let _ = std::fs::remove_dir_all(&root);
+        // folder + rubric
+        let root = tmp("lint_four");
+        assert_eq!(
+            Package::load(&folder_pkg(&root)).unwrap().lint(),
+            Vec::<String>::new()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        // conversation + rubric
+        let root = tmp("lint_four");
+        let d = folder_pkg(&root);
+        std::fs::write(
+            d.join("task.toml"),
+            RUBRIC_TOML.replace("kind = \"folder\"", "kind = \"conversation\""),
+        )
+        .unwrap();
+        std::fs::write(d.join("solution/answer.md"), "An answer.\n").unwrap();
+        let p = Package::load(&d).unwrap();
+        let problems = p.lint();
+        // evidence in a conversation still resolves against environment/files, which exists here
+        assert_eq!(problems, Vec::<String>::new());
+        assert!(p.is_rubric() && !p.needs_runtime());
         let _ = std::fs::remove_dir_all(root);
     }
 }
