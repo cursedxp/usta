@@ -187,16 +187,34 @@ Adventure:
 
 Usta gives no advice on real positions, never uses real money, and generates scenarios for finance, health and law from past or fictional data only. Any scenario with real-money risk runs in a simulated world.
 
+## Generation on demand
+
+Hand-written packages are examples, not the product. A person can ask for any subject at any moment, and Usta produces the scenario then.
+
+- `/scenario start` in any topic generates a scenario when no suitable package is left. No topic ever answers "no tasks".
+- The model receives the topic, the curriculum map, the learner's level, the world ledger and the finished scenarios. It returns a package in the fixed format and picks the environment using the three questions above.
+- Script-checked packages pass the validation above before the learner sees them. Rubric-checked packages pass the rubric check. A failure goes back to the model for at most 3 rounds, then Usta tells the learner plainly and offers a conversation-only scenario on the same skill.
+- Passing packages enter a local library and are reused, so generation is paid for once.
+- Without Docker, Usta picks an environment that needs none and says so once. A subject that truly needs a running system gets install guidance.
+
+### Safety of generated content
+
+Model-written content is untrusted.
+
+- A generated script runs only inside a container, never on the host.
+- The folder environment writes data files only, inside the project's task folder. Its check is a rubric, not a script.
+- Package paths cannot leave the package. `lint` runs at load, for every package, and a failed package is reported, not silently skipped.
+- Generated containers keep every limit in Container lifecycle. Network is off at run time unless declared.
+
 ## Build order
 
 This is the order of construction, not a limit on the product.
 
-1. **Scenario engine, contract and container environment**, with the first Linux scenarios in a plain and an adventure tone. Script checks are the strongest, so the model is proven here first.
-2. **Generate and validate** pipeline, then the local library.
+1. **Done (v0.40.0):** scenario engine, contract, container environment, three Linux scenarios in a plain and an adventure tone.
+2. **Any subject, on demand:** generate and validate, the local library, and the folder and conversation-only environments.
 3. **Own machine** environment and tool setup, tried on a programming language.
-4. **Folder and conversation-only** environments, tried on SEO. Rubric checks are the weakest link and start here.
-5. **Real account** environment, tried on Etsy.
-6. **Trading replay**, once a data source is verified.
+4. **Real account** environment, tried on Etsy. Until then Etsy runs in a simulated world.
+5. **Trading replay**, once a data source is verified.
 
 Each step gets its own plan.
 
