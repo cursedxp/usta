@@ -28,6 +28,7 @@ fn certify(id: &str) {
     library::sync(&global).unwrap();
     let pkg = library::load_all(&global, "linux")
         .unwrap()
+        .pkgs
         .into_iter()
         .find(|p| p.id == id)
         .expect("package present");
@@ -77,6 +78,7 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
     library::sync(&global).unwrap();
     let pkg = library::load_all(&global, "linux")
         .unwrap()
+        .pkgs
         .into_iter()
         .find(|p| p.id == "linux-config-typo")
         .unwrap();

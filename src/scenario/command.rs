@@ -239,6 +239,22 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
     )
 }
 
+/// One plain sentence for the learner; the details go to the log.
+fn bad_notice(ctx: &Ctx, bad: &[library::Bad]) -> Option<String> {
+    if bad.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = bad
+        .iter()
+        .map(|b| format!("{}: {}", b.dir, b.problems.join("; ")))
+        .collect();
+    log_error(ctx, &lines.join("\n"));
+    Some(format!(
+        "{} saved task(s) could not be used and were left out; details are in .usta/scenarios/last-error.log",
+        bad.len()
+    ))
+}
+
 pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Reply> {
     let store = Store::new(&ctx.project_root);
     let today = crate::lifecycle::today();
@@ -259,7 +275,9 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         }
         ScenarioCmd::List => {
             library::sync(&ctx.global)?;
-            let pkgs = library::load_all(&ctx.global, &ctx.topic)?;
+            let loaded = library::load_all(&ctx.global, &ctx.topic)?;
+            let notice = bad_notice(ctx, &loaded.bad);
+            let pkgs = loaded.pkgs;
             sync_ledger(ctx, &store, &pkgs, &today);
             let map = map_text(ctx);
             let threads = select::threads_available(
@@ -275,7 +293,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                         && matches!(r.state, RunState::Paused | RunState::Active)
                 })
                 .collect();
-            return Ok(Reply::note(render_list(
+            let mut text = render_list(
                 &ctx.topic,
                 &pkgs,
                 &map,
@@ -283,7 +301,11 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                 &threads,
                 &unfinished,
                 store.tone(),
-            )));
+            );
+            if let Some(n) = notice {
+                text.push_str(&format!("\n\n{n}"));
+            }
+            return Ok(Reply::note(text));
         }
         _ => {}
     }
@@ -325,11 +347,16 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         stamp: &stamp,
         today: &today,
     };
-    let pkgs = library::load_all(&ctx.global, &ctx.topic)?;
+    let loaded = library::load_all(&ctx.global, &ctx.topic)?;
+    let pkgs = loaded.pkgs;
     let find_pkg = |id: &str| -> Result<&Package> {
-        pkgs.iter()
-            .find(|p| p.id == id)
-            .ok_or_else(|| anyhow!("task '{id}' is not in the library"))
+        pkgs.iter().find(|p| p.id == id).ok_or_else(|| {
+            if loaded.bad.iter().any(|b| b.dir == id) {
+                anyhow!("task '{id}' is damaged; see /scenario")
+            } else {
+                anyhow!("task '{id}' is not in the library")
+            }
+        })
     };
     let scratch = ctx.project_root.join(".usta/scenarios");
     let step = Step {
