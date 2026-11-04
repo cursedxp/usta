@@ -11,6 +11,8 @@ use crate::scenario::lint::safe_rel;
 use crate::scenario::rubric::parse_json;
 
 pub(crate) const MAX_FILE: usize = 64 * 1024;
+const MAX_TASK: usize = 16 * 1024;
+const MAX_FILES: usize = 60;
 const MAX_TOTAL: usize = 256 * 1024;
 const ROOTS: &[&str] = &["environment/", "solution/", "tests/", "tone/"];
 
@@ -95,6 +97,20 @@ pub(crate) fn stage(
     );
     if r.files.iter().map(|f| f.content.len()).sum::<usize>() > MAX_TOTAL {
         problems.push("the package is too large; keep it under 256 KB".into());
+    }
+    if r.task_toml.len() > MAX_TASK {
+        problems.push("task_toml is too large; keep it under 16 KB".into());
+    }
+    if r.files.len() > MAX_FILES {
+        problems.push(format!(
+            "too many files; keep it to {MAX_FILES} files or fewer"
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for f in &r.files {
+        if !seen.insert(f.path.as_str()) {
+            problems.push(format!("path '{}' appears twice", f.path));
+        }
     }
     let task = stamped(&r.task_toml, id, topic, version);
     if let Err(e) = &task {
@@ -202,5 +218,37 @@ mod tests {
             panic!()
         };
         assert_eq!(why, "nginx must run");
+    }
+
+    #[test]
+    fn counts_task_text_and_duplicate_paths_are_capped() {
+        let d = tmp("draft_caps");
+        let file = |p: &str| FileOut {
+            path: p.into(),
+            content: "x".into(),
+        };
+        let many = Reply {
+            task_toml: "title = \"t\"".into(),
+            files: (0..=MAX_FILES)
+                .map(|i| file(&format!("tone/{i}.md")))
+                .collect(),
+        };
+        let e = stage(&many, &d.join("a"), "a", "t", 1)
+            .unwrap_err()
+            .concat();
+        assert!(e.contains("files"), "{e}");
+        let long = Reply {
+            task_toml: format!("title = \"{}\"", "x".repeat(MAX_TASK)),
+            files: vec![],
+        };
+        assert!(stage(&long, &d.join("b"), "b", "t", 1).is_err());
+        let dup = Reply {
+            task_toml: "title = \"t\"".into(),
+            files: vec![file("instruction.md"), file("instruction.md")],
+        };
+        let e = stage(&dup, &d.join("c"), "c", "t", 1).unwrap_err().concat();
+        assert!(e.contains("twice"), "{e}");
+        assert!(!d.join("a").exists() && !d.join("b").exists() && !d.join("c").exists());
+        let _ = std::fs::remove_dir_all(d);
     }
 }
