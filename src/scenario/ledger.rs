@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::scenario::library::topic_matches;
 use crate::scenario::package::{Package, StorySpec};
 use crate::scenario::store::{write_atomic, RunRecord, RunState};
+use crate::ui;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Character {
@@ -52,12 +53,43 @@ pub(crate) fn ledger_path(project_root: &Path, topic: &str) -> PathBuf {
         .join(format!("{topic}.toml"))
 }
 
+fn corrupt_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".corrupt");
+    PathBuf::from(name)
+}
+
+/// Copy an unreadable ledger to `<file>.corrupt`, once, with one warning.
+fn set_aside(path: &Path) {
+    let aside = corrupt_path(path);
+    if aside.exists() {
+        return;
+    }
+    ui::warn(&match std::fs::copy(path, &aside) {
+        Ok(_) => format!(
+            "the story notes could not be read; a copy is in {}, and the story starts fresh",
+            aside.display()
+        ),
+        Err(_) => "the story notes could not be read or copied; the story starts fresh".into(),
+    });
+}
+
 impl Ledger {
+    /// A missing file is a fresh story. An unreadable one starts empty too, but a
+    /// save would overwrite it, so it is set aside first.
     pub fn load(project_root: &Path, topic: &str) -> Ledger {
-        std::fs::read_to_string(ledger_path(project_root, topic))
-            .ok()
-            .and_then(|t| toml::from_str(&t).ok())
-            .unwrap_or_default()
+        let path = ledger_path(project_root, topic);
+        let text = match std::fs::read_to_string(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ledger::default(),
+            other => other,
+        };
+        match text.ok().and_then(|t| toml::from_str(&t).ok()) {
+            Some(ledger) => ledger,
+            None => {
+                set_aside(&path);
+                Ledger::default()
+            }
+        }
     }
 
     pub fn save(&self, project_root: &Path, topic: &str) -> Result<()> {
@@ -315,6 +347,62 @@ mod tests {
         let l = Ledger::load(&root, "linux");
         assert_eq!(l.events.len(), 1);
         assert_eq!(l.events[0].run_id, "demo-pkg-1");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_missing_ledger_is_empty_and_leaves_no_copy() {
+        let root = tmp("ledger_missing");
+        assert_eq!(Ledger::load(&root, "linux"), Ledger::default());
+        assert!(!corrupt_path(&ledger_path(&root, "linux")).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_unreadable_ledger_is_copied_aside_once_before_it_is_overwritten() {
+        let root = tmp("ledger_corrupt");
+        let path = ledger_path(&root, "linux");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "company = [broken").unwrap();
+        let aside = corrupt_path(&path);
+        assert_eq!(aside.file_name().unwrap(), "linux.toml.corrupt");
+
+        let mut ledger = Ledger::load(&root, "linux");
+        assert_eq!(ledger, Ledger::default());
+        assert_eq!(
+            std::fs::read_to_string(&aside).unwrap(),
+            "company = [broken"
+        );
+
+        // A second load does not copy again: what was saved first stays.
+        std::fs::write(&path, "company = [other").unwrap();
+        Ledger::load(&root, "linux");
+        assert_eq!(
+            std::fs::read_to_string(&aside).unwrap(),
+            "company = [broken"
+        );
+
+        ledger.apply_finished(&story(), "r1", "2026-11-04");
+        ledger.save(&root, "linux").unwrap();
+        assert_eq!(Ledger::load(&root, "linux"), ledger);
+        assert_eq!(
+            std::fs::read_to_string(&aside).unwrap(),
+            "company = [broken"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_ledger_that_is_not_text_counts_as_unreadable() {
+        let root = tmp("ledger_binary");
+        let path = ledger_path(&root, "linux");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        assert_eq!(Ledger::load(&root, "linux"), Ledger::default());
+        assert_eq!(
+            std::fs::read(corrupt_path(&path)).unwrap(),
+            [0xff, 0xfe, 0x00]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }
