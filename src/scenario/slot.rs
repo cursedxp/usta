@@ -15,8 +15,9 @@ use crate::scenario::store::{project_tag, RunState, Store};
 /// (normal close, `?` error, unwind). A hard kill is handled by the startup sweep.
 pub(crate) struct Slot {
     ctx: Ctx,
-    /// True while a command's blocking work runs. A learner who stopped waiting
-    /// leaves that work finishing on its own; a second command must not race it.
+    /// True while a command's blocking work runs. It cannot be cancelled: a
+    /// shutdown signal only ends the wait, the work finishes on its own, and the
+    /// pause at session end must not race it.
     busy: Arc<AtomicBool>,
 }
 
