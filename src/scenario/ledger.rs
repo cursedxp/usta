@@ -336,6 +336,7 @@ mod tests {
             updated: started.into(),
             reference: String::new(),
             access: String::new(),
+            env: "container".into(),
             last_check: None,
         };
         let recs = vec![

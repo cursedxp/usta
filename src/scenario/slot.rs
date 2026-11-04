@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::scenario::command::{execute, Ctx, Reply, ScenarioCmd};
-use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::RealDocker;
 use crate::scenario::engine::{self, Tick};
+use crate::scenario::route::Router;
 use crate::scenario::store::{project_tag, RunState, Store};
 
 /// Holds the session's identity; pauses runs this process owns when dropped
@@ -95,10 +95,7 @@ impl Drop for Slot {
             return;
         }
         let docker = RealDocker;
-        let mut env = ContainerEnv {
-            docker: &docker,
-            project_tag: project_tag(&self.ctx.project_root),
-        };
+        let mut env = Router::new(&docker, &project_tag(&self.ctx.project_root));
         let today = crate::lifecycle::today();
         let alive: &dyn Fn(u32) -> bool = &crate::lock::pid_alive;
         let tick = Tick {

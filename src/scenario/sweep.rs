@@ -6,10 +6,11 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 
-use crate::scenario::container::{list_labeled, ContainerEnv, Found};
+use crate::scenario::container::{list_labeled, Found};
 use crate::scenario::docker::{probe, Docker, RealDocker, Runtime};
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::Environment;
+use crate::scenario::route::Router;
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::ui;
 
@@ -225,10 +226,7 @@ pub(crate) fn execute(
 ) {
     let records = store.all();
     let mine = prefix(tag);
-    let mut env = ContainerEnv {
-        docker,
-        project_tag: tag.to_string(),
-    };
+    let mut env = Router::new(docker, tag);
     for a in plan(&records, containers, alive, today, tag) {
         match a {
             Action::RemoveContainer(name) => {
@@ -354,6 +352,7 @@ mod tests {
             updated: updated.into(),
             reference: format!("usta-aaaa1111-{id}"),
             access: String::new(),
+            env: "container".into(),
             last_check: None,
         }
     }

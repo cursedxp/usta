@@ -13,23 +13,25 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 
-use crate::progress;
-use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{
     ensure_ready, runc_warning, Docker, RealDocker, RuntimeStarter, SystemStarter, START_POLL,
     START_TIMEOUT,
 };
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::{CheckOutcome, Internal};
-use crate::scenario::ledger::{self, Ledger};
+use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
 use crate::scenario::package::{Package, Tone};
 use crate::scenario::pick::{open_runs, own_active, pick_resumable, pick_unfinished};
+use crate::scenario::route::Router;
 use crate::scenario::select::{self, Tag};
+use crate::scenario::steps::{
+    finished_ids, log_error, map_text, pause_notices, resume_run, sync_ledger, title_of, Step,
+};
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::scenario::sweep;
 use crate::scenario::terminal::{window_notice, Launcher, SystemLauncher, WindowReq};
-use crate::scenario::turns::{done_turn, resume_turn, start_turn};
+use crate::scenario::turns::{done_turn, start_turn};
 
 const USAGE: &str = "scenario commands: /scenario (list) · start [number|id] · resume [id] · check · pause · drop [id] · tone plain|adventure";
 
@@ -152,14 +154,6 @@ pub(crate) fn render_list(
     out
 }
 
-fn log_error(ctx: &Ctx, text: &str) {
-    let p = ctx.project_root.join(".usta/scenarios/last-error.log");
-    if let Some(d) = p.parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    let _ = std::fs::write(p, format!("{text}\n"));
-}
-
 /// Internal errors (tool output) go to the log; the learner reads one plain sentence.
 fn failure(ctx: &Ctx, e: anyhow::Error) -> Reply {
     if e.downcast_ref::<Internal>().is_some() {
@@ -181,38 +175,6 @@ pub(crate) fn execute(ctx: &Ctx, cmd: ScenarioCmd) -> Reply {
 fn clean_notice(ctx: &Ctx, raw: &str) -> String {
     log_error(ctx, raw);
     "the task's server could not be removed yet; Usta will try again at the next start".into()
-}
-
-/// A paused task whose server no longer exists cannot be woken. Say so in one
-/// plain sentence instead of letting the raw runtime error through.
-fn server_gone_error(env: &ContainerEnv, rec: &RunRecord) -> Option<anyhow::Error> {
-    let gone = rec.reference.is_empty() || env.is_gone(&rec.reference);
-    gone.then(|| {
-        anyhow!(
-            "the server for this task is gone, so it cannot be resumed; give it up with /scenario drop {} confirm and start it again",
-            rec.run_id
-        )
-    })
-}
-
-fn finished_ids(store: &Store) -> Vec<String> {
-    store
-        .all()
-        .into_iter()
-        .filter(|r| r.state == RunState::Finished)
-        .map(|r| r.package)
-        .collect()
-}
-
-fn map_text(ctx: &Ctx) -> String {
-    std::fs::read_to_string(progress::curriculum_path(&ctx.project_root, &ctx.topic))
-        .unwrap_or_default()
-}
-
-/// Apply finished runs the ledger has not seen (repairs a crash between the
-/// finished record and the ledger write). Never fatal.
-fn sync_ledger(ctx: &Ctx, store: &Store, pkgs: &[Package], today: &str) {
-    let _ = ledger::reconcile(&ctx.project_root, &ctx.topic, &store.all(), pkgs, today);
 }
 
 /// Everything a command reaches outside this process, so the whole flow can run
@@ -336,10 +298,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         _ => {}
     }
     library::sync(&ctx.global)?;
-    let mut env = ContainerEnv {
-        docker,
-        project_tag: project_tag(&ctx.project_root),
-    };
+    let mut env = Router::new(docker, &project_tag(&ctx.project_root));
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     let tick = Tick {
         pid: ctx.pid,
@@ -483,104 +442,15 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
     }
 }
 
-/// What a step needs around the run it acts on.
-struct Step<'a> {
-    ctx: &'a Ctx,
-    seams: &'a Seams<'a>,
-    store: &'a Store,
-    tick: &'a Tick<'a>,
-    pkgs: &'a [Package],
-}
-
-fn title_of(pkgs: &[Package], package: &str) -> String {
-    pkgs.iter()
-        .find(|p| p.id == package)
-        .map(|p| p.title.clone())
-        .unwrap_or_else(|| package.to_string())
-}
-
-/// Starting or waking a task pauses whatever else runs (`engine::release_others`).
-/// Asked before that happens, so the learner can be told.
-fn pause_notices(s: &Step, except: Option<&str>) -> Vec<String> {
-    s.store
-        .all()
-        .into_iter()
-        .filter(|r| r.state == RunState::Active && Some(r.run_id.as_str()) != except)
-        .map(|r| {
-            format!(
-                "'{}' was running, so it is paused now. Back to it: /scenario resume {}",
-                title_of(s.pkgs, &r.package),
-                r.run_id
-            )
-        })
-        .collect()
-}
-
-/// Bring `rec` back and open its window. A closed window leaves an own active
-/// run with a healthy server: that one only gets a new window.
-fn resume_run(
-    s: &Step,
-    env: &mut ContainerEnv,
-    pkg: &Package,
-    mut rec: RunRecord,
-) -> Result<Reply> {
-    if let Some(e) = server_gone_error(env, &rec) {
-        return Err(e);
-    }
-    let woke = !already_running(env, &rec);
-    let mut restarted = true;
-    let mut paused = Vec::new();
-    if woke {
-        paused = pause_notices(s, Some(&rec.run_id));
-        if let Some(w) = engine::resume(env, s.store, pkg, &mut rec, s.tick)? {
-            log_error(s.ctx, &w);
-            restarted = false;
-        }
-    }
-    let scratch = s.ctx.project_root.join(".usta/scenarios");
-    let req = WindowReq {
-        command_line: &rec.access,
-        run_id: &rec.run_id,
-        scratch: &scratch,
-    };
-    let mut notices = vec![resume_notice(&pkg.title, woke, restarted)];
-    notices.extend(paused);
-    notices.push(window_notice(s.seams.launcher, &req));
-    // The mentor turn says the services restarted: only true when we woke them.
-    let turn = if woke {
-        Some(resume_turn(
-            pkg,
-            &pkg.instruction()?,
-            rec.last_check.as_deref(),
-            restarted,
-        ))
-    } else {
-        None
-    };
-    Ok(Reply { notices, turn })
-}
-
-/// An own active run whose server is still running needs no wake-up.
-fn already_running(env: &ContainerEnv, rec: &RunRecord) -> bool {
-    rec.state == RunState::Active && env.is_running(&rec.reference)
-}
-
-fn resume_notice(title: &str, woke: bool, restarted: bool) -> String {
-    if !restarted {
-        format!("Resumed: {title}. Your files are as you left them, but its programs did not come back up; you are in, so you can look into it. Details are in .usta/scenarios/last-error.log")
-    } else if woke {
-        format!("Resumed: {title}. Your files are as you left them; its programs were restarted.")
-    } else {
-        format!("Back in: {title}. Your task is still running; opened a new terminal window.")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenario::container::ContainerEnv;
     use crate::scenario::env::internal;
     use crate::scenario::package::tests::{tmp, write_pkg};
+    use crate::scenario::steps::{already_running, resume_notice, server_gone_error};
     use crate::scenario::store::{RunRecord, RunState};
+    use crate::scenario::turns::resume_turn;
 
     /// `name` must be unique per test: `tmp` keys by process id and name.
     fn pkg(name: &str) -> Package {
@@ -602,6 +472,7 @@ mod tests {
             updated: "2026-11-04".into(),
             reference: "r".into(),
             access: "a".into(),
+            env: "container".into(),
             last_check: Some("fail".into()),
         }
     }

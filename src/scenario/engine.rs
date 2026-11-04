@@ -25,7 +25,7 @@ pub(crate) struct CheckReport {
 
 /// At most one run is active per project: pause the others, but never one a
 /// different live Usta owns.
-fn release_others(
+pub(crate) fn release_others(
     env: &mut dyn Environment,
     store: &Store,
     t: &Tick,
@@ -66,6 +66,7 @@ pub(crate) fn start(
         updated: t.today.into(),
         reference: String::new(),
         access: String::new(),
+        env: pkg.environment.kind.clone(),
         last_check: None,
     };
     // Record first: a crash mid-prepare leaves a record the sweep can resolve,
@@ -247,6 +248,7 @@ mod tests {
             Ok(EnvHandle {
                 reference: format!("fake-{run_id}"),
                 access: "fake access".into(),
+                kind: "container".into(),
             })
         }
         fn pause(&mut self, h: &EnvHandle) -> Result<()> {

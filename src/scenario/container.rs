@@ -6,7 +6,7 @@
 use anyhow::{bail, Result};
 
 use crate::scenario::docker::{Docker, Out};
-use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment};
+use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, CONTAINER};
 use crate::scenario::package::Package;
 
 /// Check scripts enter the container only here, at check time, and are removed right after.
@@ -258,6 +258,7 @@ impl Environment for ContainerEnv<'_> {
         Ok(EnvHandle {
             access: format!("docker exec -it {name} bash"),
             reference: name,
+            kind: CONTAINER.into(),
         })
     }
 
@@ -383,6 +384,7 @@ mod tests {
         EnvHandle {
             reference: "usta-aaaa1111-demo-1".into(),
             access: "x".into(),
+            kind: "container".into(),
         }
     }
 
@@ -872,10 +874,12 @@ mod tests {
         let foreign = EnvHandle {
             reference: "kiln-x".into(),
             access: "x".into(),
+            kind: "container".into(),
         };
         let other = EnvHandle {
             reference: "usta-zzzz9999-a-1".into(),
             access: "x".into(),
+            kind: "container".into(),
         };
         for h in [&foreign, &other] {
             assert!(env.clean(h).is_err());

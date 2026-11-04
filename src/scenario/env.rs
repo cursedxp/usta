@@ -18,6 +18,8 @@ pub(crate) struct EnvHandle {
     /// Command line that opens a shell inside the task. The terminal launcher
     /// runs it; it is shown to the learner only if no window can be opened.
     pub access: String,
+    /// Which environment owns this. Routed on by `Router`; the engine never reads it.
+    pub kind: String,
 }
 
 /// An error whose text is meant for the log, not the learner (tool output,

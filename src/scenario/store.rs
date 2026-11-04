@@ -23,6 +23,10 @@ pub(crate) enum RunState {
     Dropped,
 }
 
+fn d_env() -> String {
+    crate::scenario::env::CONTAINER.into()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RunRecord {
     pub run_id: String,
@@ -38,6 +42,9 @@ pub(crate) struct RunRecord {
     pub reference: String,
     #[serde(default)]
     pub access: String,
+    /// Which environment runs it. Older records have no such field and are all container runs.
+    #[serde(default = "d_env")]
+    pub env: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_check: Option<String>,
 }
@@ -47,6 +54,7 @@ impl RunRecord {
         EnvHandle {
             reference: self.reference.clone(),
             access: self.access.clone(),
+            kind: self.env.clone(),
         }
     }
 }
@@ -247,8 +255,24 @@ mod tests {
             updated: started.into(),
             reference: "usta-x-demo".into(),
             access: "docker exec -it usta-x-demo bash".into(),
+            env: "container".into(),
             last_check: None,
         }
+    }
+
+    #[test]
+    fn an_old_record_without_an_environment_is_a_container_run() {
+        let p = tmp("store_old_env");
+        let s = Store::new(&p);
+        std::fs::create_dir_all(p.join(".usta/scenarios/runs")).unwrap();
+        std::fs::write(
+            p.join(".usta/scenarios/runs/a.toml"),
+            "run_id = \"a\"\npackage = \"p\"\ntopic = \"t\"\ntone = \"plain\"\nstate = \"paused\"\nowner_pid = 0\nstarted = \"d\"\nupdated = \"d\"\n",
+        )
+        .unwrap();
+        assert_eq!(s.load("a").unwrap().env, "container");
+        assert_eq!(s.load("a").unwrap().handle().kind, "container");
+        let _ = std::fs::remove_dir_all(p);
     }
 
     #[test]
