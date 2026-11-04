@@ -82,6 +82,15 @@ impl ContainerEnv<'_> {
         self.must(&["exec", name, "sh", path]).map(|_| ())
     }
 
+    /// True only when the runtime says the server does not exist ("No such", as
+    /// `clean` reads it). An unreachable runtime or any other error is not "gone".
+    pub fn is_gone(&self, name: &str) -> bool {
+        self.docker
+            .run(&["inspect", "-f", "{{.Id}}", name])
+            .map(|o| !o.ok() && o.text().contains("No such"))
+            .unwrap_or(false)
+    }
+
     fn is_running(&self, name: &str) -> bool {
         self.docker
             .run(&["inspect", "-f", "{{.State.Running}}", name])

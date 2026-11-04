@@ -15,8 +15,7 @@ use anyhow::{anyhow, bail, Result};
 use crate::progress;
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{
-    available, ensure_ready, runc_warning, Docker, RealDocker, SystemStarter, START_POLL,
-    START_TIMEOUT,
+    available, ensure_ready, runc_warning, RealDocker, SystemStarter, START_POLL, START_TIMEOUT,
 };
 use crate::scenario::engine::{self, Tick};
 use crate::scenario::env::{CheckOutcome, Internal};
@@ -229,12 +228,8 @@ fn clean_notice(ctx: &Ctx, raw: &str) -> String {
 
 /// A paused task whose server no longer exists cannot be woken. Say so in one
 /// plain sentence instead of letting the raw runtime error through.
-fn server_gone_error(d: &dyn Docker, rec: &RunRecord) -> Option<anyhow::Error> {
-    let gone = rec.reference.is_empty()
-        || !d
-            .run(&["inspect", "-f", "{{.Id}}", &rec.reference])
-            .map(|o| o.ok())
-            .unwrap_or(false);
+fn server_gone_error(env: &ContainerEnv, rec: &RunRecord) -> Option<anyhow::Error> {
+    let gone = rec.reference.is_empty() || env.is_gone(&rec.reference);
     gone.then(|| {
         anyhow!(
             "the server for this task is gone, so it cannot be resumed; give it up with /scenario drop {} confirm and start it again",
@@ -383,9 +378,9 @@ fn run(ctx: &Ctx, cmd: ScenarioCmd) -> Result<Reply> {
             })
         }
         ScenarioCmd::Resume(sel) => {
-            let mut rec = pick_paused(&store, sel.as_deref(), &ctx.topic)?;
+            let mut rec = pick_resumable(&store, sel.as_deref(), &ctx.topic, ctx.pid)?;
             let pkg = find_pkg(&rec.package)?;
-            if let Some(e) = server_gone_error(&docker, &rec) {
+            if let Some(e) = server_gone_error(&env, &rec) {
                 return Err(e);
             }
             engine::resume(&mut env, &store, pkg, &mut rec, &tick)?;
@@ -482,17 +477,23 @@ fn own_active(store: &Store, pid: u32) -> Result<RunRecord> {
         .ok_or_else(|| anyhow!("no active task; use /scenario start or /scenario resume"))
 }
 
-fn pick_paused(store: &Store, sel: Option<&str>, topic: &str) -> Result<RunRecord> {
+/// Resumable = paused, or active and owned by this process (its server may have
+/// stopped mid-session; `engine::resume` handles both).
+fn pick_resumable(store: &Store, sel: Option<&str>, topic: &str, pid: u32) -> Result<RunRecord> {
     let paused: Vec<RunRecord> = store
         .all()
         .into_iter()
-        .filter(|r| r.state == RunState::Paused && r.topic == topic)
+        .filter(|r| {
+            r.topic == topic
+                && (r.state == RunState::Paused
+                    || (r.state == RunState::Active && r.owner_pid == pid))
+        })
         .collect();
     match sel {
         Some(id) => paused
             .into_iter()
             .find(|r| r.run_id == id)
-            .ok_or_else(|| anyhow!("no paused task '{id}'; see /scenario")),
+            .ok_or_else(|| anyhow!("no task '{id}' to resume; see /scenario")),
         None => paused
             .into_iter()
             .last()
@@ -891,18 +892,67 @@ mod tests {
     fn a_paused_task_whose_server_vanished_gets_one_plain_sentence() {
         use crate::scenario::docker::fake::{fail, ok, FakeDocker};
         let mut r = rec("lin-1", RunState::Paused, 0);
-        r.reference = "usta-x-lin-1".into();
         let gone = FakeDocker::new(|_| fail(1, "Error: No such object: usta-x-lin-1"));
-        let e = server_gone_error(&gone, &r).expect("gone").to_string();
+        let e = server_gone_error(
+            &ContainerEnv {
+                docker: &gone,
+                project_tag: "x".into(),
+            },
+            &r,
+        )
+        .expect("gone")
+        .to_string();
         assert!(
             e.contains("/scenario drop lin-1") && !bad_words(&e) && !e.contains("No such"),
             "{e}"
         );
         assert!(e.starts_with("the server for this task is gone"), "{e}");
         let there = FakeDocker::new(|_| ok("true"));
-        assert!(server_gone_error(&there, &r).is_none());
+        assert!(server_gone_error(
+            &ContainerEnv {
+                docker: &there,
+                project_tag: "x".into()
+            },
+            &r
+        )
+        .is_none());
         r.reference.clear();
-        assert!(server_gone_error(&there, &r).is_some());
+        assert!(server_gone_error(
+            &ContainerEnv {
+                docker: &there,
+                project_tag: "x".into()
+            },
+            &r
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn an_unreachable_runtime_is_not_mistaken_for_a_vanished_server() {
+        use crate::scenario::docker::fake::{fail, FakeDocker};
+        let mut r = rec("lin-1", RunState::Paused, 0);
+        r.reference = "usta-x-lin-1".into();
+        let d = FakeDocker::new(|_| fail(1, "Cannot connect to the Docker daemon"));
+        let env = ContainerEnv {
+            docker: &d,
+            project_tag: "x".into(),
+        };
+        assert!(server_gone_error(&env, &r).is_none());
+    }
+
+    #[test]
+    fn resume_also_picks_an_active_run_this_process_owns() {
+        let p = tmp("cmd_pick_resume");
+        let store = Store::new(&p);
+        store.save(&rec("a-1", RunState::Active, 7)).unwrap();
+        assert_eq!(
+            pick_resumable(&store, None, "linux", 7).unwrap().run_id,
+            "a-1"
+        );
+        assert!(pick_resumable(&store, Some("a-1"), "linux", 8).is_err());
+        store.save(&rec("a-2", RunState::Active, 99)).unwrap();
+        assert!(pick_resumable(&store, Some("a-2"), "linux", 7).is_err());
+        let _ = std::fs::remove_dir_all(p);
     }
 
     #[test]
