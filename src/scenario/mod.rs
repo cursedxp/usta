@@ -6,10 +6,12 @@
 pub(crate) mod command;
 pub(crate) mod container;
 pub(crate) mod docker;
+pub(crate) mod dockerfile;
 pub(crate) mod engine;
 pub(crate) mod env;
 pub(crate) mod ledger;
 pub(crate) mod library;
+pub(crate) mod limited_build;
 pub(crate) mod lint;
 pub(crate) mod package;
 pub(crate) mod pick;

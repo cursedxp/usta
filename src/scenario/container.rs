@@ -208,8 +208,12 @@ impl Environment for ContainerEnv<'_> {
         self.guard_single()?;
         let image = Self::image(pkg);
         if !self.docker.run(&["image", "inspect", &image])?.ok() {
-            let ctx = pkg.dir.join(&pkg.environment.context);
-            self.must(&["build", "-t", &image, &ctx.to_string_lossy()])?;
+            if pkg.is_generated() {
+                crate::scenario::limited_build::build(self.docker, pkg, &image, &self.project_tag)?;
+            } else {
+                let ctx = pkg.dir.join(&pkg.environment.context);
+                self.must(&["build", "-t", &image, &ctx.to_string_lossy()])?;
+            }
         }
         let name = self.name(run_id);
         let project_label = format!("usta.project={}", self.project_tag);
@@ -457,6 +461,31 @@ mod tests {
             calls.contains("exec -u 0 usta-aaaa1111-r1 timeout 300 sh /s.sh"),
             "{calls}"
         );
+    }
+
+    #[test]
+    fn a_generated_package_with_a_missing_image_is_built_by_the_limited_build() {
+        let root = crate::scenario::package::tests::tmp("ct_gen_build");
+        let mut p = Package::load(&crate::scenario::package::tests::write_pkg(&root)).unwrap();
+        p.id = "gen-x-1".into();
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("image inspect -f") {
+                ok("1000\n")
+            } else if l.starts_with("image inspect") {
+                fail(1, "No such image")
+            } else {
+                ok("")
+            }
+        });
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        env.prepare(&p, "r1").unwrap();
+        let calls = d.calls();
+        assert!(!calls.iter().any(|c| c.starts_with("build ")), "{calls:?}");
+        assert!(calls.iter().any(|c| c.starts_with("commit ")), "{calls:?}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

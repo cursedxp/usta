@@ -149,6 +149,14 @@ fn kind_problems(p: &Package) -> Vec<String> {
             if !has(&p.dir, "solution/solve.sh") {
                 out.push("missing solution/solve.sh".into());
             }
+            if p.is_generated() && safe_rel(&p.environment.context) {
+                let recipe = p.dir.join(&p.environment.context).join("Dockerfile");
+                if let Ok(t) = std::fs::read_to_string(recipe) {
+                    if let Err(e) = crate::scenario::dockerfile::parse(&t) {
+                        out.extend(e);
+                    }
+                }
+            }
         }
         FOLDER => {
             for sub in ["environment/files", "solution/files"] {
@@ -585,6 +593,22 @@ evidence = ["competitors.csv"]
         ] {
             assert!(problems.contains(k), "{k}: {problems}");
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_generated_recipe_is_parsed_but_a_shipped_one_is_not() {
+        let root = tmp("lint_recipe");
+        let d = write_pkg(&root);
+        std::fs::write(
+            d.join("environment/Dockerfile"),
+            "FROM debian:12-slim\nADD http://x/y /y\n",
+        )
+        .unwrap();
+        let mut p = Package::load(&d).unwrap();
+        assert!(p.lint().iter().all(|l| !l.contains("ADD")));
+        p.id = "gen-x-1".into();
+        assert!(p.lint().iter().any(|l| l.contains("ADD is not allowed")));
         let _ = std::fs::remove_dir_all(root);
     }
 
