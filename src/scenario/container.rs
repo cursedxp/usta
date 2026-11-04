@@ -469,7 +469,7 @@ mod tests {
         let mut p = Package::load(&crate::scenario::package::tests::write_pkg(&root)).unwrap();
         p.id = "gen-x-1".into();
         let d = FakeDocker::new(|l| {
-            if l.starts_with("image inspect -f") {
+            if l.starts_with("image inspect -f") || l.starts_with("inspect -s") {
                 ok("1000\n")
             } else if l.starts_with("image inspect") {
                 fail(1, "No such image")

@@ -41,29 +41,63 @@ pub(crate) fn ensure_image(d: &dyn Docker, image: &str) -> Result<()> {
     must(d, &["pull", image]).map(|_| ())
 }
 
+/// A number the runtime printed. Unreadable is a failure, never a pass.
+fn read_bytes(d: &dyn Docker, args: &[&str]) -> Result<u64> {
+    let o = must(d, args)?;
+    o.stdout
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| internal(format!("could not read a size from docker: {}", o.text())))
+}
+
+fn too_large() -> anyhow::Error {
+    internal("the task's server is too large; keep it under 2 GB")
+}
+
+/// What the helper has written so far, checked while it can still be stopped.
+fn check_disk(d: &dyn Docker, name: &str) -> Result<()> {
+    let written = read_bytes(d, &["inspect", "-s", "-f", "{{.SizeRw}}", name])?;
+    if written > MAX_IMAGE_BYTES {
+        return Err(too_large());
+    }
+    Ok(())
+}
+
 pub(crate) fn build(d: &dyn Docker, pkg: &Package, image: &str, tag: &str) -> Result<()> {
+    build_within(d, pkg, image, tag, BUILD_BUDGET)
+}
+
+fn build_within(
+    d: &dyn Docker,
+    pkg: &Package,
+    image: &str,
+    tag: &str,
+    budget: Duration,
+) -> Result<()> {
     let ctx = pkg.dir.join(&pkg.environment.context);
     let text = std::fs::read_to_string(ctx.join("Dockerfile"))
         .map_err(|e| internal(format!("no recipe: {e}")))?;
     let recipe = dockerfile::parse(&text).map_err(|p| internal(p.join("; ")))?;
     ensure_image(d, &recipe.base)?;
     let name = format!("usta-{tag}-bld-{}", pkg.id);
-    let result = run_recipe(d, pkg, &recipe, &name, image, tag);
-    let _ = d.run(&["rm", "-f", &name]);
-    result?;
-    let size = must(d, &["image", "inspect", "-f", "{{.Size}}", image])?;
-    if size
-        .stdout
-        .trim()
-        .parse::<u64>()
-        .is_ok_and(|b| b > MAX_IMAGE_BYTES)
-    {
-        let _ = d.run(&["rmi", "-f", image]);
-        return Err(internal(
-            "the task's server is too large; keep it under 2 GB",
-        ));
+    let temp = format!("{image}-bld");
+    let result = run_recipe(d, pkg, &recipe, &name, &temp, tag, budget);
+    // `-v` takes the helper's anonymous volumes with it.
+    let _ = d.run(&["rm", "-fv", &name]);
+    let result = result.and_then(|_| publish(d, &temp, image));
+    if result.is_err() {
+        let _ = d.run(&["rmi", "-f", &temp]);
     }
-    Ok(())
+    result
+}
+
+/// The committed image is only given its real name once its size is known and small.
+fn publish(d: &dyn Docker, temp: &str, image: &str) -> Result<()> {
+    if read_bytes(d, &["image", "inspect", "-f", "{{.Size}}", temp])? > MAX_IMAGE_BYTES {
+        return Err(too_large());
+    }
+    must(d, &["tag", temp, image])?;
+    must(d, &["rmi", temp]).map(|_| ())
 }
 
 fn run_recipe(
@@ -71,10 +105,11 @@ fn run_recipe(
     pkg: &Package,
     recipe: &dockerfile::Recipe,
     name: &str,
-    image: &str,
+    temp: &str,
     tag: &str,
+    budget: Duration,
 ) -> Result<()> {
-    let _ = d.run(&["rm", "-f", name]); // an earlier crash may have left one
+    let _ = d.run(&["rm", "-fv", name]); // an earlier crash may have left one
     let project = format!("usta.project={tag}");
     let run = format!("usta.run=bld-{}", pkg.id);
     must(
@@ -97,6 +132,8 @@ fn run_recipe(
             BUILD_PIDS,
             "--security-opt",
             "no-new-privileges",
+            "--cap-drop",
+            "NET_RAW",
             "--ulimit",
             FILE_LIMIT,
             "--entrypoint",
@@ -109,13 +146,14 @@ fn run_recipe(
     must(d, &["start", name])?;
     let begun = Instant::now();
     let ctx = pkg.dir.join(&pkg.environment.context);
-    let mut workdir = String::from("/");
+    // None until the recipe sets one: steps then run in the base image's own WORKDIR.
+    let mut workdir: Option<String> = None;
     let mut envs: Vec<String> = Vec::new();
     for step in &recipe.steps {
         match step {
             Step::Workdir(w) => {
-                must(d, &["exec", name, "mkdir", "-p", w])?;
-                workdir = w.clone();
+                must(d, &["exec", "-u", "0", name, "mkdir", "-p", w])?;
+                workdir = Some(w.clone());
             }
             Step::Env(k, v) => envs.push(format!("{k}={v}")),
             Step::Copy { srcs, dest } => {
@@ -125,36 +163,41 @@ fn run_recipe(
                     dest.rsplit_once('/')
                         .map_or("/", |(a, _)| if a.is_empty() { "/" } else { a })
                 };
-                must(d, &["exec", name, "mkdir", "-p", dir])?;
+                must(d, &["exec", "-u", "0", name, "mkdir", "-p", dir])?;
                 for s in srcs {
                     let src = ctx.join(s).to_string_lossy().into_owned();
                     must(d, &["cp", &src, &format!("{name}:{dest}")])?;
                 }
             }
             Step::Run(cmd) => {
-                let left = BUILD_BUDGET.saturating_sub(begun.elapsed()).as_secs();
+                let left = budget.saturating_sub(begun.elapsed()).as_secs();
                 if left == 0 {
                     return Err(internal(
                         "building the task's server took more than 10 minutes",
                     ));
                 }
                 let secs = left.to_string();
-                let mut args: Vec<&str> = vec!["exec", "-w", &workdir];
+                let mut args: Vec<&str> = vec!["exec", "-u", "0"];
+                if let Some(w) = &workdir {
+                    args.extend(["-w", w.as_str()]);
+                }
                 for e in &envs {
                     args.extend(["-e", e.as_str()]);
                 }
-                args.extend([name, "timeout", &secs, "sh", "-c", cmd]);
+                args.extend([name, "timeout", "-k", "5", &secs, "sh", "-c", cmd]);
                 must(d, &args)?;
+                check_disk(d, name)?;
             }
         }
     }
-    let wd = format!("WORKDIR {workdir}");
+    check_disk(d, name)?;
+    let wd = workdir.map(|w| format!("WORKDIR {w}"));
     let env_changes: Vec<String> = envs.iter().map(|e| format!("ENV {e}")).collect();
-    let mut args: Vec<&str> = vec!["commit", "--change", &wd];
-    for c in &env_changes {
+    let mut args: Vec<&str> = vec!["commit"];
+    for c in wd.iter().chain(env_changes.iter()) {
         args.extend(["--change", c.as_str()]);
     }
-    args.extend([name, image]);
+    args.extend([name, temp]);
     must(d, &args).map(|_| ())
 }
 
@@ -165,26 +208,33 @@ mod tests {
     use crate::scenario::env::Internal;
     use crate::scenario::package::tests::{tmp, write_pkg};
 
-    #[test]
-    fn the_recipe_runs_inside_limits_and_is_committed() {
-        let root = tmp("lb_ok");
+    fn pkg_with(name: &str, recipe: &str) -> (std::path::PathBuf, Package) {
+        let root = tmp(name);
         let mut p = Package::load(&write_pkg(&root)).unwrap();
         p.id = "gen-x-1".into();
-        std::fs::write(
-            p.dir.join("environment/Dockerfile"),
+        std::fs::write(p.dir.join("environment/Dockerfile"), recipe).unwrap();
+        (root, p)
+    }
+
+    /// Image present or not, sizes small.
+    fn small(l: &str) -> crate::scenario::docker::Out {
+        if l.starts_with("inspect -s") || l.starts_with("image inspect -f") {
+            ok("1000\n")
+        } else if l.starts_with("image inspect") {
+            fail(1, "No such image")
+        } else {
+            ok("")
+        }
+    }
+
+    #[test]
+    fn the_recipe_runs_inside_limits_and_is_committed() {
+        let (root, p) = pkg_with(
+            "lb_ok",
             "FROM debian:12-slim\nWORKDIR /app\nENV A=1\nRUN make it\nCOPY setup.sh /opt/\n",
-        )
-        .unwrap();
+        );
         std::fs::write(p.dir.join("environment/setup.sh"), "true\n").unwrap();
-        let d = FakeDocker::new(|l| {
-            if l.starts_with("image inspect -f") {
-                ok("1000\n")
-            } else if l.starts_with("image inspect") {
-                fail(1, "No such image")
-            } else {
-                ok("")
-            }
-        });
+        let d = FakeDocker::new(small);
         build(&d, &p, "usta-scn-gen-x-1:v1", "aaaa1111").unwrap();
         let c = d.calls();
         let name = "usta-aaaa1111-bld-gen-x-1";
@@ -202,59 +252,144 @@ mod tests {
             "label usta=1",
             "--ulimit fsize=",
             "no-new-privileges",
+            "--cap-drop NET_RAW",
         ] {
             assert!(create.contains(flag), "{flag}: {create}");
         }
-        assert!(c[find("make it")].contains(&format!("exec -w /app -e A=1 {name} timeout ")));
+        for banned in [" -v ", "--volume", "--privileged", "--cap-add", "--mount"] {
+            assert!(!create.contains(banned), "{banned}: {create}");
+        }
+        assert!(
+            c[find("make it")].contains(&format!("exec -u 0 -w /app -e A=1 {name} timeout -k 5 "))
+        );
+        assert!(find("inspect -s") > find("make it"));
         assert!(find("mkdir -p /opt/") < find("/environment/setup.sh"));
         assert!(find("commit") > find("make it"));
-        assert!(c[find("commit")].contains("--change WORKDIR /app"));
+        let commit = &c[find("commit")];
+        assert!(commit.contains("--change WORKDIR /app") && commit.contains("--change ENV A=1"));
+        assert!(
+            commit.ends_with(&format!("{name} usta-scn-gen-x-1:v1-bld")),
+            "{commit}"
+        );
         assert!(
             c.iter()
-                .rposition(|l| *l == format!("rm -f {name}"))
+                .rposition(|l| *l == format!("rm -fv {name}"))
                 .unwrap()
                 > find("commit")
+        );
+        assert!(
+            find("tag usta-scn-gen-x-1:v1-bld usta-scn-gen-x-1:v1")
+                < find("rmi usta-scn-gen-x-1:v1-bld")
         );
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn a_failing_step_or_an_oversized_result_removes_what_it_made() {
-        let root = tmp("lb_bad");
-        let mut p = Package::load(&write_pkg(&root)).unwrap();
-        p.id = "gen-x-1".into();
-        std::fs::write(
-            p.dir.join("environment/Dockerfile"),
-            "FROM debian:12-slim\nRUN boom\n",
-        )
-        .unwrap();
+    fn a_recipe_without_workdir_uses_the_bases_own() {
+        let (root, p) = pkg_with("lb_nowd", "FROM debian:12-slim\nRUN make it\n");
+        let d = FakeDocker::new(small);
+        build(&d, &p, "i:v1", "t").unwrap();
+        let c = d.calls();
+        assert!(
+            !c.iter().any(|l| l.contains("-w ") || l.contains("WORKDIR")),
+            "{c:?}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_failing_step_removes_what_it_made() {
+        let (root, p) = pkg_with("lb_bad", "FROM debian:12-slim\nRUN boom\n");
         let d = FakeDocker::new(|l| {
             if l.contains("boom") {
                 fail(2, "no such thing")
             } else {
-                ok("")
+                small(l)
             }
         });
         let e = build(&d, &p, "i:v1", "t").unwrap_err();
         assert!(e.downcast_ref::<Internal>().is_some() && e.to_string().contains("no such thing"));
-        assert!(d.calls().last().unwrap().starts_with("rm -f"));
+        let c = d.calls();
+        assert!(c.iter().any(|l| l == "rm -fv usta-t-bld-gen-x-1"));
+        assert!(c.iter().any(|l| l == "rmi -f i:v1-bld"));
+        assert!(!c.iter().any(|l| l.starts_with("tag ")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_oversized_image_never_gets_its_real_name() {
+        let (root, p) = pkg_with("lb_big", "FROM debian:12-slim\n");
         let d = FakeDocker::new(|l| {
             if l.starts_with("image inspect -f") {
                 ok("99999999999\n")
             } else {
-                ok("")
+                small(l)
             }
         });
-        std::fs::write(
-            p.dir.join("environment/Dockerfile"),
-            "FROM debian:12-slim\n",
-        )
-        .unwrap();
         assert!(build(&d, &p, "i:v1", "t")
             .unwrap_err()
             .to_string()
             .contains("too large"));
-        assert!(d.calls().iter().any(|l| l == "rmi -f i:v1"));
+        let c = d.calls();
+        assert!(c.iter().any(|l| l == "rmi -f i:v1-bld"));
+        assert!(!c.iter().any(|l| l.starts_with("tag ")));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_unreadable_size_is_a_failure() {
+        let (root, p) = pkg_with("lb_unread", "FROM debian:12-slim\n");
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("image inspect -f") {
+                ok("<nil>\n")
+            } else {
+                small(l)
+            }
+        });
+        assert!(build(&d, &p, "i:v1", "t").is_err());
+        assert!(d.calls().iter().any(|l| l == "rmi -f i:v1-bld"));
+        assert!(!d.calls().iter().any(|l| l.starts_with("tag ")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_runaway_run_stops_the_build_before_commit() {
+        let (root, p) = pkg_with("lb_disk", "FROM debian:12-slim\nRUN fill\n");
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("inspect -s") {
+                ok("99999999999\n")
+            } else {
+                small(l)
+            }
+        });
+        assert!(build(&d, &p, "i:v1", "t")
+            .unwrap_err()
+            .to_string()
+            .contains("too large"));
+        let c = d.calls();
+        assert!(!c.iter().any(|l| l.starts_with("commit")));
+        assert!(c.iter().any(|l| l == "rm -fv usta-t-bld-gen-x-1"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_exhausted_budget_stops_before_the_next_run() {
+        let (root, p) = pkg_with("lb_budget", "FROM debian:12-slim\nRUN slow\n");
+        let d = FakeDocker::new(small);
+        let e = build_within(&d, &p, "i:v1", "t", Duration::ZERO).unwrap_err();
+        assert!(e.to_string().contains("10 minutes"), "{e}");
+        let c = d.calls();
+        assert!(!c
+            .iter()
+            .any(|l| l.contains("slow") || l.starts_with("commit")));
+        assert!(c.iter().any(|l| l == "rm -fv usta-t-bld-gen-x-1"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_base_already_here_is_not_pulled() {
+        let d = FakeDocker::new(|_| ok(""));
+        ensure_image(&d, "debian:12-slim").unwrap();
+        assert_eq!(d.calls(), vec!["image inspect debian:12-slim".to_string()]);
     }
 }

@@ -19,20 +19,25 @@ pub(crate) struct Recipe {
     pub steps: Vec<Step>,
 }
 
-/// Official images only (no registry, no namespace), with an explicit version.
+/// Bases a recipe may start from. Exact names only: a flag such as `-p8080:80`,
+/// a local image or a registry path is never on this list. Images that declare a
+/// VOLUME (postgres, mysql, redis, ...) are left out: the volume would be created
+/// anonymously and live outside the limits.
+const BASES: [&str; 8] = [
+    "debian", "ubuntu", "alpine", "python", "node", "rust", "golang", "nginx",
+];
+
+/// An allowed official image with an explicit version.
 fn base_ok(image: &str) -> bool {
     let Some((name, tag)) = image.split_once(':') else {
         return false;
     };
-    let plain = |s: &str, extra: &str| {
-        !s.is_empty()
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
-    };
-    plain(name, "-_")
-        && plain(tag, "-_.")
+    BASES.contains(&name)
+        && tag.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
         && tag != "latest"
-        && name.chars().all(|c| !c.is_ascii_uppercase())
 }
 
 fn is_directive(line: &str) -> bool {
@@ -104,9 +109,12 @@ fn parse_line(line: &str) -> Result<Step, String> {
             };
             let bad =
                 |s: &str| !safe_rel(s) || s.contains(['*', '?', '[', '<']) || s.starts_with('-');
-            if srcs.iter().any(|s| bad(s)) || !dest.starts_with('/') {
+            if srcs.iter().any(|s| bad(s))
+                || !dest.starts_with('/')
+                || (srcs.len() > 1 && !dest.ends_with('/'))
+            {
                 return Err(format!(
-                    "COPY takes plain files from the context to an absolute path: {line}"
+                    "COPY takes plain files from the context to an absolute path, several only into a directory ending in /: {line}"
                 ));
             }
             Ok(Step::Copy {
@@ -212,6 +220,16 @@ mod tests {
             "FROM debian:12\nCOPY ../secret /b\n",
             "FROM debian:12\nCOPY a* /b/\n",
             "FROM debian:12\nCOPY a relative/\n",
+            "FROM debian:12\nCOPY a b /c\n",
+            "FROM -p8080:80\n",
+            "FROM mycompany-api:dev\n",
+            "FROM postgres:16\n",
+            "FROM redis:7\n",
+            "FROM Debian:12\n",
+            "FROM debian:-x\n",
+            "FROM debian:12@sha256:abc\n",
+            "FROM debian:\n",
+            "FROM scratch:1\n",
             "FROM debian:12\nRUN --network=host curl x\n",
             "FROM debian:12\nRUN <<EOF\nid\nEOF\n",
             "FROM debian:12\nRUN [\"id\"]\n",

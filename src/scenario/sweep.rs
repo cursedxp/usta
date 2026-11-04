@@ -257,7 +257,7 @@ pub(crate) fn execute(
                     });
                     continue;
                 }
-                let _ = docker.run(&["rm", "-f", &name]);
+                let _ = docker.run(&["rm", "-fv", &name]);
             }
             Action::StopContainer(name) => {
                 if !name.starts_with(&mine) {
@@ -558,7 +558,7 @@ mod tests {
         let d = fake();
         execute(&store, &d, TAG, &[found("x", "running")], DEAD, TODAY, None);
         assert!(store.load("x").is_err());
-        assert!(d.calls().contains(&"rm -f usta-aaaa1111-x".to_string()));
+        assert!(d.calls().contains(&"rm -fv usta-aaaa1111-x".to_string()));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -586,7 +586,7 @@ mod tests {
             TODAY,
             None,
         );
-        assert_eq!(d2.calls(), vec!["rm -f usta-aaaa1111-ghost".to_string()]);
+        assert_eq!(d2.calls(), vec!["rm -fv usta-aaaa1111-ghost".to_string()]);
         let _ = std::fs::remove_dir_all(root);
     }
 

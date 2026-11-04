@@ -151,10 +151,16 @@ fn kind_problems(p: &Package) -> Vec<String> {
             }
             if p.is_generated() && safe_rel(&p.environment.context) {
                 let recipe = p.dir.join(&p.environment.context).join("Dockerfile");
-                if let Ok(t) = std::fs::read_to_string(recipe) {
-                    if let Err(e) = crate::scenario::dockerfile::parse(&t) {
-                        out.extend(e);
+                match std::fs::read_to_string(recipe) {
+                    Ok(t) => {
+                        if let Err(e) = crate::scenario::dockerfile::parse(&t) {
+                            out.extend(e);
+                        }
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                        out.push("the Dockerfile is not valid UTF-8 text".into());
+                    }
+                    Err(_) => {} // a missing file is reported elsewhere
                 }
             }
         }
@@ -609,6 +615,8 @@ evidence = ["competitors.csv"]
         assert!(p.lint().iter().all(|l| !l.contains("ADD")));
         p.id = "gen-x-1".into();
         assert!(p.lint().iter().any(|l| l.contains("ADD is not allowed")));
+        std::fs::write(d.join("environment/Dockerfile"), [0xff, 0xfe, b'\n']).unwrap();
+        assert!(p.lint().iter().any(|l| l.contains("not valid UTF-8")));
         let _ = std::fs::remove_dir_all(root);
     }
 
