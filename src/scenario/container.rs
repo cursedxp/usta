@@ -162,12 +162,14 @@ impl ContainerEnv<'_> {
         self.must(&["cp", &src, &dest])?;
         let script = format!("{CHECK_DIR}/{}", pkg.check.script);
         let secs = pkg.check.timeout_secs.to_string();
-        let run = self
-            .docker
-            .run(&["exec", name, "timeout", &secs, "sh", &script]);
+        let mut exec = exec_prefix(pkg, name);
+        exec.extend(["timeout", &secs, "sh", &script]);
+        let run = self.docker.run(&exec);
         // Asked before cleanup so cleanup stays the last call; only needed on a plain failure.
         let stopped = matches!(&run, Ok(o) if o.code == 1 && !self.is_running(name));
-        let _ = self.docker.run(&["exec", name, "rm", "-rf", CHECK_DIR]);
+        let mut rm = exec_prefix(pkg, name);
+        rm.extend(["rm", "-rf", CHECK_DIR]);
+        let _ = self.docker.run(&rm);
         let o = run?;
         Ok(match o.code {
             0 => CheckOutcome::Pass,
@@ -454,6 +456,27 @@ mod tests {
         assert!(
             calls.contains("exec -u 0 usta-aaaa1111-r1 timeout 300 sh /s.sh"),
             "{calls}"
+        );
+    }
+
+    #[test]
+    fn a_generated_check_and_its_cleanup_run_as_root() {
+        let mut p = pkg();
+        p.id = "gen-x-1".into();
+        let d = FakeDocker::new(|l| running(l).unwrap_or_else(|| ok("")));
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        env.check(&p, &handle()).unwrap();
+        let calls = d.calls();
+        assert_eq!(
+            calls[2],
+            "exec -u 0 usta-aaaa1111-demo-1 timeout 30 sh /opt/.usta-check/check.sh"
+        );
+        assert_eq!(
+            calls[3],
+            "exec -u 0 usta-aaaa1111-demo-1 rm -rf /opt/.usta-check"
         );
     }
 

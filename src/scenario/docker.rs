@@ -67,7 +67,12 @@ fn drain(mut stream: impl Read + Send + 'static) -> Receiver<Vec<u8>> {
     std::thread::spawn(move || {
         let mut kept = Vec::new();
         let mut chunk = [0u8; 65536];
-        while let Ok(n) = stream.read(&mut chunk) {
+        loop {
+            let n = match stream.read(&mut chunk) {
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
             if n == 0 {
                 break;
             }
