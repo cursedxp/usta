@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
+use crate::scenario::env::{CONTAINER, CONVERSATION, FOLDER};
+
 /// Presentation layer over the core. Task, check and difficulty never change with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tone {
@@ -49,8 +51,8 @@ fn d_timeout() -> u32 {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct EnvSpec {
-    /// Which environment runs the scenario. Step 1 knows only "container".
-    /// Checked at load: only "container" is supported.
+    /// Which environment runs the scenario: "container", "folder" or "conversation".
+    /// Checked at load.
     pub kind: String,
     /// Directory (relative to the package) used as the image build context.
     #[serde(default = "d_context")]
@@ -69,14 +71,31 @@ pub(crate) struct EnvSpec {
     pub pids: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub(crate) struct Criterion {
+    pub id: String,
+    pub text: String,
+    /// Files the criterion rests on: starting files or deliverables.
+    #[serde(default)]
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct CheckSpec {
-    /// Checked at load: only "script" is supported.
+    /// "script" or "rubric".
     pub kind: String,
-    /// File name under the package's `tests/` directory.
+    /// File name under `tests/`. Script checks only.
+    #[serde(default)]
     pub script: String,
     #[serde(default = "d_timeout")]
     pub timeout_secs: u32,
+    #[serde(default)]
+    pub rubric: Vec<Criterion>,
+    /// Files the learner must write in a folder task; what the judge reads.
+    #[serde(default)]
+    pub deliverables: Vec<String>,
+    /// Why this task cannot have a script check. Required on generated rubric packages.
+    pub why_rubric: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -148,22 +167,37 @@ pub(crate) fn section(md: &str, name: &str) -> Option<String> {
 }
 
 impl Package {
+    /// Usta assigns this prefix; the model never chooses an id.
+    pub fn is_generated(&self) -> bool {
+        self.id.starts_with("gen-")
+    }
+
+    pub fn is_rubric(&self) -> bool {
+        self.check.kind == "rubric"
+    }
+
+    /// Container tasks, and folder tasks whose script check runs in a throwaway container.
+    #[allow(dead_code)] // consumed by later steps
+    pub fn needs_runtime(&self) -> bool {
+        self.environment.kind == CONTAINER || self.check.kind == "script"
+    }
+
     pub fn load(dir: &Path) -> Result<Package> {
         let file = dir.join("task.toml");
         let text = std::fs::read_to_string(&file)
             .with_context(|| format!("cannot read {}", file.display()))?;
         let mut p: Package =
             toml::from_str(&text).with_context(|| format!("bad {}", file.display()))?;
-        if p.environment.kind != "container" {
+        if ![CONTAINER, FOLDER, CONVERSATION].contains(&p.environment.kind.as_str()) {
             bail!(
-                "{}: environment kind '{}' is not supported (only 'container')",
+                "{}: environment kind '{}' is not supported (container, folder or conversation)",
                 file.display(),
                 p.environment.kind
             );
         }
-        if p.check.kind != "script" {
+        if !["script", "rubric"].contains(&p.check.kind.as_str()) {
             bail!(
-                "{}: check kind '{}' is not supported (only 'script')",
+                "{}: check kind '{}' is not supported (script or rubric)",
                 file.display(),
                 p.check.kind
             );

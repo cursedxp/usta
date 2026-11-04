@@ -6,6 +6,10 @@ use anyhow::Result;
 
 use crate::scenario::package::Package;
 
+pub(crate) const CONTAINER: &str = "container";
+pub(crate) const FOLDER: &str = "folder";
+pub(crate) const CONVERSATION: &str = "conversation";
+
 /// What `prepare` returns and every later operation receives. Opaque to the engine.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EnvHandle {

@@ -315,6 +315,7 @@ mod tests {
                 kind: "script".into(),
                 script: "check.sh".into(),
                 timeout_secs: 30,
+                ..CheckSpec::default()
             },
             story: StorySpec::default(),
             dir: PathBuf::from("/lib/demo-pkg"),
