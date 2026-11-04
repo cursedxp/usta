@@ -29,9 +29,10 @@ pub(crate) enum Action {
         package: String,
         days: i64,
     },
-    /// The record points outside this project's container namespace (the
-    /// project folder moved). It can never be acted on, so it must not block
-    /// a new start; it is marked dropped, never deleted.
+    /// The record points outside this project's container namespace (hand-edited,
+    /// or copied from another project; a moved folder keeps its tag and is not
+    /// this). It can never be acted on, so it must not block a new start; it is
+    /// marked dropped, never deleted, and no container is ever removed for it.
     DropForeign {
         run_id: String,
         package: String,
@@ -58,9 +59,11 @@ pub(crate) fn plan(
     let mut acts = Vec::new();
     let mine = prefix(tag);
     let find = |run_id: &str| containers.iter().find(|c| c.run_id == run_id);
+    let foreign = |r: &RunRecord| !r.reference.is_empty() && !r.reference.starts_with(&mine);
     for c in containers {
         match records.iter().find(|r| r.run_id == c.run_id) {
             None => acts.push(Action::RemoveContainer(c.name.clone())),
+            Some(r) if foreign(r) => {}
             Some(r) if matches!(r.state, RunState::Finished | RunState::Dropped) => {
                 acts.push(Action::RemoveContainer(c.name.clone()))
             }
@@ -72,7 +75,7 @@ pub(crate) fn plan(
             r.state,
             RunState::Preparing | RunState::Active | RunState::Paused
         );
-        if unfinished && !r.reference.is_empty() && !r.reference.starts_with(&mine) {
+        if unfinished && foreign(r) {
             acts.push(Action::DropForeign {
                 run_id: r.run_id.clone(),
                 package: r.package.clone(),
@@ -118,8 +121,8 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
     docker_sweep(project_root, today, asker);
 }
 
-/// Record-only sweep, no Docker: unfinished records from a moved project are
-/// marked dropped so they can never block a start.
+/// Record-only sweep, no Docker: unfinished records that point outside this
+/// project are marked dropped so they can never block a start.
 pub(crate) fn drop_foreign(project_root: &Path, today: &str) {
     let store = Store::new(project_root);
     if !store.exists() {
@@ -175,7 +178,7 @@ fn mark_foreign(store: &Store, run_id: &str, package: &str, today: &str) {
     rec.updated = today.to_string();
     if store.save(&rec).is_ok() {
         ui::notice(&format!(
-            "task '{package}' belongs to a project folder that moved; marked it as dropped"
+            "task '{package}' does not belong to this project folder; marked it as dropped, its server was left alone"
         ));
     }
 }
@@ -445,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn a_record_from_a_moved_project_is_dropped_not_deleted() {
+    fn a_record_outside_the_prefix_is_dropped_not_deleted() {
         for state in [RunState::Active, RunState::Paused, RunState::Preparing] {
             let mut r = rec("m", state, 0, "2026-11-04");
             r.reference = "usta-bbbb2222-m".into();
@@ -467,8 +470,8 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_project_record_stops_blocking_a_new_start() {
-        let root = tmp("sweep_moved");
+    fn a_foreign_record_stops_blocking_a_new_start() {
+        let root = tmp("sweep_foreign");
         let store = Store::new(&root);
         let mut r = rec("m", RunState::Active, 999_999, "2026-11-04");
         r.reference = "usta-bbbb2222-m".into();
@@ -699,9 +702,75 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         let d = fake();
         execute(&store, &d, TAG, &[], DEAD, TODAY, Some(&|_| true));
-        // Foreign reference: dropped by the moved-project rule, docker untouched.
+        // Foreign reference: dropped by the foreign-record rule, docker untouched.
         assert!(d.calls().is_empty());
         assert_eq!(store.load("old").unwrap().state, RunState::Dropped);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_record_outside_the_prefix_never_removes_a_container() {
+        for state in [
+            RunState::Preparing,
+            RunState::Active,
+            RunState::Paused,
+            RunState::Finished,
+            RunState::Dropped,
+        ] {
+            let mut r = rec("m", state, 0, "2026-11-04");
+            r.reference = "usta-bbbb2222-m".into();
+            for c in ["running", "exited"] {
+                let acts = p(std::slice::from_ref(&r), &[found("m", c)], DEAD);
+                assert!(
+                    !acts.iter().any(|a| matches!(a, Action::RemoveContainer(_))),
+                    "{state:?}/{c}: {acts:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_foreign_record_keeps_its_container_across_two_sweeps() {
+        let root = tmp("sweep_foreign_twice");
+        let store = Store::new(&root);
+        let mut r = rec("m", RunState::Paused, 0, "2026-11-04");
+        r.reference = "usta-bbbb2222-m".into();
+        store.save(&r).unwrap();
+        let d = fake();
+        let cs = [found("m", "exited")];
+        execute(&store, &d, TAG, &cs, DEAD, TODAY, None);
+        assert_eq!(store.load("m").unwrap().state, RunState::Dropped);
+        // The first sweep marked it dropped; the second must not read that as a leftover.
+        execute(&store, &d, TAG, &cs, DEAD, TODAY, None);
+        assert!(d.calls().is_empty(), "{:?}", d.calls());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_moved_project_keeps_its_paused_task_and_its_container() {
+        let base = tmp("sweep_move_keeps");
+        let (old, new) = (base.join("old"), base.join("new"));
+        std::fs::create_dir_all(&old).unwrap();
+        let tag = project_tag(&old);
+        let mut r = rec("t", RunState::Paused, 0, "2026-11-04");
+        r.reference = format!("usta-{tag}-t");
+        Store::new(&old).save(&r).unwrap();
+        std::fs::rename(&old, &new).unwrap();
+        drop_foreign(&new, TODAY);
+        let name = r.reference.clone();
+        let listing = format!("{name}|exited|t\n");
+        let d = FakeDocker::new(move |l| {
+            if l.starts_with("ps ") {
+                ok(&listing)
+            } else {
+                ok("")
+            }
+        });
+        sweep_with(&new, TODAY, &d, DEAD, None);
+        assert_eq!(Store::new(&new).load("t").unwrap().state, RunState::Paused);
+        let filter = format!("label=usta.project={tag}");
+        assert!(d.calls()[0].contains(&filter), "{:?}", d.calls());
+        assert_eq!(d.calls().len(), 1, "nothing was removed or stopped");
+        let _ = std::fs::remove_dir_all(base);
     }
 }

@@ -125,9 +125,25 @@ impl Store {
     }
 }
 
-/// Stable 8-hex tag of the project root (FNV-1a). Labels every container so
-/// one project's cleanup can never touch another project's containers.
+/// The project's identity: labels every container so one project's cleanup can
+/// never touch another project's. Read from `.usta/scenarios/tag`, created from
+/// the path the first time, so a moved folder still matches its records and
+/// containers.
 pub(crate) fn project_tag(project_root: &Path) -> String {
+    let file = project_root.join(".usta/scenarios/tag");
+    if let Ok(text) = std::fs::read_to_string(&file) {
+        let t = text.trim();
+        if t.len() == 8 && t.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+            return t.to_string();
+        }
+    }
+    let tag = path_tag(project_root);
+    let _ = write_atomic(&file, &tag);
+    tag
+}
+
+/// 8-hex hash of the project root (FNV-1a).
+fn path_tag(project_root: &Path) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in project_root.to_string_lossy().as_bytes() {
         h ^= *b as u64;
@@ -228,11 +244,41 @@ mod tests {
     }
 
     #[test]
-    fn project_tag_is_stable_eight_hex_and_differs_per_path() {
-        let a = project_tag(Path::new("/work/a"));
-        assert_eq!(a, project_tag(Path::new("/work/a")));
+    fn path_tag_is_stable_eight_hex_and_differs_per_path() {
+        let a = path_tag(Path::new("/work/a"));
+        assert_eq!(a, path_tag(Path::new("/work/a")));
         assert_eq!(a.len(), 8);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, project_tag(Path::new("/work/b")));
+        assert_ne!(a, path_tag(Path::new("/work/b")));
+    }
+
+    #[test]
+    fn the_tag_is_persisted_once_and_survives_a_moved_folder() {
+        let base = tmp("store_tag_move");
+        let (old, new) = (base.join("old"), base.join("new"));
+        std::fs::create_dir_all(&old).unwrap();
+        let tag = project_tag(&old);
+        assert_eq!(tag, path_tag(&old), "first call derives it from the path");
+        let saved = std::fs::read_to_string(old.join(".usta/scenarios/tag")).unwrap();
+        assert_eq!(saved.trim(), tag);
+        std::fs::rename(&old, &new).unwrap();
+        assert_ne!(path_tag(&new), tag, "the new path hashes differently");
+        assert_eq!(
+            project_tag(&new),
+            tag,
+            "the moved folder keeps its identity"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_damaged_tag_file_is_replaced_never_used() {
+        let root = tmp("store_tag_bad");
+        for bad in ["", "not-hex!", "aaaa1111 --filter x", "AAAA11112"] {
+            std::fs::create_dir_all(root.join(".usta/scenarios")).unwrap();
+            std::fs::write(root.join(".usta/scenarios/tag"), bad).unwrap();
+            assert_eq!(project_tag(&root), path_tag(&root), "{bad:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 }
