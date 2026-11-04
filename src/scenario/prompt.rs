@@ -17,6 +17,16 @@ pub(crate) fn judge_system() -> String {
     )
 }
 
+#[allow(dead_code)] // consumed by later steps
+pub(crate) fn review_system() -> String {
+    format!(
+        "You check a rubric for a practice task before any learner sees it. Every criterion must be answerable from the task text and the listed files alone. \
+         A criterion that needs a report, a number or a fact that is not in that material is a problem. So is a criterion about an outcome rather than the learner's process. \
+         {LEARNER_TEXT_RULE} \
+         Reply with JSON only: {{\"ok\":true,\"problems\":[\"...\"]}}."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

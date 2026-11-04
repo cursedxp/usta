@@ -10,6 +10,7 @@ pub(crate) mod dockerfile;
 pub(crate) mod engine;
 pub(crate) mod env;
 pub(crate) mod folder;
+pub(crate) mod generate;
 pub(crate) mod ledger;
 pub(crate) mod library;
 pub(crate) mod limited_build;
@@ -28,6 +29,7 @@ pub(crate) mod sweep;
 pub(crate) mod talk;
 pub(crate) mod terminal;
 pub(crate) mod turns;
+pub(crate) mod validate;
 
 #[cfg(test)]
 mod docker_tests;

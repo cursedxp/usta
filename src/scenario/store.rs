@@ -80,6 +80,12 @@ impl Store {
             .join(crate::scenario::folder::TASKS_DIR)
     }
 
+    /// Scratch space for validation. Under `.usta`, so the learner and the watcher stay out.
+    #[allow(dead_code)] // consumed by later steps
+    pub fn scratch_dir(&self) -> PathBuf {
+        self.root.join("validate")
+    }
+
     /// True once any run was ever recorded in this project (gates all Docker work at startup).
     pub fn exists(&self) -> bool {
         self.root.is_dir()
