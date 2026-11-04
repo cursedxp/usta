@@ -12,3 +12,4 @@ pub(crate) mod ledger;
 pub(crate) mod package;
 pub(crate) mod select;
 pub(crate) mod store;
+pub(crate) mod terminal;
