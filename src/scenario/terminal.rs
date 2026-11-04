@@ -3,7 +3,7 @@
 //! system; `SystemLauncher` executes the plan; tests use a fake `Launcher`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub(crate) struct WindowReq<'a> {
     /// Command line that opens a shell inside the task (`EnvHandle::access`).
@@ -105,10 +105,19 @@ impl Launcher for SystemLauncher {
             Some(Plan::CommandFile) => write_command_file(req).is_some_and(|f| {
                 Command::new("open")
                     .arg(f)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .status()
                     .is_ok_and(|s| s.success())
             }),
-            Some(Plan::Spawn { program, args }) => Command::new(program).args(args).spawn().is_ok(),
+            Some(Plan::Spawn { program, args }) => Command::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .is_ok(),
             None => false,
         }
     }

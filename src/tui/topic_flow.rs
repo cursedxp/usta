@@ -168,6 +168,7 @@ pub(crate) async fn resolve_topic(
                 if crate::visual::parse_show_command(&raw).is_some()
                     || crate::slash::parse_watch_command(&raw).is_some()
                     || crate::slash::is_context_command(&raw)
+                    || crate::scenario::command::parse(&raw).is_some()
                 {
                     crate::tui::page::page_notice(
                         tui,

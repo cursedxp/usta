@@ -53,7 +53,7 @@ pub(crate) fn threads_available(pkgs: &[Package], map: &str, open: &[String]) ->
 pub(crate) fn tag(pkg: &Package, map: &str, finished: &[String], threads: &[String]) -> Tag {
     if settled(pkg, map) {
         Tag::Skipped
-    } else if finished.iter().any(|f| *f == pkg.id) {
+    } else if finished.contains(&pkg.id) {
         Tag::Done
     } else if pkg.story.needs.iter().any(|n| !threads.contains(n)) {
         Tag::Later

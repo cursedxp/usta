@@ -50,6 +50,8 @@ fn d_timeout() -> u32 {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct EnvSpec {
     /// Which environment runs the scenario. Step 1 knows only "container".
+    /// Schema field, only checked by `lint` (tests).
+    #[allow(dead_code)]
     pub kind: String,
     /// Directory (relative to the package) used as the image build context.
     #[serde(default = "d_context")]
@@ -70,6 +72,8 @@ pub(crate) struct EnvSpec {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CheckSpec {
+    /// Schema field, not read by any code.
+    #[allow(dead_code)]
     pub kind: String,
     /// File name under the package's `tests/` directory.
     pub script: String,
@@ -183,6 +187,7 @@ impl Package {
     /// Static package problems (empty = fine). The model-driven validation
     /// (fresh check fails, reference solution passes) is step 2 plus the
     /// `#[ignore]`d Docker certification in `docker_tests.rs`.
+    #[cfg(test)]
     pub fn lint(&self) -> Vec<String> {
         let mut p = Vec::new();
         let dir_name = self.dir.file_name().and_then(|n| n.to_str()).unwrap_or("");

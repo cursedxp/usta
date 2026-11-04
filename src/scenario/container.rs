@@ -12,6 +12,7 @@ use crate::scenario::package::Package;
 /// Check scripts enter the container only here, at check time, and are removed right after.
 pub(crate) const CHECK_DIR: &str = "/opt/.usta-check";
 /// Reference solution location, certification only.
+#[cfg(test)]
 pub(crate) const SOLUTION_DIR: &str = "/opt/.usta-solution";
 
 pub(crate) struct ContainerEnv<'a> {
@@ -99,6 +100,7 @@ impl ContainerEnv<'_> {
     }
 
     /// Certification only (not one of the five operations): run the reference solution inside.
+    #[cfg(test)]
     pub fn apply_solution(&self, pkg: &Package, h: &EnvHandle) -> Result<()> {
         let src = format!("{}/.", pkg.dir.join("solution").display());
         let dest = format!("{}:{SOLUTION_DIR}", h.reference);

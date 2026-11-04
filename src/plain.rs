@@ -85,7 +85,10 @@ pub(crate) async fn resolve_topic(
             println!("{}", help::help_text());
             continue;
         }
-        if visual::parse_show_command(raw).is_some() || parse_watch_command(raw).is_some() {
+        if visual::parse_show_command(raw).is_some()
+            || parse_watch_command(raw).is_some()
+            || crate::scenario::command::parse(raw).is_some()
+        {
             println!("that command works inside a session — pick a topic first");
             continue;
         }
@@ -261,6 +264,7 @@ pub(crate) async fn run_plain_loop(
     let _ = ready_tx.send(()); // ilk prompt
 
     let mut watching = true;
+    let scn = crate::scenario::slot::Slot::new(ctx.global, ctx.project_root, ctx.topic);
     loop {
         tokio::select! {
             _ = crate::shutdown::requested() => break,
@@ -296,6 +300,25 @@ pub(crate) async fn run_plain_loop(
                     // mode-switch turn (swapped below) that flows through the normal ask so
                     // Usta applies the TEACHING.md Gamification rules from here on — same
                     // swap-and-fall-through shape as /exam.
+                    let scenario_turn = match crate::scenario::command::parse(&line) {
+                        None => None,
+                        Some(cmd) => {
+                            if let Some(b) = crate::scenario::command::busy_note(&cmd) {
+                                ui::notice(b);
+                            }
+                            let reply = scn.handle(cmd).await;
+                            for n in &reply.notices {
+                                ui::notice(n);
+                            }
+                            match reply.turn {
+                                Some(t) => Some(t),
+                                None => {
+                                    let _ = ready_tx.send(());
+                                    continue;
+                                }
+                            }
+                        }
+                    };
                     let game_cmd = parse_game_command(&line);
                     if let Some(cmd) = &game_cmd {
                         match cmd {
@@ -325,7 +348,9 @@ pub(crate) async fn run_plain_loop(
                     }
                     // /exam and /game on|off: swap the outgoing text and fall through to the
                     // normal ask flow below — the typed command is already echoed by rustyline.
-                    let line = if is_exam_command(&line) {
+                    let line = if let Some(t) = scenario_turn {
+                        t
+                    } else if is_exam_command(&line) {
                         if !topic_has_goal(ctx.project_root, ctx.global, ctx.topic) {
                             ui::notice("no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction");
                             let _ = ready_tx.send(());

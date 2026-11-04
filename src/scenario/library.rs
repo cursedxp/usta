@@ -63,6 +63,7 @@ const PACKAGES: &[Embedded] = &[
     ),
 ];
 
+#[cfg(test)]
 pub(crate) fn embedded_ids() -> Vec<&'static str> {
     PACKAGES.iter().map(|p| p.id).collect()
 }

@@ -222,6 +222,7 @@ pub async fn run(
         crate::shutdown::keep_going_to_save(opened, crate::shutdown::is_requested())?;
     }
 
+    let scn = crate::scenario::slot::Slot::new(global, project_root, &topic);
     let mut watching = true;
     // One honest axis (spec K4): `live` = immediate plain-review turn at
     // every flush, only by the user's explicit choice (`/watch live` or a
@@ -297,6 +298,17 @@ pub async fn run(
                                 continue;
                             }
                             if line.eq_ignore_ascii_case("/quit") { break; }
+                            // /scenario: shell-only notices; start, resume and a passing check also yield one turn for the normal ask flow below.
+                            let scenario_turn = match crate::scenario::command::parse(&line) {
+                                None => None,
+                                Some(cmd) => {
+                                    crate::tui::page::page_user_echo(&mut tui, &line)?;
+                                    if let Some(b) = crate::scenario::command::busy_note(&cmd) { crate::tui::page::page_notice(&mut tui, b)?; }
+                                    let reply = scn.handle(cmd).await;
+                                    for n in &reply.notices { crate::tui::page::page_notice(&mut tui, n)?; }
+                                    match reply.turn { Some(t) => Some(t), None => continue }
+                                }
+                            };
                             // /game: toggle persists to USER.md. Status is a local notice (never
                             // reaches the LLM). On/Off flip the pref + inject a mode-switch turn
                             // (swapped below) that flows through the normal ask — same shape as /exam.
@@ -328,8 +340,10 @@ pub async fn run(
                             }
                             // /exam: echo the literal command, gate on goal presence, then swap the
                             // outgoing text and fall through to the normal ask flow below.
-                            let images = if crate::slash::is_exam_command(&line) || game_cmd.is_some() { Vec::new() } else { editor.take_images() };
-                            let outgoing = if crate::slash::is_exam_command(&line) {
+                            let images = if crate::slash::is_exam_command(&line) || game_cmd.is_some() || scenario_turn.is_some() { Vec::new() } else { editor.take_images() };
+                            let outgoing = if let Some(t) = scenario_turn {
+                                t
+                            } else if crate::slash::is_exam_command(&line) {
                                 crate::tui::page::page_user_echo(&mut tui, "/exam")?;
                                 if !crate::slash::topic_has_goal(project_root, global, &topic) {
                                     crate::tui::page::page_error(&mut tui, "no goal set for this topic — /exam needs a goal (exam/certificate); set one in the introduction")?;
