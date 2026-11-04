@@ -709,6 +709,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_cli_output_reports_last_call_not_turn_total() {
+        // Real `claude -p` shape from a 4-call turn: the top-level counts are
+        // summed over every API call (120,724), `iterations` holds the last
+        // call alone — the actual context size (30,899).
+        let out = r#"{"result":"m","session_id":"s1","usage":{"input_tokens":10,"cache_creation_input_tokens":11506,"cache_read_input_tokens":109208,"iterations":[{"input_tokens":2,"cache_read_input_tokens":30291,"cache_creation_input_tokens":606}]}}"#;
+        let (_, _, tokens) = parse_cli_output(out).unwrap();
+        assert_eq!(tokens, Some(30899));
+    }
+
+    #[test]
     fn parse_cli_output_tokens_none_when_usage_missing() {
         let out = r#"{"result":"m","session_id":"s1"}"#;
         let (_, _, tokens) = parse_cli_output(out).unwrap();

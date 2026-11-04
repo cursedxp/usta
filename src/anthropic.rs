@@ -208,7 +208,14 @@ pub fn used_web_search(content: &[Value]) -> bool {
 
 /// Total context tokens from the usage block: input + cache read + cache write.
 /// None if `input_tokens` is missing — the indicator is silently skipped.
+/// The CLI sums the top-level counts over every API call of a turn; its
+/// `iterations` list holds the last call, the actual context size.
 pub fn sum_context_tokens(usage: &Value) -> Option<u64> {
+    let usage = usage
+        .get("iterations")
+        .and_then(Value::as_array)
+        .and_then(|calls| calls.last())
+        .unwrap_or(usage);
     let get = |k: &str| usage.get(k).and_then(Value::as_u64);
     Some(
         get("input_tokens")?
