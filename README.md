@@ -46,6 +46,8 @@ cargo build --release
 # optional: cargo install --path .
 ```
 
+The `usta` crate on crates.io is an unrelated project, so `cargo install usta` does not install this tool. Install from this repository.
+
 **Windows (prebuilt, no Rust needed):** download [usta-windows-x64.zip](https://github.com/cursedxp/usta/releases/latest/download/usta-windows-x64.zip) (always the latest release), unzip, and run `.\usta.exe start` in [Windows Terminal](https://aka.ms/terminal). The binary is unsigned, so SmartScreen may warn — *More info → Run anyway*. If Claude Code is installed, Usta finds it on its own; otherwise set `setx ANTHROPIC_API_KEY "sk-ant-..."` and reopen the terminal. If `claude` lives somewhere unusual, point Usta at it: `setx USTA_CLAUDE "C:\path\to\claude.exe"`. `OKUBENI.txt` in the zip has the same steps in Turkish.
 
 **macOS (prebuilt, universal — Apple Silicon + Intel):** download [usta-macos-universal.tar.gz](https://github.com/cursedxp/usta/releases/latest/download/usta-macos-universal.tar.gz), extract, move `usta` onto your PATH (e.g. `~/.local/bin`). It isn't notarized — if macOS blocks it, run `xattr -d com.apple.quarantine ~/.local/bin/usta` once. Setup steps are in `README.txt` inside the archive.
@@ -166,6 +168,10 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-v0.20 · Rust 2021 · 331 unit tests. Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+v0.39 · Rust 2021 (1.88+). Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-Next up: prebuilt binaries + Homebrew tap (deliberately deferred until "everyone can use it" matters). Further ideas: streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
+Next up: scenario mode, where Usta brings the work instead of waiting for your project ([design](docs/superpowers/specs/2026-11-04-scenario-mode-design.md)). Further ideas: Homebrew tap, streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
+
+## License
+
+[MIT](LICENSE)
