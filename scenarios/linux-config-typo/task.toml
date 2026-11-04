@@ -1,0 +1,23 @@
+id = "linux-config-typo"
+topic = "linux"
+title = "The port that is not a number"
+version = 1
+skills = ["config files", "grep"]
+
+[environment]
+kind = "container"
+setup = "/usr/local/lib/usta/setup.sh"
+start = "/usr/local/lib/usta/start.sh"
+
+[check]
+kind = "script"
+script = "check.sh"
+timeout_secs = 30
+
+[story]
+event = "Found and fixed a mistyped port number in the shop service's settings."
+needs = ["logs-unrotated"]
+
+[[story.opens]]
+id = "config-review"
+text = "Settings changes need a second look before they go live."

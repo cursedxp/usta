@@ -23,18 +23,45 @@ macro_rules! pkg {
     };
 }
 
-const PACKAGES: &[Embedded] = &[pkg!(
-    "linux-backup-permissions",
-    [
-        "task.toml",
-        "instruction.md",
-        "tone/adventure.md",
-        "environment/Dockerfile",
-        "environment/setup.sh",
-        "solution/solve.sh",
-        "tests/check.sh",
-    ]
-)];
+const PACKAGES: &[Embedded] = &[
+    pkg!(
+        "linux-backup-permissions",
+        [
+            "task.toml",
+            "instruction.md",
+            "tone/adventure.md",
+            "environment/Dockerfile",
+            "environment/setup.sh",
+            "solution/solve.sh",
+            "tests/check.sh",
+        ]
+    ),
+    pkg!(
+        "linux-config-typo",
+        [
+            "task.toml",
+            "instruction.md",
+            "tone/adventure.md",
+            "environment/Dockerfile",
+            "environment/setup.sh",
+            "environment/start.sh",
+            "solution/solve.sh",
+            "tests/check.sh",
+        ]
+    ),
+    pkg!(
+        "linux-disk-hog",
+        [
+            "task.toml",
+            "instruction.md",
+            "tone/adventure.md",
+            "environment/Dockerfile",
+            "environment/setup.sh",
+            "solution/solve.sh",
+            "tests/check.sh",
+        ]
+    ),
+];
 
 pub(crate) fn embedded_ids() -> Vec<&'static str> {
     PACKAGES.iter().map(|p| p.id).collect()

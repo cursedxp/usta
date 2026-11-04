@@ -14,3 +14,6 @@ pub(crate) mod package;
 pub(crate) mod select;
 pub(crate) mod store;
 pub(crate) mod terminal;
+
+#[cfg(test)]
+mod docker_tests;
