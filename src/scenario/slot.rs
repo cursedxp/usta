@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::scenario::command::{execute, Ctx, Reply, ScenarioCmd};
 use crate::scenario::container::ContainerEnv;
@@ -64,8 +65,30 @@ impl Slot {
     }
 }
 
+/// How long session end waits for a step still running before giving up on the pause.
+const DROP_WAIT: Duration = Duration::from_secs(5);
+
+impl Slot {
+    /// True once no step is running; waits up to `bound` for it to finish.
+    fn settle(&self, bound: Duration) -> bool {
+        let start = Instant::now();
+        while self.busy.load(Ordering::SeqCst) {
+            if start.elapsed() >= bound {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        true
+    }
+}
+
 impl Drop for Slot {
     fn drop(&mut self) {
+        // A step still running would race the pause. Skip it: the run stays Active
+        // with a dead owner, and the startup sweep parks that record.
+        if !self.settle(DROP_WAIT) {
+            return;
+        }
         let store = Store::new(&self.ctx.project_root);
         if !store.exists() {
             return;
@@ -117,6 +140,18 @@ mod tests {
             s.busy.load(Ordering::SeqCst),
             "the running step's flag stays set"
         );
+    }
+
+    #[test]
+    fn session_end_skips_the_pause_while_a_step_is_still_running() {
+        let s = slot();
+        s.busy.store(true, Ordering::SeqCst);
+        assert!(
+            !s.settle(Duration::from_millis(120)),
+            "still busy: skip the pause"
+        );
+        s.busy.store(false, Ordering::SeqCst);
+        assert!(s.settle(Duration::from_millis(120)));
     }
 
     #[tokio::test]

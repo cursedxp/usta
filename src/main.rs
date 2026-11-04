@@ -54,8 +54,17 @@ use crate::setup::{
 /// this it counts as a "bulk change" (git checkout, format-all): no LLM call.
 const MAX_FEEDBACK_BATCH: usize = 5;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Not `#[tokio::main]`: dropping a runtime waits for detached blocking work
+/// (a `/scenario` step) without limit, so exit would hang for up to the step's
+/// length. `shutdown_timeout` bounds it; the startup sweep handles what is left.
+fn main() -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(run());
+    rt.shutdown_timeout(std::time::Duration::from_secs(5));
+    result
+}
+
+async fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let topic_arg = match parse_command(&args)? {
         Command::Init => return run_init(),

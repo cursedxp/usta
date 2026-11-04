@@ -12,6 +12,10 @@ pub enum Status {
         frame: usize,
         cancel_hint: bool,
     },
+    /// Non-model work (a `/scenario` step): neutral label, no cancel hint.
+    Working {
+        frame: usize,
+    },
     /// End-of-session save after quit — the TUI stays up until files are written.
     Saving {
         frame: usize,
@@ -76,6 +80,12 @@ pub fn render_status(
             theme::info(),
         ));
     }
+    if let Status::Working { frame } = s {
+        spans.push(Span::styled(
+            format!("{} working… ", theme::SPINNER[frame % theme::SPINNER.len()]),
+            theme::info(),
+        ));
+    }
     if let Status::Saving { frame } = s {
         spans.push(Span::styled(
             format!(
@@ -116,6 +126,19 @@ mod tests {
             text(&render_status(&Status::Idle, None, 1_000_000, None, false)),
             ""
         );
+    }
+
+    #[test]
+    fn working_is_neutral_with_no_stop_hint() {
+        let t = text(&render_status(
+            &Status::Working { frame: 0 },
+            None,
+            1_000_000,
+            None,
+            false,
+        ));
+        assert!(t.contains("working…"), "{t}");
+        assert!(!t.contains("thinking") && !t.contains("esc"), "{t}");
     }
 
     #[test]
