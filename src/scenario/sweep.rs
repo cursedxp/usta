@@ -106,9 +106,34 @@ pub(crate) fn plan(
     acts
 }
 
-/// Run once at startup, before the session UI. No Docker call unless this
-/// project ever recorded a run. Failures are warnings, never fatal.
+/// Run once at startup, before the session UI. Record-only work first (needs
+/// no Docker, which Usta itself usually starts later), then the Docker side.
 pub(crate) fn startup(project_root: &Path, today: &str) {
+    drop_foreign(project_root, today);
+    sweep_docker(project_root, today);
+}
+
+/// Record-only sweep, no Docker: unfinished records from a moved project are
+/// marked dropped so they can never block a start.
+pub(crate) fn drop_foreign(project_root: &Path, today: &str) {
+    let store = Store::new(project_root);
+    if !store.exists() {
+        return;
+    }
+    let tag = project_tag(project_root);
+    let dead: &dyn Fn(u32) -> bool = &|_| false;
+    for a in plan(&store.all(), &[], dead, today, &tag) {
+        if let Action::DropForeign { run_id, package } = a {
+            mark_foreign(&store, &run_id, &package, today);
+        }
+    }
+}
+
+/// Docker-side sweep. Call right after `ensure_ready` in the start and resume
+/// paths too: it parks an own `Active` record whose owner is dead so it cannot
+/// block starting. No Docker call unless this project ever recorded a run;
+/// failures are warnings, never fatal.
+pub(crate) fn sweep_docker(project_root: &Path, today: &str) {
     let store = Store::new(project_root);
     if !store.exists() {
         return;
@@ -127,6 +152,20 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
     let ask = |prompt: &str| crate::setup::confirm(prompt, &["y", "yes"]).unwrap_or(false);
     let asker: Option<&dyn Fn(&str) -> bool> = if interactive { Some(&ask) } else { None };
     execute(&store, &docker, &tag, &containers, alive, today, asker);
+}
+
+fn mark_foreign(store: &Store, run_id: &str, package: &str, today: &str) {
+    let Ok(mut rec) = store.load(run_id) else {
+        return;
+    };
+    rec.state = RunState::Dropped;
+    rec.owner_pid = 0;
+    rec.updated = today.to_string();
+    if store.save(&rec).is_ok() {
+        ui::notice(&format!(
+            "task '{package}' belongs to a project folder that moved; marked it as dropped"
+        ));
+    }
 }
 
 /// True when a run file exists for `run_id` but is unreadable: a live container
@@ -166,7 +205,14 @@ pub(crate) fn execute(
                     continue; // names come from list_labeled, but never trust a stray one
                 }
                 if has_unreadable_record(store, run_id) {
-                    ui::warn("a practice task has an unreadable record; left it untouched");
+                    // Keep the work, but a running one must not stay running.
+                    if containers
+                        .iter()
+                        .any(|c| c.name == name && c.state == "running")
+                    {
+                        let _ = docker.run(&["stop", "-t", "2", &name]);
+                    }
+                    ui::warn("a practice task has an unreadable record; stopped it, kept its work");
                     continue;
                 }
                 let _ = docker.run(&["rm", "-f", &name]);
@@ -202,17 +248,7 @@ pub(crate) fn execute(
                 }
             }
             Action::DropForeign { run_id, package } => {
-                let Ok(mut rec) = store.load(&run_id) else {
-                    continue;
-                };
-                rec.state = RunState::Dropped;
-                rec.owner_pid = 0;
-                rec.updated = today.to_string();
-                if store.save(&rec).is_ok() {
-                    ui::notice(&format!(
-                        "task '{package}' belongs to a project folder that moved; marked it as dropped"
-                    ));
-                }
+                mark_foreign(store, &run_id, &package, today)
             }
             Action::AskStale {
                 run_id,
@@ -237,7 +273,9 @@ pub(crate) fn execute(
                     rec.owner_pid = 0;
                 } // "no": ask again only after another STALE_DAYS
                 rec.updated = today.to_string();
-                let _ = store.save(&rec);
+                if store.save(&rec).is_err() {
+                    ui::warn(&format!("could not update the record of task '{package}'"));
+                }
             }
         }
     }
@@ -246,7 +284,7 @@ pub(crate) fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenario::docker::fake::{ok, FakeDocker};
+    use crate::scenario::docker::fake::{fail, ok, FakeDocker};
     use crate::scenario::package::tests::tmp;
 
     const TAG: &str = "aaaa1111";
@@ -472,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn a_container_whose_record_is_corrupt_is_not_removed() {
+    fn a_running_container_behind_a_corrupt_record_is_stopped_never_removed() {
         let root = tmp("sweep_corrupt");
         let store = Store::new(&root);
         let runs = root.join(".usta/scenarios/runs");
@@ -480,21 +518,69 @@ mod tests {
         std::fs::write(runs.join("z.toml"), "not = [valid").unwrap();
         let d = fake();
         execute(&store, &d, TAG, &[found("z", "running")], DEAD, TODAY, None);
-        assert!(
-            d.calls().is_empty(),
-            "work behind an unreadable record survives"
-        );
+        assert_eq!(d.calls(), vec!["stop -t 2 usta-aaaa1111-z".to_string()]);
+        // A stopped one gets no call at all.
+        let d2 = fake();
+        execute(&store, &d2, TAG, &[found("z", "exited")], DEAD, TODAY, None);
+        assert!(d2.calls().is_empty());
         // A truly ownerless container is still removed.
         execute(
             &store,
-            &d,
+            &d2,
             TAG,
             &[found("ghost", "running")],
             DEAD,
             TODAY,
             None,
         );
-        assert_eq!(d.calls(), vec!["rm -f usta-aaaa1111-ghost".to_string()]);
+        assert_eq!(d2.calls(), vec!["rm -f usta-aaaa1111-ghost".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn foreign_records_are_dropped_with_no_docker_at_all() {
+        let root = tmp("sweep_foreign_nodocker");
+        let store = Store::new(&root);
+        let mut r = rec("m", RunState::Active, 999_999, "2026-11-04");
+        r.reference = "usta-bbbb2222-m".into();
+        store.save(&r).unwrap();
+        let mut own = rec("own", RunState::Paused, 0, "2026-11-04");
+        own.reference = format!("usta-{}-own", project_tag(&root));
+        store.save(&own).unwrap();
+        drop_foreign(&root, TODAY);
+        assert_eq!(store.load("m").unwrap().state, RunState::Dropped);
+        assert_eq!(store.load("own").unwrap().state, RunState::Paused);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_failing_clean_after_yes_keeps_the_record_paused() {
+        let root = tmp("sweep_clean_fails");
+        let store = Store::new(&root);
+        store
+            .save(&rec("old", RunState::Paused, 0, "2026-10-01"))
+            .unwrap();
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("rm") {
+                fail(1, "boom")
+            } else {
+                ok("")
+            }
+        });
+        execute(
+            &store,
+            &d,
+            TAG,
+            &[found("old", "exited")],
+            DEAD,
+            TODAY,
+            Some(&|_| true),
+        );
+        let after = store.load("old").unwrap();
+        assert_eq!(
+            (after.state, after.updated.as_str()),
+            (RunState::Paused, "2026-10-01")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -554,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tampered_reference_is_never_passed_to_docker_even_on_yes() {
+    fn a_tampered_reference_is_dropped_without_any_docker_call() {
         let root = tmp("sweep_stale_tamper");
         let store = Store::new(&root);
         let mut r = rec("old", RunState::Paused, 0, "2026-10-01");
