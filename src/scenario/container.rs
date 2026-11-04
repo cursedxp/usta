@@ -64,6 +64,20 @@ impl ContainerEnv<'_> {
         Ok(())
     }
 
+    /// The handle comes from a TOML file on disk: only ever act on this project's own containers.
+    fn owned(&self, h: &EnvHandle) -> Result<()> {
+        if h.reference
+            .starts_with(&format!("usta-{}-", self.project_tag))
+        {
+            Ok(())
+        } else {
+            Err(internal(format!(
+                "refusing to act on a container that is not this project's: {}",
+                h.reference
+            )))
+        }
+    }
+
     fn run_script(&self, name: &str, path: &str) -> Result<()> {
         self.must(&["exec", name, "sh", path]).map(|_| ())
     }
@@ -144,10 +158,12 @@ impl Environment for ContainerEnv<'_> {
     }
 
     fn pause(&mut self, h: &EnvHandle) -> Result<()> {
+        self.owned(h)?;
         self.must(&["stop", "-t", "2", &h.reference]).map(|_| ())
     }
 
     fn resume(&mut self, pkg: &Package, h: &EnvHandle) -> Result<()> {
+        self.owned(h)?;
         self.guard_single()?;
         self.must(&["start", &h.reference])?;
         if let Some(s) = &pkg.environment.start {
@@ -157,6 +173,7 @@ impl Environment for ContainerEnv<'_> {
     }
 
     fn check(&mut self, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
+        self.owned(h)?;
         if !self.is_running(&h.reference) {
             bail!("the task is not running; use /scenario resume");
         }
@@ -168,6 +185,9 @@ impl Environment for ContainerEnv<'_> {
         let run = self
             .docker
             .run(&["exec", &h.reference, "timeout", &secs, "sh", &script]);
+        // Asked before cleanup so cleanup stays the last call; only needed on a plain failure.
+        let stopped =
+            matches!(&run, Ok(o) if !matches!(o.code, 0 | 124) && !self.is_running(&h.reference));
         let _ = self
             .docker
             .run(&["exec", &h.reference, "rm", "-rf", CHECK_DIR]);
@@ -177,6 +197,17 @@ impl Environment for ContainerEnv<'_> {
             124 => CheckOutcome::Fail {
                 output: format!("the check timed out after {secs}s"),
             },
+            // 125-127 and 137 are docker/shell/kill failures, negative is a signal: never the learner's.
+            c if c < 0 || matches!(c, 125..=127 | 137) => {
+                return Err(internal(format!("check run failed ({c}): {}", o.text())))
+            }
+            // The daemon reports its own errors as exit 1; a stopped task means this was one.
+            _ if stopped => {
+                return Err(internal(format!(
+                    "task stopped during the check: {}",
+                    o.text()
+                )))
+            }
             _ => CheckOutcome::Fail {
                 output: tail(&o.text(), 20, 1500),
             },
@@ -184,6 +215,7 @@ impl Environment for ContainerEnv<'_> {
     }
 
     fn clean(&mut self, h: &EnvHandle) -> Result<()> {
+        self.owned(h)?;
         let o = self.docker.run(&["rm", "-f", &h.reference])?;
         if o.ok() || o.text().contains("No such container") {
             Ok(())
@@ -564,5 +596,75 @@ mod tests {
     fn tail_keeps_last_lines_and_caps_characters() {
         assert_eq!(tail("a\nb\nc\nd", 2, 100), "c\nd");
         assert_eq!(tail("abcdefghij", 5, 4), "ghij");
+    }
+
+    #[test]
+    fn reserved_exit_codes_are_internal_errors_not_learner_failures() {
+        for code in [125, 126, 127, 137, -1] {
+            let d = FakeDocker::new(move |l| {
+                if let Some(o) = running(l) {
+                    return o;
+                }
+                if l.contains("check.sh") {
+                    return fail(code, "daemon trouble");
+                }
+                ok("")
+            });
+            let mut env = ContainerEnv {
+                docker: &d,
+                project_tag: "aaaa1111".into(),
+            };
+            let e = env.check(&pkg(), &handle());
+            assert!(e.is_err(), "code {code} gave {e:?}");
+            assert!(d
+                .calls()
+                .last()
+                .unwrap()
+                .ends_with("rm -rf /opt/.usta-check"));
+        }
+    }
+
+    #[test]
+    fn a_task_that_stopped_between_calls_is_an_internal_error() {
+        let n = std::cell::Cell::new(0);
+        let d = FakeDocker::new(move |l| {
+            if l.starts_with("inspect") {
+                n.set(n.get() + 1);
+                return ok(if n.get() == 1 { "true\n" } else { "false\n" });
+            }
+            if l.contains("check.sh") {
+                return fail(1, "Error response from daemon");
+            }
+            ok("")
+        });
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        assert!(env.check(&pkg(), &handle()).is_err());
+    }
+
+    #[test]
+    fn foreign_references_are_refused_without_any_docker_call() {
+        let d = FakeDocker::new(|_| ok(""));
+        let mut env = ContainerEnv {
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+        };
+        let foreign = EnvHandle {
+            reference: "kiln-x".into(),
+            access: "x".into(),
+        };
+        let other = EnvHandle {
+            reference: "usta-zzzz9999-a-1".into(),
+            access: "x".into(),
+        };
+        for h in [&foreign, &other] {
+            assert!(env.clean(h).is_err());
+            assert!(env.pause(h).is_err());
+            assert!(env.resume(&pkg(), h).is_err());
+            assert!(env.check(&pkg(), h).is_err());
+        }
+        assert!(d.calls().is_empty(), "{:?}", d.calls());
     }
 }
