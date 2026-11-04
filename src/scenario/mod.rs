@@ -4,6 +4,7 @@
 //! docs/superpowers/specs/2026-11-04-scenario-mode-design.md
 #![allow(dead_code)] // removed in Task 13, once the commands are wired
 
+pub(crate) mod engine;
 pub(crate) mod env;
 pub(crate) mod package;
 pub(crate) mod store;
