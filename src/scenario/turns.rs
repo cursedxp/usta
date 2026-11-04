@@ -6,7 +6,7 @@ use crate::scenario::env::FOLDER;
 use crate::scenario::package::{Package, Tone};
 
 /// How much of the conversation a conversation task's judge reads.
-const SAID_LIMIT: usize = 30;
+const SAID_LIMIT: usize = 60;
 
 /// The conversation since the task opened or resumed, labelled, newest last. A
 /// compacted history may have lost the marker; then it is simply the latest lines.
@@ -19,16 +19,45 @@ fn synthesized(text: &str) -> bool {
         || crate::file_feedback::is_delivery_turn(text)
 }
 
+/// The task id in a `[SCENARIO ...]` marker: the `(id)` after the quoted title.
+fn marker_id(text: &str) -> Option<&str> {
+    let after = &text[text.find("\" (")? + 3..];
+    after.split(')').next()
+}
+
+fn marker_kind(text: &str) -> Option<&'static str> {
+    ["START", "RESUME", "DONE"]
+        .into_iter()
+        .find(|k| text.starts_with(&format!("[SCENARIO {k}]")))
+}
+
 pub(crate) fn conversation(history: &[Message]) -> Vec<String> {
-    let from = history
-        .iter()
-        .rposition(|m| {
-            m.role == "user" && {
-                let t = m.text();
-                t.contains("[SCENARIO START]") || t.contains("[SCENARIO RESUME]")
+    let is_marker = |m: &Message| m.role == "user" && marker_kind(&m.text()).is_some();
+    let last = history.iter().rposition(|m| {
+        m.role == "user" && {
+            let t = m.text();
+            t.contains("[SCENARIO START]") || t.contains("[SCENARIO RESUME]")
+        }
+    });
+    let from = match last {
+        None => 0,
+        Some(r) => {
+            let id = marker_id(&history[r].text()).map(str::to_string);
+            let mut from = r + 1;
+            // Back to this task's own start, across its pauses; any other task's marker ends the walk.
+            for k in (0..r).rev().filter(|&k| is_marker(&history[k])) {
+                let t = history[k].text();
+                if marker_id(&t).map(str::to_string) != id || marker_kind(&t) == Some("DONE") {
+                    break;
+                }
+                from = k + 1;
+                if marker_kind(&t) == Some("START") {
+                    break;
+                }
             }
-        })
-        .map_or(0, |i| i + 1);
+            from
+        }
+    };
     let lines: Vec<String> = history[from..]
         .iter()
         .filter(|m| m.role == "assistant" || !synthesized(&m.text()))
@@ -123,10 +152,10 @@ mod tests {
             Message::assistant_raw(serde_json::json!("b")),
         ];
         assert_eq!(conversation(&plain), vec!["learner: a", "mentor: b"]);
-        let long: Vec<Message> = (0..40).map(|i| Message::user(format!("m{i}"))).collect();
+        let long: Vec<Message> = (0..70).map(|i| Message::user(format!("m{i}"))).collect();
         let c = conversation(&long);
-        assert_eq!(c.len(), 30);
-        assert_eq!(c.last().unwrap(), "learner: m39");
+        assert_eq!(c.len(), 60);
+        assert_eq!(c.last().unwrap(), "learner: m69");
     }
 
     #[test]
@@ -142,5 +171,44 @@ mod tests {
             Message::user("I think it is the port"),
         ];
         assert_eq!(conversation(&h), vec!["learner: I think it is the port"]);
+    }
+
+    fn mk(id: &str, kind: &str) -> Message {
+        Message::user(format!(
+            "[SCENARIO {kind}] The learner x the task \"T\" ({id}). Task: y"
+        ))
+    }
+
+    #[test]
+    fn an_answer_before_a_pause_still_counts_after_resume() {
+        let h = vec![
+            mk("t-a", "START"),
+            Message::assistant_raw(serde_json::json!("question?")),
+            Message::user("my answer"),
+            mk("t-a", "RESUME"),
+            Message::assistant_raw(serde_json::json!("welcome back")),
+        ];
+        let c = conversation(&h);
+        assert!(c.contains(&"learner: my answer".to_string()), "{c:?}");
+    }
+
+    #[test]
+    fn another_tasks_talk_never_counts() {
+        let h = vec![
+            mk("t-b", "START"),
+            Message::user("b answer"),
+            mk("t-a", "START"),
+            Message::user("a answer"),
+            mk("t-a", "RESUME"),
+        ];
+        assert_eq!(conversation(&h), vec!["learner: a answer"]);
+        let h = vec![
+            mk("t-a", "START"),
+            Message::user("a answer"),
+            mk("t-b", "START"),
+            Message::user("b answer"),
+            mk("t-a", "RESUME"),
+        ];
+        assert!(conversation(&h).is_empty(), "{:?}", conversation(&h));
     }
 }

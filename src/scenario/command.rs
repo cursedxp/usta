@@ -23,6 +23,7 @@ use crate::scenario::env::{CheckOutcome, Internal};
 use crate::scenario::ledger::Ledger;
 use crate::scenario::library;
 use crate::scenario::model::Live;
+use crate::scenario::model::ModelFailed;
 use crate::scenario::package::{Package, Tone};
 use crate::scenario::pick::{open_runs, own_active, pick_resumable, pick_unfinished};
 use crate::scenario::route::Router;
@@ -160,7 +161,10 @@ pub(crate) fn render_list(
 fn failure(ctx: &Ctx, e: anyhow::Error) -> Reply {
     if e.downcast_ref::<Internal>().is_some() {
         log_error(ctx, &format!("{e:#}"));
-        Reply::note("scenario: something went wrong with the task's server; details are in .usta/scenarios/last-error.log")
+        Reply::note("scenario: something went wrong with the task; details are in .usta/scenarios/last-error.log")
+    } else if e.downcast_ref::<ModelFailed>().is_some() {
+        log_error(ctx, &format!("{e:#}"));
+        Reply::note("scenario: Usta could not reach the model just now, so this was not judged; try /scenario check again in a moment")
     } else {
         Reply::note(format!("scenario: {e}"))
     }
@@ -893,5 +897,41 @@ mod tests {
         assert!(!broken.contains("restarted") && broken.contains("did not come back up"));
         let turn = resume_turn(&pkg("cmd_turn_broken"), "Fix it.", None, false);
         assert!(!turn.contains("were restarted") && turn.contains("did not come back up"));
+    }
+
+    #[test]
+    fn a_model_outage_is_logged_and_shown_as_one_plain_sentence() {
+        let g = tmp("cmd_down_g");
+        let p = tmp("cmd_down_p");
+        let ctx = Ctx {
+            global: g.clone(),
+            project_root: p.clone(),
+            topic: "linux".into(),
+            pid: 1,
+        };
+        let down = failure(
+            &ctx,
+            crate::scenario::model::model_failed(anyhow::anyhow!("HTTP 529 overloaded_error")),
+        );
+        let shown = down.notices.concat();
+        assert!(
+            !shown.contains("529") && !shown.contains("overloaded") && !bad_words(&shown),
+            "{shown}"
+        );
+        assert!(shown.contains("model"), "{shown}");
+        let log = std::fs::read_to_string(p.join(".usta/scenarios/last-error.log")).unwrap();
+        assert!(log.contains("529"));
+        // An unreadable judge reply on a conversation task: no server in the sentence.
+        let bad = failure(
+            &ctx,
+            internal("the judge's reply could not be read: no verdict on a"),
+        );
+        let shown = bad.notices.concat();
+        assert!(
+            !shown.contains("server") && !shown.contains("no verdict"),
+            "{shown}"
+        );
+        let _ = std::fs::remove_dir_all(g);
+        let _ = std::fs::remove_dir_all(p);
     }
 }
