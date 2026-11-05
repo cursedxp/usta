@@ -919,6 +919,21 @@ fn a_gone_workspace_folder_blocks_resume_and_a_drop_keeps_the_files() {
     assert!(w.project.join("usta-tasks/done").join(&run.run_id).is_dir());
 }
 
+#[test]
+fn an_unconfirmed_drop_of_a_workspace_task_says_the_files_move_to_done() {
+    let w = workspace_world("flow_ws_warn");
+    w.start(Some("demo-pkg"));
+    let warned = w.cmd(ScenarioCmd::Drop {
+        id: None,
+        confirmed: false,
+    });
+    assert!(
+        says(&warned, "Your files move to usta-tasks/done/") && !says(&warned, "for good"),
+        "{:?}",
+        warned.notices
+    );
+}
+
 fn inspects(w: &World) -> usize {
     w.docker
         .calls()
