@@ -37,24 +37,6 @@ pub(crate) fn mount_arg(source: &Path, target: &str, readonly: bool) -> String {
     format!("type=bind,\"source={source}\",target={target}{ro}")
 }
 
-/// Delete every symlink and every hidden entry below `dir`, without following links:
-/// an editor runs `.vscode/tasks.json`, and a link could point out of the folder.
-pub(crate) fn scrub(dir: &Path) -> std::io::Result<()> {
-    for e in std::fs::read_dir(dir)? {
-        let e = e?;
-        let kind = e.file_type()?;
-        let hidden = e.file_name().to_string_lossy().starts_with('.');
-        if kind.is_dir() && !hidden {
-            scrub(&e.path())?;
-        } else if kind.is_dir() {
-            std::fs::remove_dir_all(e.path())?;
-        } else if kind.is_symlink() || hidden {
-            std::fs::remove_file(e.path())?;
-        }
-    }
-    Ok(())
-}
-
 /// A folder this prepare made, removed again after a failure.
 pub(crate) fn discard_folder(dir: Option<&Path>) {
     if let Some(d) = dir {
@@ -67,6 +49,60 @@ fn real_dir(dir: &Path) -> bool {
 }
 
 impl ContainerEnv<'_> {
+    /// Remove every hidden entry and every symlink under `target`, as root inside the
+    /// container: an editor runs `.vscode/tasks.json`, and a link could point out of the
+    /// folder. The host never walks the folder while the container can change it, so a link
+    /// swapped mid-walk resolves in the container's namespace and cannot reach the host.
+    pub(crate) fn scrub_workspace(&self, name: &str, target: &str) -> Result<()> {
+        self.must(&[
+            "exec",
+            "-u",
+            "0",
+            name,
+            "find",
+            target,
+            "-mindepth",
+            "1",
+            "(",
+            "-name",
+            ".*",
+            "-o",
+            "-type",
+            "l",
+            ")",
+            "-prune",
+            "-exec",
+            "rm",
+            "-rf",
+            "{}",
+            "+",
+        ])
+        .map(|_| ())
+        .map_err(|e| internal(format!("cannot clean the task folder: {e}")))
+    }
+
+    /// Empty the folder from inside, as root: files a root process wrote are owned by root
+    /// on a Linux host, and the host could not delete them. Best effort.
+    pub(crate) fn empty_workspace(&self, name: &str, target: &str) {
+        let _ = self.docker.run(&[
+            "exec",
+            "-u",
+            "0",
+            name,
+            "find",
+            target,
+            "-mindepth",
+            "1",
+            "-maxdepth",
+            "1",
+            "-exec",
+            "rm",
+            "-rf",
+            "{}",
+            "+",
+        ]);
+    }
+
     /// `<tasks>/<run_id>` with the starting files, new: never over someone's work.
     pub(crate) fn new_folder(
         &self,
@@ -274,31 +310,70 @@ pub(crate) mod tests {
         }
     }
 
-    #[cfg(unix)]
+    const SCRUB: &str = "exec -u 0 usta-aaaa1111-r1 find /work -mindepth 1 ( -name .* -o -type l ) -prune -exec rm -rf {} +";
+
     #[test]
-    fn what_setup_leaves_is_scrubbed_links_and_hidden_entries_only() {
+    fn the_scrub_runs_inside_the_container_after_setup_and_start() {
         let root = tmp("ws_scrub");
         let pkg = ws_pkg(&root);
-        let outside = root.join("outside.txt");
-        std::fs::write(&outside, "secret").unwrap();
+        let d = FakeDocker::new(|_| ok(""));
+        env(&d, &root).prepare(&pkg, "r1").unwrap();
+        let calls = d.calls();
+        let at = |p: &str| calls.iter().position(|c| c.starts_with(p));
+        let scrub = calls.iter().position(|c| c == SCRUB).expect("scrub call");
+        assert!(at("exec").unwrap() < scrub, "{calls:?}");
+        assert!(at("start").unwrap() < scrub);
+        assert_eq!(scrub, calls.len() - 1, "nothing after the scrub");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_host_never_walks_or_deletes_inside_the_mounted_folder() {
+        let root = tmp("ws_nowalk");
+        let pkg = ws_pkg(&root);
+        let outside = root.join("other");
+        std::fs::create_dir_all(outside.join(".git")).unwrap();
         let dir = root.join("usta-tasks/r1");
         let (dir2, outside2) = (dir.clone(), outside.clone());
         let d = FakeDocker::new(move |l| {
-            if l.starts_with("exec ") {
-                std::os::unix::fs::symlink(&outside2, dir2.join("src/link")).unwrap();
-                std::fs::create_dir_all(dir2.join(".vscode")).unwrap();
-                std::fs::write(dir2.join(".vscode/tasks.json"), "{}").unwrap();
-                std::fs::write(dir2.join("src/.env"), "x").unwrap();
+            if l.starts_with("exec ") && !l.contains(" find ") {
+                std::os::unix::fs::symlink(&outside2, dir2.join("src/linkdir")).unwrap();
+                std::fs::write(dir2.join(".env"), "x").unwrap();
             }
             ok("")
         });
         env(&d, &root).prepare(&pkg, "r1").unwrap();
-        assert!(dir.join("src/main.rs").is_file());
-        assert!(dir.join("run.sh").is_file());
-        for gone in ["src/link", ".vscode", "src/.env"] {
-            assert!(dir.join(gone).symlink_metadata().is_err(), "{gone}");
-        }
-        assert_eq!(std::fs::read_to_string(outside).unwrap(), "secret");
+        // Only the container's find removes things; the host left every entry alone.
+        assert!(dir.join("src/linkdir").symlink_metadata().is_ok());
+        assert!(dir.join(".env").is_file());
+        assert!(outside.join(".git").is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_failed_scrub_fails_prepare_and_rolls_back_from_inside() {
+        let root = tmp("ws_scrub_fail");
+        let pkg = ws_pkg(&root);
+        let d = FakeDocker::new(|l| {
+            if l.contains(" find /work -mindepth 1 ( -name") {
+                fail(1, "find: not found")
+            } else {
+                ok("")
+            }
+        });
+        assert!(env(&d, &root).prepare(&pkg, "r1").is_err());
+        assert!(!root.join("usta-tasks/r1").exists());
+        let calls = d.calls();
+        let empty = calls
+            .iter()
+            .position(|c| c == "exec -u 0 usta-aaaa1111-r1 find /work -mindepth 1 -maxdepth 1 -exec rm -rf {} +")
+            .expect("emptied from inside");
+        let rm = calls
+            .iter()
+            .position(|c| c.starts_with("rm -f usta-"))
+            .unwrap();
+        assert!(empty < rm, "{calls:?}");
         let _ = std::fs::remove_dir_all(root);
     }
 
