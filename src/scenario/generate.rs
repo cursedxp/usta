@@ -895,10 +895,9 @@ mod tests {
     impl Model for Truncating<'_> {
         fn ask(&self, s: &str, p: &str) -> Result<crate::scenario::model::ModelText> {
             let mut r = self.inner.ask(s, p)?;
-            r.truncated = self.left.load(Ordering::SeqCst) > 0;
-            let _ = self
-                .left
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+            let left = self.left.load(Ordering::SeqCst);
+            r.truncated = left > 0;
+            self.left.store(left.saturating_sub(1), Ordering::SeqCst);
             Ok(r)
         }
     }
