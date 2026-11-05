@@ -254,11 +254,11 @@ fn check_label(pkg: &Package) -> &'static str {
 }
 
 /// A folder task's files outlive it and a conversation leaves none; only a server is removed.
-fn drop_warning(rec: &RunRecord, title: &str) -> String {
+fn drop_warning(rec: &RunRecord, title: &str, keeps_folder: bool) -> String {
     let id = &rec.run_id;
     match rec.env.as_str() {
-        CONTAINER => format!("This removes your work on '{title}' for good, and nothing from it counts toward your progress. To go ahead: /scenario drop {id} confirm"),
-        FOLDER => format!("This ends '{title}', and nothing from it counts toward your progress. Your files move to {TASKS_DIR}/{DONE_DIR}/. To go ahead: /scenario drop {id} confirm"),
+        CONTAINER if !keeps_folder => format!("This removes your work on '{title}' for good, and nothing from it counts toward your progress. To go ahead: /scenario drop {id} confirm"),
+        FOLDER | CONTAINER => format!("This ends '{title}', and nothing from it counts toward your progress. Your files move to {TASKS_DIR}/{DONE_DIR}/. To go ahead: /scenario drop {id} confirm"),
         _ => format!("This ends '{title}', and nothing from it counts toward your progress. To go ahead: /scenario drop {id} confirm"),
     }
 }
@@ -447,7 +447,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             let mut rec = pick_unfinished(&store, id.as_deref(), &ctx.topic, ctx.pid)?;
             let title = title_of(&pkgs, &rec.package);
             if !confirmed {
-                return Ok(Reply::note(drop_warning(&rec, &title)));
+                return Ok(Reply::note(drop_warning(&rec, &title, keeps_folder(&pkgs, &rec))));
             }
             // Drop works without the runtime: a clean that cannot run is retried at the next start.
             let warning = engine::drop_run(&mut env, &store, &mut rec, &tick)?;
