@@ -202,6 +202,7 @@ pub(crate) mod tests {
 
     fn env<'a>(d: &'a FakeDocker, root: &Path) -> ContainerEnv<'a> {
         ContainerEnv {
+            bases: None,
             docker: d,
             project_tag: TAG.into(),
             tasks: root.join("usta-tasks"),
@@ -506,7 +507,12 @@ pub(crate) mod tests {
         std::fs::write(root.join("usta-tasks/r1/mine.rs"), "mine").unwrap();
         d.calls.borrow_mut().clear();
         e.clean(&h).unwrap();
-        assert_eq!(d.calls(), vec!["rm -f usta-aaaa1111-r1".to_string()]);
+        let rm = "rm -f usta-aaaa1111-r1".to_string();
+        assert!(
+            d.calls().contains(&rm) && d.calls().len() == 2,
+            "{:?}",
+            d.calls()
+        );
         assert!(!root.join("usta-tasks/r1").exists());
         assert!(root.join("usta-tasks/done/r1/old.rs").is_file());
         assert!(root.join("usta-tasks/done/r1-2/mine.rs").is_file());
@@ -555,7 +561,7 @@ pub(crate) mod tests {
         let root = tmp("ws_plain_clean");
         let d = FakeDocker::new(|_| ok(""));
         env(&d, &root).clean(&handle("r1")).unwrap();
-        assert_eq!(d.calls().len(), 1);
+        assert_eq!(d.calls().len(), 2); // the image lookup, then the removal
         assert!(!root.join("usta-tasks").exists());
         let _ = std::fs::remove_dir_all(root);
     }

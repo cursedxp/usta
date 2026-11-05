@@ -3,6 +3,7 @@
 //! only the five-operation `Environment` contract. Spec:
 //! docs/superpowers/specs/2026-11-04-scenario-mode-design.md
 
+pub(crate) mod bases;
 pub(crate) mod command;
 pub(crate) mod container;
 pub(crate) mod docker;

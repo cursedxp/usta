@@ -47,6 +47,7 @@ fn certify(id: &str) {
         .expect("package present");
     let d = RealDocker;
     let mut env = ContainerEnv {
+        bases: None,
         tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
@@ -98,6 +99,7 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
         .unwrap();
     let d = RealDocker;
     let mut env = ContainerEnv {
+        bases: None,
         tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
@@ -163,6 +165,7 @@ fn a_generated_recipe_builds_inside_limits_and_is_certified() {
     let _guard = Cleanup(format!("usta-{TAG}-cert-gen"));
     let _image = ImageCleanup(ContainerEnv::image(&pkg));
     let mut env = ContainerEnv {
+        bases: None,
         tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
@@ -171,6 +174,34 @@ fn a_generated_recipe_builds_inside_limits_and_is_certified() {
         prove_script(&mut env, &pkg, "cert-gen").unwrap(),
         Proof::Passed
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+#[ignore = "needs Docker"]
+fn a_generated_tasks_image_goes_with_a_learner_run_but_survives_a_proof_run() {
+    let root = tmp("cert_rmi");
+    let pkg = generated_container(&root);
+    let image = ContainerEnv::image(&pkg);
+    let _image = ImageCleanup(image.clone());
+    let d = RealDocker;
+    let mut env = ContainerEnv {
+        bases: None,
+        tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
+        docker: &d,
+        project_tag: TAG.into(),
+    };
+    let here = || {
+        d.run(&["image", "inspect", &image])
+            .map(|o| o.ok())
+            .unwrap_or(false)
+    };
+    for (run, survives) in [("val-cert-rmi", true), ("cert-rmi", false)] {
+        let _guard = Cleanup(format!("usta-{TAG}-{run}"));
+        let h = env.prepare(&pkg, run).unwrap();
+        env.clean(&h).unwrap();
+        assert_eq!(here(), survives, "{run}");
+    }
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -185,7 +216,7 @@ fn a_recipe_cannot_exceed_the_build_memory() {
     )
     .unwrap();
     let _image = ImageCleanup(ContainerEnv::image(&pkg));
-    crate::scenario::limited_build::build(&RealDocker, &pkg, &ContainerEnv::image(&pkg), TAG)
+    crate::scenario::limited_build::build(&RealDocker, &pkg, &ContainerEnv::image(&pkg), TAG, None)
         .unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
@@ -199,6 +230,7 @@ fn a_task_container_runs_under_the_file_size_limit_for_every_exec() {
     let _guard = Cleanup(format!("usta-{TAG}-cert-ul"));
     let _image = ImageCleanup(ContainerEnv::image(&pkg));
     let mut env = ContainerEnv {
+        bases: None,
         tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
@@ -235,6 +267,7 @@ fn a_folder_script_check_cannot_write_to_the_task_and_has_no_network() {
     let pkg = Package::load(&d).unwrap();
     let docker = RealDocker;
     let mut env = FolderEnv {
+        bases: None,
         docker: &docker,
         project_tag: TAG.into(),
         tasks: root.join("tasks"),
@@ -272,6 +305,7 @@ fn a_workspace_is_shared_both_ways_checked_and_moved_to_done() {
     let _image = ImageCleanup(ContainerEnv::image(&pkg));
     let tasks = root.join("usta-tasks");
     let mut env = ContainerEnv {
+        bases: None,
         docker: &docker,
         project_tag: TAG.into(),
         tasks: tasks.clone(),

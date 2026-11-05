@@ -43,7 +43,7 @@ pub(crate) enum Action {
     },
 }
 
-fn age_days(updated: &str, today: &str) -> Option<i64> {
+pub(crate) fn age_days(updated: &str, today: &str) -> Option<i64> {
     let u = NaiveDate::parse_from_str(updated, "%Y-%m-%d").ok()?;
     let t = NaiveDate::parse_from_str(today, "%Y-%m-%d").ok()?;
     Some((t - u).num_days())
@@ -189,6 +189,7 @@ pub(crate) fn startup(project_root: &Path, today: &str) {
             &crate::lock::pid_alive,
             asker,
         );
+        crate::scenario::bases::sweep(&RealDocker, &crate::scenario::bases::file(global), today);
     }
 }
 
@@ -435,7 +436,14 @@ fn execute_on(records: &[RunRecord], s: &Sweeper) {
                     });
                     continue;
                 }
+                // A finished or dropped task whose `clean` failed: its image is still ours to free.
+                let image = records
+                    .iter()
+                    .find(|r| r.run_id == run_id)
+                    .filter(|r| matches!(r.state, RunState::Finished | RunState::Dropped))
+                    .and_then(|_| env.container.disposable_image(&name));
                 let _ = docker.run(&["rm", "-fv", &name]);
+                env.container.remove_image(image);
             }
             Action::StopContainer(name) => {
                 if !name.starts_with(&mine) {
@@ -907,7 +915,35 @@ mod tests {
             Some(&|_| true),
         );
         assert_eq!(store.load("old").unwrap().state, RunState::Dropped);
-        assert_eq!(d.calls(), vec!["rm -f usta-aaaa1111-old".to_string()]);
+        assert!(d.calls().contains(&"rm -f usta-aaaa1111-old".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_left_server_of_a_finished_generated_task_takes_its_image_with_it() {
+        let root = tmp("sweep_left_image");
+        let store = Store::new(&root);
+        store
+            .save(&rec("done", RunState::Finished, 0, "2026-11-01"))
+            .unwrap();
+        store
+            .save(&rec("open", RunState::Paused, 0, "2026-11-03"))
+            .unwrap();
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("inspect -f {{.Config.Image}}") {
+                ok("usta-scn-gen-x-1:v1\n")
+            } else {
+                ok("")
+            }
+        });
+        let cs = [found("done", "exited"), found("open", "exited")];
+        execute(&store, &d, TAG, &cs, DEAD, TODAY, None);
+        let rmis: Vec<_> = d
+            .calls()
+            .into_iter()
+            .filter(|c| c.starts_with("rmi"))
+            .collect();
+        assert_eq!(rmis, vec!["rmi usta-scn-gen-x-1:v1"], "{:?}", d.calls());
         let _ = std::fs::remove_dir_all(root);
     }
 
