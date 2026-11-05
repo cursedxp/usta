@@ -1,7 +1,8 @@
-//! Base images Usta itself pulled for a generated build (or the folder check image).
+//! Base images Usta itself pulled for a generated build (or the folder check image),
+//! and the images of generated tasks (`usta-scn-gen-...:v<n>`, dated at every run).
 //! One line per image in `<global>/scenarios/bases.txt`: `<image> <YYYY-MM-DD>`, the
 //! day a build last used it. A base that was already on the machine is never written
-//! here, so it is never removed. The startup sweep removes a recorded base nobody has
+//! here, so it is never removed. The startup sweep removes a recorded image nobody has
 //! used for `OLD_DAYS`. The file is untrusted input: only allowlisted names are read.
 
 use std::path::{Path, PathBuf};
@@ -18,8 +19,23 @@ pub(crate) fn file(global: &Path) -> PathBuf {
     global.join("scenarios/bases.txt")
 }
 
+/// A generated task's image: `usta-scn-gen-<lowercase, digits, dashes>:v<number>`.
+fn task_ok(image: &str) -> bool {
+    let Some((name, tag)) = image.split_once(':') else {
+        return false;
+    };
+    let id = name.strip_prefix("usta-scn-gen-").unwrap_or("");
+    let n = tag.strip_prefix('v').unwrap_or("");
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !n.is_empty()
+        && n.chars().all(|c| c.is_ascii_digit())
+}
+
 fn allowed(image: &str) -> bool {
-    image == CHECK_IMAGE || base_ok(image)
+    image == CHECK_IMAGE || base_ok(image) || task_ok(image)
 }
 
 /// The lines that are well formed: an allowed image and a real date. The rest are dropped.
@@ -46,6 +62,14 @@ fn write(file: &Path, lines: &[(String, String)]) {
 /// Usta just pulled `image`: record it, dated today.
 pub(crate) fn pulled(file: &Path, image: &str, today: &str) {
     if allowed(image) {
+        set(file, image, today, true);
+    }
+}
+
+/// A generated task's image was built or is about to run: record it, dated today, or
+/// refresh its date. Anything but a task image name is ignored.
+pub(crate) fn task_used(file: &Path, image: &str, today: &str) {
+    if task_ok(image) {
         set(file, image, today, true);
     }
 }
@@ -125,6 +149,59 @@ mod tests {
         pulled(&f, "-p8080:80", "2026-11-05");
         pulled(&f, "evil/rust:1", "2026-11-05");
         assert_eq!(read(&f).len(), 1, "off the allowlist is not recorded");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_task_image_is_recorded_and_refreshed_and_only_a_strict_name() {
+        let root = tmp("bases_task");
+        let f = file(&root);
+        task_used(&f, "usta-scn-gen-x-1:v2", "2026-10-01");
+        task_used(&f, "usta-scn-gen-x-1:v2", "2026-11-05");
+        for bad in [
+            "usta-scn-gen-x-1:v2-bld",
+            "usta-scn-gen-x-1:latest",
+            "usta-scn-gen-:v1",
+            "usta-scn-gen-X:v1",
+            "usta-scn-gen-x;rm:v1",
+            "usta-scn-linux-backup:v2",
+            "evil/usta-scn-gen-x-1:v1",
+            "usta-scn-gen-x-1:v",
+        ] {
+            task_used(&f, bad, "2026-11-05");
+        }
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "usta-scn-gen-x-1:v2 2026-11-05\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_sweep_removes_an_old_task_image_and_never_a_foreign_name() {
+        let root = tmp("bases_task_sweep");
+        let f = file(&root);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(
+            &f,
+            "usta-scn-gen-old-1:v1 2026-10-01\nusta-scn-gen-new-1:v1 2026-11-04\n\
+             usta-scn-gen-busy-1:v1 2026-10-01\nusta-scn-gen-x:v1-bld 2020-01-01\n\
+             usta-scn-linux-backup:v2 2020-01-01\nusta-scn-gen-a b:v1 2020-01-01\n",
+        )
+        .unwrap();
+        let d = FakeDocker::new(|l| match l {
+            "rmi usta-scn-gen-busy-1:v1" => fail(1, "image is being used by container abc"),
+            _ => ok("27"),
+        });
+        sweep(&d, &f, "2026-11-05");
+        assert_eq!(
+            rmis(&d),
+            vec!["rmi usta-scn-gen-old-1:v1", "rmi usta-scn-gen-busy-1:v1"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "usta-scn-gen-new-1:v1 2026-11-04\nusta-scn-gen-busy-1:v1 2026-10-01\n"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

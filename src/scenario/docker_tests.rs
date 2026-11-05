@@ -142,7 +142,7 @@ fn a_generated_recipe_builds_inside_limits_and_is_certified() {
 
 #[test]
 #[ignore = "needs Docker"]
-fn a_generated_tasks_image_goes_with_a_learner_run_but_survives_a_proof_run() {
+fn a_generated_tasks_image_survives_the_end_of_any_run() {
     let root = tmp("cert_rmi");
     let pkg = generated_container(&root);
     let image = ContainerEnv::image(&pkg);
@@ -159,11 +159,11 @@ fn a_generated_tasks_image_goes_with_a_learner_run_but_survives_a_proof_run() {
             .map(|o| o.ok())
             .unwrap_or(false)
     };
-    for (run, survives) in [("val-cert-rmi", true), ("cert-rmi", false)] {
+    for run in ["val-cert-rmi", "cert-rmi"] {
         let _guard = Cleanup(format!("usta-{TAG}-{run}"));
         let h = env.prepare(&pkg, run).unwrap();
         env.clean(&h).unwrap();
-        assert_eq!(here(), survives, "{run}");
+        assert!(here(), "{run}: the image outlives the run");
     }
     let _ = std::fs::remove_dir_all(root);
 }

@@ -137,7 +137,7 @@ Any other word after `/scenario` counts as a request, so a typo starts a new tas
 
 A script check is exact: it looks at the real result. A rubric check is Usta's judgment against written criteria, so it counts for less. Usta tells you which one was used.
 
-**Files and leaving.** Quit whenever you like: a running task stops and your work stays. When a task ends, its files move to `usta-tasks/done/`. Usta removes what it no longer needs: a generated task's image when the task ends, and base images it pulled itself after 14 unused days. Images you pulled yourself are never touched.
+**Files and leaving.** Quit whenever you like: a running task stops and your work stays. When a task ends, its files move to `usta-tasks/done/`. Usta removes what it no longer needs: a generated task's image and the base images it pulled itself, each after 14 unused days. Images you pulled yourself are never touched.
 
 **Limits**
 
