@@ -132,7 +132,7 @@ Prior art shows two opposite failures: checks that reject valid solutions, and c
 - Each container has `--memory`, `--cpus` and `--pids-limit` set.
 - At most one container runs at a time. Other unfinished tasks wait stopped.
 - Network is off by default. A scenario declares it when needed, for example to fetch crates.
-- Disk: when a learner's run of a generated task ends, its image `usta-scn-gen-...` is removed with a plain `docker rmi` (never `-f`, best effort; the package stays and `prepare` rebuilds a missing image). Proof runs keep the image and shipped packages are never touched. Base images Usta itself pulled are listed in `scenarios/bases.txt` beside the library; the startup sweep removes a listed base unused for 14 days, only if the runtime is already running. A base that was on the machine first is never listed, so never removed.
+- Disk: when a learner's run of a generated task ends, its image `usta-scn-gen-...` is removed with a plain `docker rmi` (never `-f`, best effort; the package stays and `prepare` rebuilds a missing image). Proof runs keep the image. Base images Usta itself pulled are listed in `scenarios/bases.txt` beside the library; the startup sweep removes a listed base unused for 14 days, only if the runtime is already running. A base that was on the machine first is never listed, so never removed.
 - Usta warns if the container runtime is older than the fixes for the November 2025 runc escapes (CVE-2025-31133, CVE-2025-52565, CVE-2025-52881).
 - Containers carry a `usta-` name prefix and label. Usta touches nothing else.
 - On startup Usta removes only leftovers of finished tasks and `usta-` containers with no record. It never removes an unfinished task without asking.
@@ -185,7 +185,7 @@ Usta gives no advice on real positions, never uses real money, and generates sce
 
 ## Generation on demand
 
-Hand-written packages are examples, not the product. A person can ask for any subject at any moment, and Usta produces the scenario then.
+Hand-written packages are not the product (the three examples were removed on 2026-11-05). A person can ask for any subject at any moment, and Usta produces the scenario then.
 
 - `/scenario start` in any topic generates a scenario when no suitable package is left. No topic ever answers "no tasks".
 - The model receives the topic, the curriculum map, the learner's level, the world ledger and the finished scenarios. It returns a package in the fixed format and picks the environment using the three questions above.
@@ -208,7 +208,7 @@ Model-written content is untrusted.
 
 This is the order of construction, not a limit on the product.
 
-1. **Done (v0.40.0):** scenario engine, contract, container environment, three Linux scenarios in a plain and an adventure tone.
+1. **Done (v0.40.0):** scenario engine, contract, container environment, three Linux scenarios in a plain and an adventure tone. The three built-in scenarios were removed on 2026-11-05: Usta generates every task.
 2. **Done (v0.41.0), any subject, on demand:** generate and validate, the local library, and the folder and conversation-only environments.
 3. **Own editor:** the mounted task folder for container tasks, tried on a programming language.
 

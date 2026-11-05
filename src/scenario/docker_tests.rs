@@ -7,7 +7,6 @@ use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{Docker, RealDocker};
 use crate::scenario::env::{CheckOutcome, Environment};
 use crate::scenario::folder::FolderEnv;
-use crate::scenario::library;
 use crate::scenario::model::NoModel;
 use crate::scenario::package::tests::tmp;
 use crate::scenario::package::Package;
@@ -36,67 +35,30 @@ fn is_fail(o: &CheckOutcome) -> bool {
     matches!(o, CheckOutcome::Fail { .. })
 }
 
-fn certify(id: &str) {
-    let global = tmp(&format!("cert_{id}"));
-    library::sync(&global).unwrap();
-    let pkg = library::load_all(&global, "linux")
-        .unwrap()
-        .pkgs
-        .into_iter()
-        .find(|p| p.id == id)
-        .expect("package present");
-    let d = RealDocker;
-    let mut env = ContainerEnv {
-        bases: None,
-        tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
-        docker: &d,
-        project_tag: TAG.into(),
-    };
-    let _guard = Cleanup(format!("usta-{TAG}-cert-{id}"));
-    let h = env.prepare(&pkg, &format!("cert-{id}")).unwrap();
-    // Condition 1: on the fresh environment (also the "do nothing" attempt) the check fails.
-    let fresh = env.check(&pkg, &h).unwrap();
-    assert!(is_fail(&fresh), "{id}: fresh check must fail");
-    // Condition 2: after the reference solution, the check passes.
-    env.apply_solution(&pkg, &h).unwrap();
-    assert_eq!(
-        env.check(&pkg, &h).unwrap(),
-        CheckOutcome::Pass,
-        "{id}: solved check must pass"
-    );
-    env.clean(&h).unwrap();
-    let _ = std::fs::remove_dir_all(global);
-}
-
-#[test]
-#[ignore = "needs Docker"]
-fn backup_permissions_is_certified() {
-    certify("linux-backup-permissions");
-}
-
-#[test]
-#[ignore = "needs Docker"]
-fn disk_hog_is_certified() {
-    certify("linux-disk-hog");
-}
-
-#[test]
-#[ignore = "needs Docker"]
-fn config_typo_is_certified() {
-    certify("linux-config-typo");
+/// A container task whose start script appends a line to a log, so a restart is countable.
+fn lifecycle_container(root: &std::path::Path) -> Package {
+    let d = root.join("gen-cert-3");
+    for (f, c) in [
+        ("task.toml", "id = \"gen-cert-3\"\ntopic = \"cert\"\ntitle = \"T\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"container\"\nstart = \"/opt/x/start.sh\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n"),
+        ("instruction.md", "Make /root/done exist.\n"),
+        ("tone/adventure.md", "## open\nGo.\n\n## close\nDone.\n"),
+        ("environment/Dockerfile", "FROM debian:12-slim\nCOPY start.sh /opt/x/\nWORKDIR /root\n"),
+        ("environment/start.sh", "echo up >> /var/log/starts.log\n"),
+        ("solution/solve.sh", "touch /root/done\n"),
+        ("tests/check.sh", "[ -f /root/done ] || exit 1\nexit 0\n"),
+    ] {
+        std::fs::create_dir_all(d.join(f).parent().unwrap()).unwrap();
+        std::fs::write(d.join(f), c).unwrap();
+    }
+    Package::load(&d).unwrap()
 }
 
 #[test]
 #[ignore = "needs Docker"]
 fn pause_keeps_files_and_resume_reruns_the_start_script() {
-    let global = tmp("cert_lifecycle");
-    library::sync(&global).unwrap();
-    let pkg = library::load_all(&global, "linux")
-        .unwrap()
-        .pkgs
-        .into_iter()
-        .find(|p| p.id == "linux-config-typo")
-        .unwrap();
+    let root = tmp("cert_lifecycle");
+    let pkg = lifecycle_container(&root);
+    assert_eq!(pkg.lint(), Vec::<String>::new());
     let d = RealDocker;
     let mut env = ContainerEnv {
         bases: None,
@@ -105,6 +67,7 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
         project_tag: TAG.into(),
     };
     let _guard = Cleanup(format!("usta-{TAG}-cert-life"));
+    let _image = ImageCleanup(ContainerEnv::image(&pkg));
     let h = env.prepare(&pkg, "cert-life").unwrap();
     let name = h.reference.clone();
     assert!(d
@@ -124,7 +87,7 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
         "files survive a stop"
     );
     let starts = d
-        .run(&["exec", &name, "wc", "-l", "/var/log/shopd/starts.log"])
+        .run(&["exec", &name, "wc", "-l", "/var/log/starts.log"])
         .unwrap();
     assert!(
         starts.stdout.trim_start().starts_with('2'),
@@ -134,7 +97,7 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
     env.clean(&h).unwrap();
     let gone = d.run(&["inspect", &name]).unwrap();
     assert!(!gone.ok(), "clean must remove the container");
-    let _ = std::fs::remove_dir_all(global);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// A generated package on disk, as staging would hold it.

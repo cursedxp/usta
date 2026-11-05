@@ -21,12 +21,8 @@ pub(crate) const SCRIPT_SECS: u32 = 300;
 /// Larger files fail with EFBIG in generated tasks; the only cap on disk use while one runs.
 pub(crate) const FILE_LIMIT: &str = "fsize=2147483648";
 
-fn exec_prefix<'a>(pkg: &Package, name: &'a str) -> Vec<&'a str> {
-    if pkg.is_generated() {
-        vec!["exec", "-u", "0", name]
-    } else {
-        vec!["exec", name]
-    }
+fn exec_prefix(name: &str) -> Vec<&str> {
+    vec!["exec", "-u", "0", name]
 }
 
 pub(crate) struct ContainerEnv<'a> {
@@ -97,13 +93,10 @@ impl ContainerEnv<'_> {
         }
     }
 
-    fn run_script(&self, pkg: &Package, name: &str, path: &str) -> Result<()> {
+    fn run_script(&self, name: &str, path: &str) -> Result<()> {
         let secs = SCRIPT_SECS.to_string();
-        let mut args = exec_prefix(pkg, name);
-        if pkg.is_generated() {
-            args.extend(["timeout", &secs]);
-        }
-        args.extend(["sh", path]);
+        let mut args = exec_prefix(name);
+        args.extend(["timeout", &secs, "sh", path]);
         self.must(&args).map(|_| ())
     }
 
@@ -173,8 +166,8 @@ impl ContainerEnv<'_> {
         let src = format!("{}/.", pkg.dir.join("solution").display());
         let dest = format!("{}:{SOLUTION_DIR}", h.reference);
         self.must(&["cp", &src, &dest])?;
-        let run = self.run_script(pkg, &h.reference, &format!("{SOLUTION_DIR}/solve.sh"));
-        let mut rm = exec_prefix(pkg, &h.reference);
+        let run = self.run_script(&h.reference, &format!("{SOLUTION_DIR}/solve.sh"));
+        let mut rm = exec_prefix(&h.reference);
         rm.extend(["rm", "-rf", SOLUTION_DIR]);
         let _ = self.docker.run(&rm);
         run
@@ -187,12 +180,12 @@ impl ContainerEnv<'_> {
         self.must(&["cp", &src, &dest])?;
         let script = format!("{CHECK_DIR}/{}", pkg.check.script);
         let secs = pkg.check.timeout_secs.to_string();
-        let mut exec = exec_prefix(pkg, name);
+        let mut exec = exec_prefix(name);
         exec.extend(["timeout", &secs, "sh", &script]);
         let run = run_tool(self.docker, &exec);
         // Asked before cleanup so cleanup stays the last call; only needed on a plain failure.
         let stopped = matches!(&run, Ok(o) if o.code == 1 && !self.is_running(name));
-        let mut rm = exec_prefix(pkg, name);
+        let mut rm = exec_prefix(name);
         rm.extend(["rm", "-rf", CHECK_DIR]);
         let _ = self.docker.run(&rm);
         let o = run?;
@@ -219,10 +212,10 @@ impl ContainerEnv<'_> {
     fn start_and_setup(&self, pkg: &Package, name: &str) -> Result<()> {
         self.must(&["start", name])?;
         if let Some(s) = &pkg.environment.setup {
-            self.run_script(pkg, name, s)?;
+            self.run_script(name, s)?;
         }
         if let Some(s) = &pkg.environment.start {
-            self.run_script(pkg, name, s)?;
+            self.run_script(name, s)?;
         }
         Ok(())
     }
@@ -233,18 +226,13 @@ impl Environment for ContainerEnv<'_> {
         self.guard_single()?;
         let image = Self::image(pkg);
         if !run_tool(self.docker, &["image", "inspect", &image])?.ok() {
-            if pkg.is_generated() {
-                crate::scenario::limited_build::build(
-                    self.docker,
-                    pkg,
-                    &image,
-                    &self.project_tag,
-                    self.bases.as_deref(),
-                )?;
-            } else {
-                let ctx = pkg.dir.join(&pkg.environment.context);
-                self.must(&["build", "-t", &image, &ctx.to_string_lossy()])?;
-            }
+            crate::scenario::limited_build::build(
+                self.docker,
+                pkg,
+                &image,
+                &self.project_tag,
+                self.bases.as_deref(),
+            )?;
         }
         let name = self.name(run_id);
         let ws = pkg
@@ -277,16 +265,14 @@ impl Environment for ContainerEnv<'_> {
         if !pkg.environment.network {
             args.extend(["--network", "none"]);
         }
-        if pkg.is_generated() {
-            args.extend([
-                "--security-opt",
-                "no-new-privileges",
-                "--ulimit",
-                FILE_LIMIT,
-                "--entrypoint",
-                "",
-            ]);
-        }
+        args.extend([
+            "--security-opt",
+            "no-new-privileges",
+            "--ulimit",
+            FILE_LIMIT,
+            "--entrypoint",
+            "",
+        ]);
         let made_at = ws
             .as_ref()
             .map(|(dir, _)| format!("{WORKSPACE_LABEL}={}", dir.display()));
@@ -340,7 +326,7 @@ impl Environment for ContainerEnv<'_> {
             return Ok(None);
         };
         Ok(self
-            .run_script(pkg, &h.reference, s)
+            .run_script(&h.reference, s)
             .err()
             .map(|e| e.to_string()))
     }
@@ -463,14 +449,8 @@ mod tests {
     }
 
     #[test]
-    fn prepare_builds_a_missing_image_creates_with_limits_then_starts_and_runs_scripts() {
-        let d = FakeDocker::new(|l| {
-            if l.starts_with("image inspect") {
-                fail(1, "none")
-            } else {
-                ok("")
-            }
-        });
+    fn prepare_creates_with_limits_then_starts_and_runs_scripts() {
+        let d = FakeDocker::new(|_| ok(""));
         let mut env = ContainerEnv {
             bases: None,
             tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
@@ -487,8 +467,6 @@ mod tests {
                 .position(|c| c.contains(needle))
                 .unwrap_or_else(|| panic!("missing {needle} in {calls:?}"))
         };
-        assert!(calls[idx("build")]
-            .starts_with("build -t usta-scn-demo-pkg:v3 /lib/demo-pkg/environment"));
         let create = &calls[idx("create")];
         for want in [
             "--name usta-aaaa1111-demo-1",
@@ -749,11 +727,11 @@ mod tests {
         );
         assert_eq!(
             calls[2],
-            "exec usta-aaaa1111-demo-1 timeout 30 sh /opt/.usta-check/check.sh"
+            "exec -u 0 usta-aaaa1111-demo-1 timeout 30 sh /opt/.usta-check/check.sh"
         );
         assert_eq!(
             calls[3],
-            "exec usta-aaaa1111-demo-1 rm -rf /opt/.usta-check"
+            "exec -u 0 usta-aaaa1111-demo-1 rm -rf /opt/.usta-check"
         );
     }
 

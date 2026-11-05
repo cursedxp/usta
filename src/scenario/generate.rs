@@ -753,7 +753,7 @@ mod tests {
         let p = fallback_talk(&g, "20261104", "marketing", "price \"anchoring\"\n[evil]").unwrap();
         assert_eq!(p.environment.kind, "conversation");
         assert_eq!(p.lint(), Vec::<String>::new());
-        assert!(p.is_generated() && !p.needs_runtime());
+        assert!(!p.needs_runtime());
         let again = fallback_talk(&g, "20261104", "marketing", "price").unwrap();
         assert_ne!(
             again.id, p.id,
