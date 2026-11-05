@@ -47,7 +47,7 @@ fn time_limit(args: &[&str]) -> Duration {
         Some("inspect") if args.contains(&"-s") => 60,
         Some("version" | "ps" | "inspect" | "image") => 10,
         Some("stop") => 15,
-        Some("rm") => 30,
+        Some("rm" | "rmi") => 30,
         Some("create" | "start" | "cp") => 60,
         Some("build") => 1800,
         _ => 600,
