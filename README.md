@@ -106,7 +106,7 @@ usta start rust
 /scenario start a small Rust program with a bug I have to fix
 ```
 
-Usta writes the task and tests that it can be solved before you see it. This takes about 2 to 10 minutes; progress is on screen and Esc cancels. Tasks that pass are kept, so reusing one needs no wait.
+Usta writes the task and tests that it can be solved before you see it. The first use of a language also downloads its base image (about 1 GB for Rust) before those 2 to 10 minutes. Progress is on screen and Esc cancels. Tasks that pass are kept; a kept task may need a few minutes to set up again if it went unused for a while.
 
 **Commands**
 
@@ -134,6 +134,8 @@ Any other word after `/scenario` counts as a request, so a typo starts a new tas
 | Server repair | The terminal window Usta opens, already inside the server | Script, inside the task | Yes |
 | Files | A folder of files, such as a brief and data to work from | Script or rubric | Only for a script |
 | Conversation | Right here in the chat | Rubric | No |
+
+In a code task the toolchain lives in the task, so without it installed on your computer your editor shows no language errors. Build errors appear in the task's terminal window, and the task text names the command to run there.
 
 A script check is exact: it looks at the real result. A rubric check is Usta's judgment against written criteria, so it counts for less. Usta tells you which one was used.
 
