@@ -436,14 +436,7 @@ fn execute_on(records: &[RunRecord], s: &Sweeper) {
                     });
                     continue;
                 }
-                // A finished or dropped task whose `clean` failed: its image is still ours to free.
-                let image = records
-                    .iter()
-                    .find(|r| r.run_id == run_id)
-                    .filter(|r| matches!(r.state, RunState::Finished | RunState::Dropped))
-                    .and_then(|_| env.container.disposable_image(&name));
                 let _ = docker.run(&["rm", "-fv", &name]);
-                env.container.remove_image(image);
             }
             Action::StopContainer(name) => {
                 if !name.starts_with(&mine) {
@@ -920,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn a_left_server_of_a_finished_generated_task_takes_its_image_with_it() {
+    fn a_left_server_of_a_finished_generated_task_leaves_its_image_to_the_idle_sweep() {
         let root = tmp("sweep_left_image");
         let store = Store::new(&root);
         store
@@ -943,7 +936,7 @@ mod tests {
             .into_iter()
             .filter(|c| c.starts_with("rmi"))
             .collect();
-        assert_eq!(rmis, vec!["rmi usta-scn-gen-x-1:v1"], "{:?}", d.calls());
+        assert!(rmis.is_empty(), "{:?}", d.calls());
         let _ = std::fs::remove_dir_all(root);
     }
 
