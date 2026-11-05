@@ -33,6 +33,7 @@ pub(crate) mod talk;
 pub(crate) mod terminal;
 pub(crate) mod turns;
 pub(crate) mod validate;
+pub(crate) mod workspace;
 
 #[cfg(test)]
 mod docker_tests;

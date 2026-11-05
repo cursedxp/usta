@@ -179,15 +179,31 @@ pub(crate) fn open_notices(s: &Step, pkg: &Package, rec: &RunRecord) -> Vec<Stri
                 run_id: &rec.run_id,
                 scratch: &scratch,
             };
-            vec![window_notice(s.seams.launcher, &req)]
+            let mut notices = vec![window_notice(s.seams.launcher, &req)];
+            if pkg.environment.workspace.is_some() {
+                notices.push(folder_notice(s, pkg, rec));
+            }
+            notices
         }
-        FOLDER => vec![format!(
-            "Your task folder is {}. Work there in your own editor; when the task ends, your files move to {TASKS_DIR}/{DONE_DIR}/.{}",
-            s.store.tasks_dir().join(&rec.run_id).display(),
-            deliverables_note(pkg)
-        )],
+        FOLDER => vec![folder_notice(s, pkg, rec)],
         _ => vec!["Answer here, in this conversation.".to_string()],
     }
+}
+
+fn folder_notice(s: &Step, pkg: &Package, rec: &RunRecord) -> String {
+    format!(
+        "Your task folder is {}. Work there in your own editor; when the task ends, your files move to {TASKS_DIR}/{DONE_DIR}/.{}",
+        s.store.tasks_dir().join(&rec.run_id).display(),
+        deliverables_note(pkg)
+    )
+}
+
+/// A folder task, or a server task whose files the learner edits on their own computer.
+pub(crate) fn keeps_folder(pkgs: &[Package], rec: &RunRecord) -> bool {
+    rec.env == FOLDER
+        || pkgs
+            .iter()
+            .any(|p| p.id == rec.package && p.environment.workspace.is_some())
 }
 
 fn deliverables_note(pkg: &Package) -> String {
@@ -223,6 +239,9 @@ pub(crate) fn resume_run(
     // Only a container task has a server, so container logic must not judge the others.
     let woke = match rec.env.as_str() {
         CONTAINER => {
+            if pkg.environment.workspace.is_some() {
+                env.container.workspace_present(&rec.handle())?;
+            }
             if let Some(e) = server_gone_error(&env.container, &rec) {
                 return Err(e);
             }

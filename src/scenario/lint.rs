@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::scenario::env::{CONTAINER, CONVERSATION, FOLDER};
 use crate::scenario::package::{Package, Tone};
+use crate::scenario::workspace::safe_workspace;
 
 const MAX_FILES: usize = 200;
 
@@ -73,7 +74,7 @@ fn has(dir: &Path, rel: &str) -> bool {
 }
 
 /// Data only: an allowed extension, and nothing a shell would treat as a program.
-fn data_problems(root: &Path) -> Vec<String> {
+fn data_problems(root: &Path, code_ok: bool) -> Vec<String> {
     let Ok(files) = walk(root) else { return vec![] }; // `walk` on the package already reported it
     files
         .iter()
@@ -89,6 +90,10 @@ fn data_problems(root: &Path) -> Vec<String> {
                 rel.components()
                     .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
             });
+            if code_ok {
+                // Nothing runs on the host from a workspace, but an editor still opens hidden paths.
+                return hidden.then(|| format!("{} must be a visible file", f.display()));
+            }
             (!DATA_EXTENSIONS.contains(&ext.as_str()) || shebang || hidden)
                 .then(|| format!("{} must be a visible data file", f.display()))
         })
@@ -146,6 +151,9 @@ fn script_problems(p: &Package) -> Vec<String> {
 fn kind_problems(p: &Package) -> Vec<String> {
     let mut out = Vec::new();
     let (kind, rubric) = (p.environment.kind.as_str(), p.is_rubric());
+    if kind != CONTAINER && p.environment.workspace.is_some() {
+        out.push("environment.workspace is for container tasks only".into());
+    }
     match kind {
         CONTAINER => {
             if rubric {
@@ -153,6 +161,18 @@ fn kind_problems(p: &Package) -> Vec<String> {
             }
             if !has(&p.dir, "solution/solve.sh") {
                 out.push("missing solution/solve.sh".into());
+            }
+            if let Some(w) = &p.environment.workspace {
+                if !safe_workspace(w) {
+                    out.push(format!(
+                        "environment.workspace '{w}' must be an absolute path of plain names, not / and not under /opt/.usta-check or /opt/.usta-solution"
+                    ));
+                }
+                if p.dir.join("environment/files").is_dir() {
+                    out.extend(data_problems(&p.dir.join("environment/files"), true));
+                } else {
+                    out.push("a workspace needs starting files in environment/files/".into());
+                }
             }
             if p.is_generated() && safe_rel(&p.environment.context) {
                 let recipe = p.dir.join(&p.environment.context).join("Dockerfile");
@@ -172,7 +192,7 @@ fn kind_problems(p: &Package) -> Vec<String> {
         FOLDER => {
             for sub in ["environment/files", "solution/files"] {
                 if p.dir.join(sub).is_dir() {
-                    out.extend(data_problems(&p.dir.join(sub)));
+                    out.extend(data_problems(&p.dir.join(sub), false));
                 } else {
                     out.push(format!("missing {sub}/"));
                 }

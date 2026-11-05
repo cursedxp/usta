@@ -69,6 +69,16 @@ kind = "script"
 script = "check.sh" # check.script: a file name under tests/, without a folder
 timeout_secs = 30 # optional, at most 120
 "#;
+const TOML_CONTAINER_WORKSPACE: &str = r#"[environment]
+kind = "container"
+workspace = "/work" # absolute path inside the server; the learner's folder appears there
+setup = "/opt/task/setup.sh" # optional: installs what the language needs, runs once
+memory = "512m" # optional, at most 1g
+
+[check]
+kind = "script"
+script = "check.sh" # runs inside the server and reads /work
+"#;
 const TOML_FOLDER_SCRIPT: &str = r#"[environment]
 kind = "folder"
 
@@ -133,6 +143,7 @@ fn toml_shapes(b: &Brief) -> Vec<(&'static str, &'static str)> {
     } else if b.runtime {
         vec![
             ("container + script", TOML_CONTAINER),
+            ("container + workspace", TOML_CONTAINER_WORKSPACE),
             ("folder + script", TOML_FOLDER_SCRIPT),
             folder,
             talk,
@@ -161,6 +172,7 @@ fn shapes(b: &Brief) -> String {
         "container + script: environment/Dockerfile, solution/solve.sh, tests/check.sh. The Dockerfile may use only FROM, RUN, COPY, WORKDIR and ENV: one FROM whose image name is exactly one of {}, with an explicit version tag that is not latest and an image that has bash, for example debian:12-slim; no other image is allowed; no flags, no heredocs. COPY takes plain files to an absolute path. Heavy setup belongs in environment.setup, a script path inside the server that runs once at start. A background program must redirect its output and detach, or the start hangs. ",
         crate::scenario::dockerfile::BASES.join(", ")
     );
+    let workspace = "container + workspace: use it whenever the learner writes or edits code or config as files, in any language; a task that only repairs a running server keeps no workspace. It is a container + script package with environment.workspace and the starting files in environment/files/, which may be any file type but never a name starting with a dot. The learner edits that folder in their own editor, and the server sees it at the workspace path, so solution/solve.sh and tests/check.sh work on files there and not elsewhere. The tools the language needs are installed by RUN lines or environment.setup; pick them yourself. A compiler or build can need more memory than the default 256m: set environment.memory (at most 1g) when the task needs it. ";
     let folder_script = "folder + script: environment/files/ holds data files, solution/files/ holds the reference result as data files, tests/check.sh reads the learner's folder at /task, which is mounted read-only with python3 and sh available and no network. ";
     let folder_rubric = "folder + rubric: environment/files/, solution/files/, check.deliverables naming the files the learner writes, check.rubric. ";
     let talk = "conversation + rubric: solution/answer.md and check.rubric. ";
@@ -169,7 +181,7 @@ fn shapes(b: &Brief) -> String {
     if b.talk_only {
         format!("{head}{talk}{dots}")
     } else if b.runtime {
-        format!("{head}{container}{folder_script}{folder_rubric}{talk}{data}{dots}")
+        format!("{head}{container}{workspace}{folder_script}{folder_rubric}{talk}{data}{dots}")
     } else {
         format!("{head}{folder_rubric}{talk}{data}{dots}")
     }
@@ -387,6 +399,9 @@ mod tests {
         for (label, text) in toml_shapes(&brief(true, false)) {
             let mut list: Vec<FileOut> = match label {
                 "container + script" => files(&server),
+                "container + workspace" => {
+                    files(&[&server[..], &["environment/files/app.py"]].concat())
+                }
                 "folder + script" => files(&[&folder[..], script].concat()),
                 "folder + rubric" => files(&folder),
                 _ => files(&[]),
@@ -410,6 +425,9 @@ mod tests {
                 assert!(p.check.why_rubric.is_some(), "{label}");
             } else {
                 assert_eq!(p.check.script, "check.sh", "{label}");
+            }
+            if label == "container + workspace" {
+                assert_eq!(p.environment.workspace.as_deref(), Some("/work"));
             }
             if label == "container + script" {
                 let e = &p.environment;

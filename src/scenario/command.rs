@@ -27,7 +27,8 @@ use crate::scenario::route::Router;
 use crate::scenario::select::{self, Tag};
 use crate::scenario::start;
 use crate::scenario::steps::{
-    finished_ids, kept_notice, log_error, map_text, ready, resume_run, sync_ledger, title_of, Step,
+    finished_ids, keeps_folder, kept_notice, log_error, map_text, ready, resume_run, sync_ledger,
+    title_of, Step,
 };
 use crate::scenario::store::{project_tag, RunRecord, RunState, Store};
 use crate::scenario::sweep;
@@ -410,7 +411,7 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
                     {
                         notices.push("the story notes could not be saved this time; they are added at the next start".into());
                     }
-                    if rec.env == FOLDER {
+                    if keeps_folder(&pkgs, &rec) {
                         notices.push(kept_notice(&step, &rec, report.clean_warning.as_deref()));
                     } else if let Some(w) = report.clean_warning {
                         notices.push(clean_notice(ctx, &w));
@@ -452,7 +453,9 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             let warning = engine::drop_run(&mut env, &store, &mut rec, &tick)?;
             let dropped = format!("Dropped '{title}'.");
             let notices = match (rec.env.as_str(), warning) {
-                (FOLDER, w) => vec![dropped, kept_notice(&step, &rec, w.as_deref())],
+                (_, w) if keeps_folder(&pkgs, &rec) => {
+                    vec![dropped, kept_notice(&step, &rec, w.as_deref())]
+                }
                 (CONTAINER, None) => vec![format!("{dropped} Its server was removed.")],
                 (CONTAINER, Some(w)) => {
                     log_error(ctx, &w);
@@ -879,6 +882,7 @@ mod tests {
         let gone = FakeDocker::new(|_| fail(1, "Error: No such object: usta-x-lin-1"));
         let e = server_gone_error(
             &ContainerEnv {
+                tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
                 docker: &gone,
                 project_tag: "x".into(),
             },
@@ -894,6 +898,7 @@ mod tests {
         let there = FakeDocker::new(|_| ok("true"));
         assert!(server_gone_error(
             &ContainerEnv {
+                tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
                 docker: &there,
                 project_tag: "x".into()
             },
@@ -903,6 +908,7 @@ mod tests {
         r.reference.clear();
         assert!(server_gone_error(
             &ContainerEnv {
+                tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
                 docker: &there,
                 project_tag: "x".into()
             },
@@ -918,6 +924,7 @@ mod tests {
         r.reference = "usta-x-lin-1".into();
         let d = FakeDocker::new(|_| fail(1, "Cannot connect to the Docker daemon"));
         let env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "x".into(),
         };
@@ -984,6 +991,7 @@ mod tests {
         let on = FakeDocker::new(|_| ok("true"));
         let off = FakeDocker::new(|_| ok("false"));
         let env = |d| ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: d,
             project_tag: "x".into(),
         };

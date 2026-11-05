@@ -7,7 +7,9 @@ use anyhow::{bail, Result};
 
 use crate::scenario::docker::{run_tool, Docker, Out};
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, CONTAINER};
+use crate::scenario::folder::move_to_done;
 use crate::scenario::package::Package;
+use crate::scenario::workspace::{discard_folder, mount_arg, scrub};
 
 /// Check scripts enter the container only here, at check time, and are removed right after.
 pub(crate) const CHECK_DIR: &str = "/opt/.usta-check";
@@ -30,6 +32,8 @@ fn exec_prefix<'a>(pkg: &Package, name: &'a str) -> Vec<&'a str> {
 pub(crate) struct ContainerEnv<'a> {
     pub docker: &'a dyn Docker,
     pub project_tag: String,
+    /// Where task folders live; only a task with `environment.workspace` has one.
+    pub tasks: std::path::PathBuf,
 }
 
 impl ContainerEnv<'_> {
@@ -211,6 +215,13 @@ impl Environment for ContainerEnv<'_> {
             }
         }
         let name = self.name(run_id);
+        let ws = pkg
+            .environment
+            .workspace
+            .as_deref()
+            .map(|target| self.new_folder(pkg, run_id).map(|dir| (dir, target)))
+            .transpose()?;
+        let mount = ws.as_ref().map(|(dir, t)| mount_arg(dir, t, false));
         let project_label = format!("usta.project={}", self.project_tag);
         let run_label = format!("usta.run={run_id}");
         let pids = pkg.environment.pids.to_string();
@@ -244,10 +255,24 @@ impl Environment for ContainerEnv<'_> {
                 "",
             ]);
         }
+        if let (Some(m), Some((_, target))) = (&mount, &ws) {
+            args.extend(["--mount", m, "--workdir", target]);
+        }
         args.extend([image.as_str(), "sleep", "infinity"]);
-        self.must(&args)?;
-        if let Err(e) = self.start_and_setup(pkg, &name) {
+        let folder = ws.as_ref().map(|(dir, _)| dir.as_path());
+        if let Err(e) = self.must(&args) {
+            discard_folder(folder);
+            return Err(e);
+        }
+        // Setup and start may leave links or editor-run files; the learner gets neither.
+        let ready = self.start_and_setup(pkg, &name).and_then(|_| {
+            folder.map_or(Ok(()), |d| {
+                scrub(d).map_err(|e| internal(format!("cannot clean the task folder: {e}")))
+            })
+        });
+        if let Err(e) = ready {
             let _ = self.docker.run(&["rm", "-f", &name]);
+            discard_folder(folder);
             return Err(e);
         }
         Ok(EnvHandle {
@@ -264,6 +289,9 @@ impl Environment for ContainerEnv<'_> {
 
     fn resume(&mut self, pkg: &Package, h: &EnvHandle) -> Result<Option<String>> {
         self.owned(h)?;
+        if pkg.environment.workspace.is_some() {
+            self.workspace_present(h)?;
+        }
         self.guard_single()?;
         self.must(&["start", &h.reference])?;
         let Some(s) = &pkg.environment.start else {
@@ -286,10 +314,13 @@ impl Environment for ContainerEnv<'_> {
     fn clean(&mut self, h: &EnvHandle) -> Result<()> {
         self.owned(h)?;
         let o = run_tool(self.docker, &["rm", "-f", &h.reference])?;
-        if o.ok() || o.text().contains("No such container") {
-            Ok(())
-        } else {
-            Err(internal(format!("docker rm failed: {}", o.text())))
+        if !(o.ok() || o.text().contains("No such container")) {
+            return Err(internal(format!("docker rm failed: {}", o.text())));
+        }
+        // The learner's files outlive the server, whatever the package says.
+        match self.folder_of(h) {
+            Some((dir, run_id)) => move_to_done(&self.tasks, &dir, &run_id),
+            None => Ok(()),
         }
     }
 }
@@ -363,6 +394,7 @@ mod tests {
                 memory: "256m".into(),
                 cpus: "0.5".into(),
                 pids: 128,
+                workspace: None,
             },
             check: CheckSpec {
                 kind: "script".into(),
@@ -393,6 +425,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -440,6 +473,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -475,6 +509,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -491,6 +526,7 @@ mod tests {
         p.id = "gen-x-1".into();
         let d = FakeDocker::new(|l| running(l).unwrap_or_else(|| ok("")));
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -510,12 +546,14 @@ mod tests {
     fn a_missing_shell_tool_is_named() {
         let d = FakeDocker::new(|_| fail(1, ""));
         let env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "t".into(),
         };
         assert!(env.missing_tools("n").unwrap().contains("bash"));
         let d = FakeDocker::new(|_| ok("/bin/bash\n"));
         let env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "t".into(),
         };
@@ -526,6 +564,7 @@ mod tests {
     fn containers_are_never_created_with_rm() {
         let d = FakeDocker::new(|_| ok(""));
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -537,6 +576,7 @@ mod tests {
     fn existing_image_skips_the_build_and_network_true_omits_none() {
         let d = FakeDocker::new(|_| ok(""));
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -558,6 +598,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -579,6 +620,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -595,6 +637,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -610,6 +653,7 @@ mod tests {
     fn pause_stops_and_resume_starts_then_reruns_start_script_only() {
         let d = FakeDocker::new(|_| ok(""));
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -632,6 +676,7 @@ mod tests {
     fn check_copies_tests_in_runs_with_timeout_and_always_removes_them() {
         let d = FakeDocker::new(|l| running(l).unwrap_or_else(|| ok("")));
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -668,6 +713,7 @@ mod tests {
             ok("")
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -693,6 +739,7 @@ mod tests {
             ok("")
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &t,
             project_tag: "aaaa1111".into(),
         };
@@ -712,6 +759,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -724,12 +772,14 @@ mod tests {
     fn clean_removes_and_treats_missing_as_success() {
         let d = FakeDocker::new(|_| fail(1, "Error: No such container: x"));
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
         assert!(env.clean(&handle()).is_ok());
         let d2 = FakeDocker::new(|_| fail(1, "permission denied"));
         let mut env2 = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d2,
             project_tag: "aaaa1111".into(),
         };
@@ -778,6 +828,7 @@ mod tests {
                 ok("")
             });
             let mut env = ContainerEnv {
+                tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
                 docker: &d,
                 project_tag: "aaaa1111".into(),
             };
@@ -806,6 +857,7 @@ mod tests {
             ok("")
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -817,6 +869,7 @@ mod tests {
     fn a_tool_that_cannot_even_start_is_an_internal_error() {
         let d = FakeDocker::missing();
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -840,6 +893,7 @@ mod tests {
             }
         }
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &Wedged,
             project_tag: "aaaa1111".into(),
         };
@@ -857,6 +911,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -871,6 +926,7 @@ mod tests {
             }
         });
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
@@ -881,6 +937,7 @@ mod tests {
     fn foreign_references_are_refused_without_any_docker_call() {
         let d = FakeDocker::new(|_| ok(""));
         let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "aaaa1111".into(),
         };
