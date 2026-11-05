@@ -312,6 +312,9 @@ impl Environment for ContainerEnv<'_> {
 
     fn check(&mut self, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
         self.owned(h)?;
+        if pkg.environment.workspace.is_some() {
+            self.workspace_present(h)?;
+        }
         if !self.running(&h.reference)? {
             bail!("the task is not running; use /scenario resume");
         }

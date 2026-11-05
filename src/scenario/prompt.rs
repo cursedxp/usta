@@ -72,7 +72,7 @@ timeout_secs = 30 # optional, at most 120
 const TOML_CONTAINER_WORKSPACE: &str = r#"[environment]
 kind = "container"
 workspace = "/work" # absolute path inside the server; the learner's folder appears there
-setup = "/opt/task/setup.sh" # optional: installs what the language needs, runs once
+setup = "/opt/task/setup.sh" # optional: runs once, has no network, so install tools with RUN lines instead
 memory = "512m" # optional, at most 1g
 
 [check]
@@ -172,7 +172,7 @@ fn shapes(b: &Brief) -> String {
         "container + script: environment/Dockerfile, solution/solve.sh, tests/check.sh. The Dockerfile may use only FROM, RUN, COPY, WORKDIR and ENV: one FROM whose image name is exactly one of {}, with an explicit version tag that is not latest and an image that has bash, for example debian:12-slim; no other image is allowed; no flags, no heredocs. COPY takes plain files to an absolute path. Heavy setup belongs in environment.setup, a script path inside the server that runs once at start. A background program must redirect its output and detach, or the start hangs. ",
         crate::scenario::dockerfile::BASES.join(", ")
     );
-    let workspace = "container + workspace: use it whenever the learner writes or edits code or config as files, in any language; a task that only repairs a running server keeps no workspace. It is a container + script package with environment.workspace and the starting files in environment/files/, which may be any file type but never a name starting with a dot. The learner edits that folder in their own editor, and the server sees it at the workspace path, so solution/solve.sh and tests/check.sh work on files there and not elsewhere. The tools the language needs are installed by RUN lines or environment.setup; pick them yourself. A compiler or build can need more memory than the default 256m: set environment.memory (at most 1g) when the task needs it. ";
+    let workspace = "container + workspace: use it whenever the learner writes or edits code or config as files, in any language; a task that only repairs a running server keeps no workspace. It is a container + script package with environment.workspace and the starting files in environment/files/, which may be any file type but never a name starting with a dot. The learner edits that folder in their own editor, and the server sees it at the workspace path, so solution/solve.sh and tests/check.sh work on files there and not elsewhere. Install the tools the language needs with RUN lines in the Dockerfile (only RUN has network; environment.setup has none); pick them yourself. Keep tools outside the workspace path: the mount hides whatever the image put there, and after setup and start Usta deletes every hidden entry and symlink in the workspace (.venv, node_modules/.bin, a git init). A compiler or build can need more memory than the default 256m: set environment.memory (at most 1g) when the task needs it. ";
     let folder_script = "folder + script: environment/files/ holds data files, solution/files/ holds the reference result as data files, tests/check.sh reads the learner's folder at /task, which is mounted read-only with python3 and sh available and no network. ";
     let folder_rubric = "folder + rubric: environment/files/, solution/files/, check.deliverables naming the files the learner writes, check.rubric. ";
     let talk = "conversation + rubric: solution/answer.md and check.rubric. ";

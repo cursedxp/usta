@@ -90,7 +90,7 @@ A new environment (browser, virtual machine, another app) is a new implementatio
 | Real account | Etsy, Excel, Figma | Learn the person's current state | Usta's record | Screenshot, exported file |
 | Conversation only | Subjects needing no setup | Nothing | Usta's record | Usta judges |
 
-**Own editor:** a container task that has the learner write code declares `environment.workspace`, a path inside the container. Usta creates a task folder on the host, puts the starting files there and mounts it at that path. The learner edits in their own editor; builds and the check run in the container. Generated scripts still never run on the host. This replaces the earlier "own machine" environment, which would have run generated scripts on the host.
+**Own editor:** a container task that has the learner write code declares `environment.workspace`, a path inside the container. Usta creates a task folder on the host, puts the starting files there and mounts it at that path. The learner edits in their own editor; builds and the check run in the container. Generated scripts still never run on the host; files an editor itself runs once the folder is trusted (a `build.rs`, a `package.json` script) are covered by the editor's trust prompt, not by Usta. This replaces the earlier "own machine" environment, which would have run generated scripts on the host.
 
 **Real account:** Usta cannot break this environment on purpose, so tasks are built from the person's actual state. Usta must learn that state first, and prebuilt packages are less useful here.
 
