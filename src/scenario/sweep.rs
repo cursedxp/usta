@@ -366,18 +366,23 @@ pub(crate) fn execute(
 }
 
 /// Moves a finished or dropped folder run that a failed or crashed `clean` left in
-/// place to `done/`. Never deletes: it is the learner's work.
+/// place to `done/`. Never deletes: it is the learner's work. A server run with a
+/// workspace folder is the same: its server goes first, then the folder moves.
 fn retry_folder_clean(records: &[RunRecord], env: &mut Router) {
     for r in records
         .iter()
-        .filter(|r| r.env == FOLDER && matches!(r.state, RunState::Finished | RunState::Dropped))
+        .filter(|r| matches!(r.state, RunState::Finished | RunState::Dropped))
     {
         let h = r.handle();
-        if env
-            .folder
-            .dir(&h)
-            .is_ok_and(|d| d.symlink_metadata().is_ok())
-        {
+        let left = match r.env.as_str() {
+            FOLDER => env
+                .folder
+                .dir(&h)
+                .is_ok_and(|d| d.symlink_metadata().is_ok()),
+            CONTAINER => env.container.folder_of(&h).is_some(),
+            _ => false,
+        };
+        if left {
             let _ = env.clean(&h);
         }
     }
@@ -446,7 +451,9 @@ fn execute_on(records: &[RunRecord], s: &Sweeper) {
             Action::DeleteRecord(id) => {
                 // A folder prepare that never returned: the learner never had its folder,
                 // so it holds no work. Only a valid id of a folder run reaches the disk.
-                let folder_run = records.iter().any(|r| r.run_id == id && r.env == FOLDER);
+                let folder_run = records
+                    .iter()
+                    .any(|r| r.run_id == id && (r.env == FOLDER || r.env == CONTAINER));
                 if folder_run && valid_run_id(&id) {
                     let _ = std::fs::remove_dir_all(store.tasks_dir().join(&id));
                 }
@@ -1137,14 +1144,15 @@ mod tests {
         sweep_records(&p, TODAY, &missing(), DEAD, None);
         assert!(p.join("keep.txt").is_file());
         assert!(store.tasks_dir().is_dir());
-        // A container record's prepare never owns a task folder either.
+        // A container run with a workspace owns its folder like a folder run does.
         store
             .save(&rec("c", RunState::Preparing, 999_999, TODAY))
             .unwrap();
         std::fs::create_dir_all(store.tasks_dir().join("c")).unwrap();
         let d = fake();
         execute(&store, &d, TAG, &[], DEAD, TODAY, None);
-        assert!(store.tasks_dir().join("c").is_dir());
+        assert!(!store.tasks_dir().join("c").exists());
+        assert!(store.tasks_dir().is_dir());
         let _ = std::fs::remove_dir_all(p);
     }
 
@@ -1221,6 +1229,39 @@ mod tests {
         // Nothing left to move: a second sweep changes nothing.
         sweep_records(&p, TODAY, &d, DEAD, None);
         assert!(t.join("done/a-2").is_dir() && !t.join("done/a-3").exists());
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    #[test]
+    fn a_finished_server_run_with_a_workspace_folder_is_removed_then_moved_to_done() {
+        let (p, store) = project_with_tag("sw_retry_ws", TAG);
+        for (id, state) in [
+            ("a", RunState::Finished),
+            ("b", RunState::Dropped),
+            ("c", RunState::Paused),
+        ] {
+            let mut r = rec(id, state, 0, TODAY);
+            r.reference = format!("usta-{TAG}-{id}");
+            store.save(&r).unwrap();
+            std::fs::create_dir_all(store.tasks_dir().join(id)).unwrap();
+            std::fs::write(store.tasks_dir().join(id).join("main.rs"), id).unwrap();
+        }
+        // A finished server run with no folder costs no extra call.
+        let mut r = rec("n", RunState::Finished, 0, TODAY);
+        r.reference = format!("usta-{TAG}-n");
+        store.save(&r).unwrap();
+        let d = fake();
+        execute(&store, &d, TAG, &[], DEAD, TODAY, None);
+        let t = store.tasks_dir();
+        assert!(t.join("done/a/main.rs").is_file() && t.join("done/b/main.rs").is_file());
+        assert!(t.join("c").is_dir(), "a paused run is live work");
+        let rms: Vec<String> = d
+            .calls()
+            .into_iter()
+            .filter(|c| c.starts_with("rm "))
+            .collect();
+        assert_eq!(rms.len(), 2, "{rms:?}");
+        assert!(rms.iter().all(|c| c.contains("-a") || c.contains("-b")));
         let _ = std::fs::remove_dir_all(p);
     }
 

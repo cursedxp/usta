@@ -32,6 +32,7 @@ impl<'a> Router<'a> {
             container: ContainerEnv {
                 docker,
                 project_tag: tag.to_string(),
+                tasks: tasks.clone(),
             },
             folder: FolderEnv {
                 docker,

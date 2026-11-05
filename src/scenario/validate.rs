@@ -313,6 +313,7 @@ impl Prover for RealProver<'_> {
             let mut env = ContainerEnv {
                 docker: self.docker,
                 project_tag: self.tag.clone(),
+                tasks: scratch.clone(),
             };
             prove_and_clean(&mut env, pkg, &run_id)
         } else {
@@ -747,6 +748,42 @@ mod tests {
         );
         assert!(d.calls().is_empty(), "{:?}", d.calls());
         assert!(store.all().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_proofs_workspace_folder_is_used_then_deleted_never_moved_to_done() {
+        let root = tmp("val_ws");
+        let p = as_generated(crate::scenario::workspace::tests::ws_pkg(&root));
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (seen2, dir) = (
+            seen.clone(),
+            root.join(".usta/scenarios/validate/val-gen-demo-r1/src/main.rs"),
+        );
+        let n = std::cell::Cell::new(0);
+        let d = FakeDocker::new(move |l| {
+            if l.starts_with("ps ") {
+                return ok("");
+            }
+            if l.contains(" sh /opt/.usta-check/check.sh") {
+                seen2.store(dir.is_file(), std::sync::atomic::Ordering::SeqCst);
+                n.set(n.get() + 1);
+                return if n.get() <= 2 {
+                    dfail(1, "not yet")
+                } else {
+                    ok("")
+                };
+            }
+            ok("true")
+        });
+        let (r, store) = prover_with(&root, &d, |pr| pr.prove(&p, 1));
+        assert!(matches!(r.unwrap(), Proof::Passed));
+        assert!(
+            seen.load(std::sync::atomic::Ordering::SeqCst),
+            "the check saw the folder"
+        );
+        assert!(!store.scratch_dir().exists(), "no folder, no done/ left");
+        assert!(!root.join("usta-tasks").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

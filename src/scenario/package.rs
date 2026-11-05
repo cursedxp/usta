@@ -69,6 +69,10 @@ pub(crate) struct EnvSpec {
     pub cpus: String,
     #[serde(default = "d_pids")]
     pub pids: u32,
+    /// Container tasks only: absolute path INSIDE the container where the learner's
+    /// task folder is mounted, so the learner edits real files on the host.
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -17,6 +17,7 @@ use crate::scenario::lint::walk;
 use crate::scenario::model::Model;
 use crate::scenario::package::Package;
 use crate::scenario::rubric::{panel, read_work};
+use crate::scenario::workspace::mount_arg;
 
 pub(crate) const TASKS_DIR: &str = "usta-tasks";
 /// The learner's work is theirs: `clean` moves a task here and never deletes it.
@@ -73,6 +74,19 @@ fn free_dest(done: &Path, run_id: &str) -> PathBuf {
         .expect("an unused number")
 }
 
+/// The learner's folder goes to `done/`, never deleted. Already gone is success.
+pub(crate) fn move_to_done(tasks: &Path, dir: &Path, run_id: &str) -> Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+        Ok(_) => {}
+    }
+    let done = tasks.join(DONE_DIR);
+    std::fs::create_dir_all(&done)?;
+    let dest = free_dest(&done, run_id);
+    std::fs::rename(dir, &dest).with_context(|| format!("cannot move {}", dir.display()))
+}
+
 impl FolderEnv<'_> {
     fn reference(&self, run_id: &str) -> String {
         format!("usta-{}-{run_id}", self.project_tag)
@@ -101,6 +115,7 @@ impl FolderEnv<'_> {
         let c = ContainerEnv {
             docker: self.docker,
             project_tag: self.project_tag.clone(),
+            tasks: self.tasks.clone(),
         };
         ensure_image(self.docker, CHECK_IMAGE)?;
         let run_id = format!("chk-{run_id}");
@@ -109,9 +124,7 @@ impl FolderEnv<'_> {
         let project = format!("usta.project={}", self.project_tag);
         let run = format!("usta.run={run_id}");
         let pids = pkg.environment.pids.to_string();
-        // One CSV field: a comma or quote in the project path must not split the option.
-        let source = dir.display().to_string().replace('"', "\"\"");
-        let mount = format!("type=bind,\"source={source}\",target={TASK_MOUNT},readonly");
+        let mount = mount_arg(dir, TASK_MOUNT, true);
         let result = (|| {
             c.must(&[
                 "create",
@@ -199,15 +212,7 @@ impl Environment for FolderEnv<'_> {
 
     fn clean(&mut self, h: &EnvHandle) -> Result<()> {
         let dir = self.dir(h)?;
-        match std::fs::symlink_metadata(&dir) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.into()),
-            Ok(_) => {}
-        }
-        let done = self.tasks.join(DONE_DIR);
-        std::fs::create_dir_all(&done)?;
-        let dest = free_dest(&done, self.run_id(h).unwrap_or_default());
-        std::fs::rename(&dir, &dest).with_context(|| format!("cannot move {}", dir.display()))
+        move_to_done(&self.tasks, &dir, self.run_id(h).unwrap_or_default())
     }
 }
 
