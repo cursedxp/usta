@@ -5,7 +5,7 @@ use ratatui::text::Text;
 
 #[test]
 fn version_aligned_with_spec() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.42.0");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.43.0");
 }
 
 fn plain_lines(t: &Text) -> Vec<String> {
