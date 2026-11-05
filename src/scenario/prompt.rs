@@ -178,7 +178,7 @@ fn shapes(b: &Brief) -> String {
         "container + script: environment/Dockerfile, solution/solve.sh, tests/check.sh. The Dockerfile may use only FROM, RUN, COPY, WORKDIR and ENV: one FROM whose image name is exactly one of {}, with an explicit version tag that is not latest and an image that has bash, for example debian:12-slim; no other image is allowed; no flags, no heredocs. COPY takes plain files to an absolute path. Heavy setup belongs in environment.setup, a script path inside the server that runs once at start. A background program must redirect its output and detach, or the start hangs. ",
         crate::scenario::dockerfile::BASES.join(", ")
     );
-    let workspace = "container + workspace: use it whenever the learner writes or edits code or config as files, in any language; a task that only repairs a running server keeps no workspace. It is a container + script package with environment.workspace and the starting files in environment/files/, which may be any file type but never a name starting with a dot. The learner edits that folder in their own editor, and the server sees it at the workspace path, so solution/solve.sh and tests/check.sh work on files there and not elsewhere. Install the tools the language needs with RUN lines in the Dockerfile (only RUN has network; environment.setup has none); pick them yourself. Keep tools outside the workspace path: the mount hides whatever the image put there, and after setup and start Usta deletes every hidden entry and symlink in the workspace (.venv, node_modules/.bin, a git init). A compiler or build can need more memory than the default 256m: set environment.memory (at most 1g) when the task needs it. ";
+    let workspace = "container + workspace: use it whenever the learner writes or edits code or config as files, in any language; a task that only repairs a running server keeps no workspace. It is a container + script package with environment.workspace and the starting files in environment/files/, which may be any file type but never a name starting with a dot. The learner edits that folder in their own editor, and the server sees it at the workspace path, so solution/solve.sh and tests/check.sh work on files there and not elsewhere. Install the tools the language needs with RUN lines in the Dockerfile (only RUN has network; environment.setup has none); pick them yourself. Keep tools outside the workspace path: the mount hides whatever the image put there, and after setup and start Usta deletes every hidden entry and symlink in the workspace (.venv, node_modules/.bin, a git init). Build output and caches stay out of the workspace: the Dockerfile sets the language's own setting for its output or cache folder to a path outside the workspace, with ENV or RUN, so nothing a build writes lands in the learner's folder. A task runs with no network unless it declares one, so fetch dependencies at image build time in RUN, so that a build at task time needs no network. The instruction.md of a workspace task names the exact command that builds or runs the work in the task's terminal window, in learner words (the Docker-word rule still holds). A compiler or build can need more memory than the default 256m: set environment.memory (at most 1g) when the task needs it. ";
     let folder_script = "folder + script: environment/files/ holds data files, solution/files/ holds the reference result as data files, tests/check.sh reads the learner's folder at /task, which is mounted read-only with python3 and sh available and no network. ";
     let folder_rubric = "folder + rubric: environment/files/, solution/files/, check.deliverables naming the files the learner writes, check.rubric. ";
     let talk = "conversation + rubric: solution/answer.md and check.rubric. ";
@@ -557,5 +557,27 @@ mod tests {
         let tk = generate_system(&brief(false, true));
         assert!(!tk.contains("folder") && !tk.contains("Dockerfile"), "{tk}");
         assert!(tk.contains("conversation + rubric"));
+    }
+
+    #[test]
+    fn workspace_prompt_keeps_builds_out_and_names_the_command() {
+        let s = generate_system(&brief(true, false));
+        assert!(
+            s.contains("output or cache folder to a path outside the workspace"),
+            "build output stays out of the workspace"
+        );
+        assert!(
+            s.contains("fetch dependencies at image build time in RUN"),
+            "dependencies come at build time"
+        );
+        assert!(
+            s.contains("a build at task time needs no network"),
+            "no network at task time"
+        );
+        assert!(
+            s.contains("exact command that builds or runs the work in the task's terminal window"),
+            "instruction names the command"
+        );
+        assert!(s.contains(LEARNER_TEXT_RULE));
     }
 }
