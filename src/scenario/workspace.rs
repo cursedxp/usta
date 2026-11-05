@@ -509,7 +509,7 @@ pub(crate) mod tests {
         e.clean(&h).unwrap();
         let rm = "rm -f usta-aaaa1111-r1".to_string();
         assert!(
-            d.calls().contains(&rm) && d.calls().len() == 2,
+            d.calls().contains(&rm) && d.calls().len() == 1,
             "{:?}",
             d.calls()
         );
@@ -561,7 +561,7 @@ pub(crate) mod tests {
         let root = tmp("ws_plain_clean");
         let d = FakeDocker::new(|_| ok(""));
         env(&d, &root).clean(&handle("r1")).unwrap();
-        assert_eq!(d.calls().len(), 2); // the image lookup, then the removal
+        assert_eq!(d.calls().len(), 1); // the removal only
         assert!(!root.join("usta-tasks").exists());
         let _ = std::fs::remove_dir_all(root);
     }

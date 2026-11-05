@@ -127,30 +127,6 @@ impl ContainerEnv<'_> {
             .unwrap_or(false)
     }
 
-    /// The generated task image behind a learner's server, read before the server goes.
-    /// Never a proof (`val-`: the learner's prepare reuses that image) and never a
-    /// shipped package: only the `usta-scn-gen-` prefix is accepted.
-    pub(crate) fn disposable_image(&self, name: &str) -> Option<String> {
-        let run = name.strip_prefix(&format!("usta-{}-", self.project_tag))?;
-        if run.starts_with("val-") {
-            return None;
-        }
-        let o = self
-            .docker
-            .run(&["inspect", "-f", "{{.Config.Image}}", name])
-            .ok()?;
-        let image = o.stdout.trim();
-        (o.ok() && image.starts_with("usta-scn-gen-")).then(|| image.to_string())
-    }
-
-    /// Best effort and without `-f`: an image another server still uses is refused, and
-    /// prepare rebuilds a missing one.
-    pub(crate) fn remove_image(&self, image: Option<String>) {
-        if let Some(i) = image {
-            let _ = self.docker.run(&["rmi", &i]);
-        }
-    }
-
     pub fn is_running(&self, name: &str) -> bool {
         self.running(name).unwrap_or(false)
     }
@@ -233,6 +209,10 @@ impl Environment for ContainerEnv<'_> {
                 &self.project_tag,
                 self.bases.as_deref(),
             )?;
+        }
+        // The image idles from today; the startup sweep removes it after OLD_DAYS unused.
+        if let Some(f) = &self.bases {
+            crate::scenario::bases::task_used(f, &image, &crate::lifecycle::today());
         }
         let name = self.name(run_id);
         let ws = pkg
@@ -344,12 +324,10 @@ impl Environment for ContainerEnv<'_> {
 
     fn clean(&mut self, h: &EnvHandle) -> Result<()> {
         self.owned(h)?;
-        let image = self.disposable_image(&h.reference);
         let o = run_tool(self.docker, &["rm", "-f", &h.reference])?;
         if !(o.ok() || o.text().contains("No such container")) {
             return Err(internal(format!("docker rm failed: {}", o.text())));
         }
-        self.remove_image(image);
         // The learner's files outlive the server, whatever the package says.
         match self.folder_of(h) {
             Some((dir, run_id)) => move_to_done(&self.tasks, &dir, &run_id),
@@ -809,17 +787,8 @@ mod tests {
         assert!(!d.calls().iter().any(|c| c.starts_with("cp")));
     }
 
-    fn clean_with(reference: &str, image: &str, rmi_fails: bool) -> (Result<()>, Vec<String>) {
-        let image = image.to_string();
-        let d = FakeDocker::new(move |l| {
-            if l.starts_with("inspect -f {{.Config.Image}}") {
-                ok(&format!("{image}\n"))
-            } else if l.starts_with("rmi") && rmi_fails {
-                fail(1, "image is being used by stopped container")
-            } else {
-                ok("")
-            }
-        });
+    fn clean_with(reference: &str) -> (Result<()>, Vec<String>) {
+        let d = FakeDocker::new(|_| ok(""));
         let mut env = ContainerEnv {
             tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
@@ -834,39 +803,52 @@ mod tests {
     }
 
     #[test]
-    fn clean_removes_a_generated_tasks_image_after_the_server_without_force() {
-        let (r, calls) = clean_with("usta-aaaa1111-demo-1", "usta-scn-gen-x-1:v3", false);
-        assert!(r.is_ok());
-        let at = |w: &str| calls.iter().position(|c| c == w);
-        let (rm, rmi) = (
-            at("rm -f usta-aaaa1111-demo-1"),
-            at("rmi usta-scn-gen-x-1:v3"),
+    fn clean_never_removes_an_image_whatever_the_run() {
+        for run in ["usta-aaaa1111-demo-1", "usta-aaaa1111-val-gen-x-1-r0"] {
+            let (r, calls) = clean_with(run);
+            assert!(r.is_ok());
+            assert!(calls.iter().any(|c| c.starts_with("rm -f")), "{calls:?}");
+            assert!(calls.iter().all(|c| !c.starts_with("rmi")), "{calls:?}");
+            assert!(
+                calls.iter().all(|c| !c.contains("Config.Image")),
+                "{calls:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepare_records_or_refreshes_a_generated_tasks_image_and_only_that() {
+        let root = crate::scenario::package::tests::tmp("prep_idle");
+        let f = crate::scenario::bases::file(&root);
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("ps ") {
+                ok("")
+            } else {
+                ok("x")
+            }
+        });
+        let mut env = ContainerEnv {
+            tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
+            docker: &d,
+            project_tag: "aaaa1111".into(),
+            bases: Some(f.clone()),
+        };
+        let mut p = pkg();
+        p.id = "gen-x-1".into();
+        env.prepare(&p, "demo-1").unwrap();
+        let today = crate::lifecycle::today();
+        let line = format!("usta-scn-gen-x-1:v3 {today}\n");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), line);
+        std::fs::write(&f, "usta-scn-gen-x-1:v3 2026-01-01\n").unwrap();
+        env.prepare(&p, "demo-2").unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), line, "date refreshed");
+        env.prepare(&pkg(), "demo-3").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            line,
+            "shipped: no line"
         );
-        assert!(rm.is_some() && rmi.is_some() && rm < rmi, "{calls:?}");
-        assert!(calls.iter().all(|c| !c.starts_with("rmi -f")));
-    }
-
-    #[test]
-    fn clean_keeps_the_image_of_a_proof_run() {
-        let (r, calls) = clean_with("usta-aaaa1111-val-gen-x-1-r0", "usta-scn-gen-x-1:v3", false);
-        assert!(r.is_ok());
-        assert!(calls.iter().all(|c| !c.starts_with("rmi")), "{calls:?}");
-    }
-
-    #[test]
-    fn clean_keeps_the_image_of_a_shipped_package() {
-        let (r, calls) = clean_with("usta-aaaa1111-demo-1", "usta-scn-linux-backup:v2", false);
-        assert!(r.is_ok());
-        assert!(calls.iter().all(|c| !c.starts_with("rmi")), "{calls:?}");
-        let (_, calls) = clean_with("usta-aaaa1111-demo-1", "kiln-db:1", false);
-        assert!(calls.iter().all(|c| !c.starts_with("rmi")), "{calls:?}");
-    }
-
-    #[test]
-    fn a_refused_image_removal_does_not_fail_clean() {
-        let (r, calls) = clean_with("usta-aaaa1111-demo-1", "usta-scn-gen-x-1:v3", true);
-        assert!(r.is_ok());
-        assert!(calls.iter().any(|c| c == "rmi usta-scn-gen-x-1:v3"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
