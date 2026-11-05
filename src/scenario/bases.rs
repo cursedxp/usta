@@ -70,14 +70,15 @@ fn set(file: &Path, image: &str, today: &str, add: bool) {
 /// task image still stands on, is refused and keeps its line. Only with a runtime that
 /// already answers; this never starts one.
 pub(crate) fn sweep(d: &dyn Docker, file: &Path, today: &str) {
-    if !matches!(probe(d), Runtime::Ready) {
+    let before = read(file);
+    let old = |date: &str| age_days(date, today).is_some_and(|n| n >= OLD_DAYS);
+    // Most launches have nothing due, and they must not wait on the runtime.
+    if !before.iter().any(|(_, date)| old(date)) || !matches!(probe(d), Runtime::Ready) {
         return;
     }
-    let before = read(file);
     let mut keep = Vec::new();
     for (image, date) in &before {
-        let old = age_days(date, today).is_some_and(|n| n >= OLD_DAYS);
-        let gone = old
+        let gone = old(date)
             && d.run(&["rmi", image])
                 .is_ok_and(|o| o.ok() || o.text().contains("No such image"));
         if !gone {
@@ -184,6 +185,18 @@ mod tests {
         sweep(&d, &f, "2026-11-05");
         assert_eq!(rmis(&d), vec!["rmi python:3.12-slim-bookworm"]);
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_launch_with_nothing_due_never_calls_the_runtime() {
+        let root = tmp("bases_quiet");
+        let f = file(&root);
+        let d = FakeDocker::new(|_| ok(""));
+        sweep(&d, &f, "2026-11-05");
+        pulled(&f, "rust:1.83-slim", "2026-11-01");
+        sweep(&d, &f, "2026-11-05");
+        assert!(d.calls().is_empty(), "{:?}", d.calls());
         let _ = std::fs::remove_dir_all(root);
     }
 
