@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::scenario::container::{ContainerEnv, CHECK_DIR, SOLUTION_DIR};
+use crate::scenario::container::{ContainerEnv, CHECK_DIR, FILE_LIMIT, SOLUTION_DIR};
 use crate::scenario::docker::run_tool;
-use crate::scenario::env::{internal, EnvHandle};
+use crate::scenario::env::{internal, CheckOutcome, EnvHandle};
 use crate::scenario::folder::{copy_data, gone_error, valid_run_id};
 use crate::scenario::package::Package;
 
@@ -106,6 +106,74 @@ impl ContainerEnv<'_> {
             "{}",
             "+",
         ]);
+    }
+
+    /// Run the check in a throwaway server made from `image`, with the host folder `dir`
+    /// mounted read-only at `target`, so a check can never touch the learner's files.
+    /// What it writes goes to the server's own disk. The server is removed afterwards,
+    /// whatever happened.
+    pub(crate) fn throwaway_check(
+        &self,
+        pkg: &Package,
+        run_id: &str,
+        image: &str,
+        dir: &Path,
+        target: &str,
+    ) -> Result<CheckOutcome> {
+        let run_id = format!("chk-{run_id}");
+        let name = self.name(&run_id);
+        let _ = self.docker.run(&["rm", "-f", &name]);
+        let project = format!("usta.project={}", self.project_tag);
+        let run = format!("usta.run={run_id}");
+        let pids = pkg.environment.pids.to_string();
+        let mount = mount_arg(dir, target, true);
+        let result = (|| {
+            self.must(&[
+                "create",
+                "--name",
+                &name,
+                "--label",
+                "usta=1",
+                "--label",
+                &project,
+                "--label",
+                &run,
+                "--memory",
+                &pkg.environment.memory,
+                "--cpus",
+                &pkg.environment.cpus,
+                "--pids-limit",
+                &pids,
+                "--network",
+                "none",
+                "--security-opt",
+                "no-new-privileges",
+                "--ulimit",
+                FILE_LIMIT,
+                "--entrypoint",
+                "",
+                "--mount",
+                &mount,
+                "--workdir",
+                target,
+                image,
+                "sleep",
+                "900",
+            ])?;
+            self.must(&["start", &name])?;
+            self.run_check(pkg, &name)
+        })();
+        let _ = self.docker.run(&["rm", "-f", &name]);
+        result
+    }
+
+    /// A workspace task's check, in a fresh server from the task's image.
+    pub(crate) fn check_fresh(&self, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
+        let (dir, run_id) = self
+            .folder_of(h)
+            .ok_or_else(|| gone_error(self.run_id_of(h)))?;
+        let target = pkg.environment.workspace.as_deref().unwrap_or_default();
+        self.throwaway_check(pkg, &run_id, &Self::image(pkg), &dir, target)
     }
 
     /// `<tasks>/<run_id>` with the starting files, new: never over someone's work.
@@ -492,6 +560,144 @@ pub(crate) mod tests {
         let err = e.check(&pkg, &h).unwrap_err().to_string();
         assert!(err.contains("files for this task are gone"), "{err}");
         assert!(!d.calls().iter().any(|c| c.contains("check.sh")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn running(l: &str) -> Option<crate::scenario::docker::Out> {
+        l.starts_with("inspect").then(|| ok("true"))
+    }
+
+    #[test]
+    fn a_workspace_check_runs_in_a_fresh_server_with_the_folder_read_only() {
+        let root = tmp("ws_fresh");
+        let pkg = ws_pkg(&root);
+        let d = FakeDocker::new(|l| running(l).unwrap_or_else(|| ok("")));
+        let mut e = env(&d, &root);
+        let h = e.prepare(&pkg, "r1").unwrap();
+        d.calls.borrow_mut().clear();
+        assert_eq!(e.check(&pkg, &h).unwrap(), CheckOutcome::Pass);
+        let c = d.calls();
+        let create = c.iter().find(|l| l.starts_with("create")).unwrap();
+        for part in [
+            "--name usta-aaaa1111-chk-r1",
+            "--label usta=1",
+            "--label usta.project=aaaa1111",
+            "--label usta.run=chk-r1",
+            "--memory 256m",
+            "--cpus 0.5",
+            "--pids-limit 128",
+            "--network none",
+            "--security-opt no-new-privileges",
+            "--ulimit fsize=",
+            ",target=/work,readonly",
+            "--workdir /work",
+            "usta-scn-",
+        ] {
+            assert!(create.contains(part), "{part}: {create}");
+        }
+        assert!(
+            !create.contains("usta.workspace"),
+            "no second claim on the folder"
+        );
+        let script = c.iter().find(|l| l.contains("check.sh")).unwrap();
+        assert!(script.contains("usta-aaaa1111-chk-r1"), "{script}");
+        assert!(!c.iter().any(|l| l.contains("usta-aaaa1111-r1 timeout")));
+        assert_eq!(c.last().unwrap(), "rm -f usta-aaaa1111-chk-r1");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_fresh_server_is_removed_when_the_check_breaks_or_fails() {
+        for (name, broken) in [
+            ("ws_fresh_break", "start usta-aaaa1111-chk"),
+            ("ws_fresh_fail", "exec -u 0 usta-aaaa1111-chk-r1 timeout"),
+        ] {
+            let root = tmp(name);
+            let pkg = ws_pkg(&root);
+            let d = FakeDocker::new(move |l| {
+                if let Some(o) = running(l) {
+                    o
+                } else if l.starts_with(broken) {
+                    fail(1, "boom")
+                } else {
+                    ok("")
+                }
+            });
+            let mut e = env(&d, &root);
+            let h = e.prepare(&pkg, "r1").unwrap();
+            let _ = e.check(&pkg, &h);
+            assert_eq!(
+                d.calls().last().unwrap(),
+                "rm -f usta-aaaa1111-chk-r1",
+                "{name}"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn a_live_check_runs_in_the_running_server_as_before() {
+        let root = tmp("ws_live");
+        let mut pkg = ws_pkg(&root);
+        pkg.check.live = true;
+        let d = FakeDocker::new(|l| running(l).unwrap_or_else(|| ok("")));
+        let mut e = env(&d, &root);
+        let h = e.prepare(&pkg, "r1").unwrap();
+        d.calls.borrow_mut().clear();
+        assert_eq!(e.check(&pkg, &h).unwrap(), CheckOutcome::Pass);
+        let c = d.calls();
+        assert!(!c
+            .iter()
+            .any(|l| l.contains("chk-") || l.starts_with("create")));
+        assert!(c
+            .iter()
+            .any(|l| l == "exec -u 0 usta-aaaa1111-r1 timeout 300 sh /opt/.usta-check/check.sh"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_timeout_says_the_check_ran_out_of_time_and_is_not_a_result() {
+        let root = tmp("ws_timeout");
+        let pkg = ws_pkg(&root);
+        let d = FakeDocker::new(|l| {
+            running(l).unwrap_or_else(|| {
+                if l.contains("check.sh") {
+                    fail(124, "")
+                } else {
+                    ok("")
+                }
+            })
+        });
+        let mut e = env(&d, &root);
+        let h = e.prepare(&pkg, "r1").unwrap();
+        let err = e.check(&pkg, &h).unwrap_err();
+        assert!(err
+            .downcast_ref::<crate::scenario::env::Internal>()
+            .is_none());
+        let text = err.to_string();
+        for part in [
+            "ran out of time after 300s",
+            "not judged",
+            "not a wrong answer",
+            "try /scenario check again",
+        ] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert_eq!(d.calls().last().unwrap(), "rm -f usta-aaaa1111-chk-r1");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_workspace_default_and_cap_fit_a_cold_build() {
+        let root = tmp("ws_secs");
+        let mut pkg = ws_pkg(&root);
+        assert_eq!(pkg.check.timeout_secs, 300);
+        assert_eq!(pkg.lint(), Vec::<String>::new());
+        pkg.check.timeout_secs = 301;
+        assert!(pkg.lint().concat().contains("at most 300"));
+        pkg.check.timeout_secs = 300;
+        pkg.check.live = true;
+        assert!(!pkg.lint().concat().contains("live"));
         let _ = std::fs::remove_dir_all(root);
     }
 

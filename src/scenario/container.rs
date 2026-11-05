@@ -6,7 +6,9 @@
 use anyhow::{bail, Result};
 
 use crate::scenario::docker::{run_tool, Docker, Out};
-use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, CONTAINER};
+use crate::scenario::env::{
+    internal, CheckOutcome, CheckTimedOut, EnvHandle, Environment, CONTAINER,
+};
 use crate::scenario::folder::move_to_done;
 use crate::scenario::package::Package;
 use crate::scenario::workspace::{discard_folder, mount_arg, WORKSPACE_LABEL};
@@ -35,7 +37,7 @@ pub(crate) struct ContainerEnv<'a> {
 }
 
 impl ContainerEnv<'_> {
-    fn name(&self, run_id: &str) -> String {
+    pub(crate) fn name(&self, run_id: &str) -> String {
         format!("usta-{}-{run_id}", self.project_tag)
     }
 
@@ -191,6 +193,12 @@ impl ContainerEnv<'_> {
         let o = run?;
         Ok(match o.code {
             0 => CheckOutcome::Pass,
+            // Not a verdict on a workspace task: a cold build is slow, and the work was not judged.
+            124 if pkg.environment.workspace.is_some() => {
+                return Err(anyhow::Error::new(CheckTimedOut(format!(
+                    "The check ran out of time after {secs}s, so the work was not judged. That is not a wrong answer: try /scenario check again. If it keeps happening, look for something that never finishes."
+                ))))
+            }
             124 => CheckOutcome::Fail {
                 output: format!("the check timed out after {secs}s"),
             },
@@ -338,6 +346,9 @@ impl Environment for ContainerEnv<'_> {
         }
         if !self.running(&h.reference)? {
             bail!("the task is not running; use /scenario resume");
+        }
+        if pkg.environment.workspace.is_some() && !pkg.check.live {
+            return self.check_fresh(pkg, h);
         }
         self.run_check(pkg, &h.reference)
     }

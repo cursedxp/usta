@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::scenario::container::{ContainerEnv, FILE_LIMIT};
+use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::Docker;
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, FOLDER};
 use crate::scenario::limited_build::ensure_image;
@@ -17,7 +17,6 @@ use crate::scenario::lint::walk;
 use crate::scenario::model::Model;
 use crate::scenario::package::Package;
 use crate::scenario::rubric::{panel, read_work};
-use crate::scenario::workspace::mount_arg;
 
 pub(crate) const TASKS_DIR: &str = "usta-tasks";
 /// The learner's work is theirs: `clean` moves a task here and never deletes it.
@@ -120,49 +119,7 @@ impl FolderEnv<'_> {
             tasks: self.tasks.clone(),
         };
         ensure_image(self.docker, CHECK_IMAGE, self.bases.as_deref())?;
-        let run_id = format!("chk-{run_id}");
-        let name = self.reference(&run_id);
-        let _ = self.docker.run(&["rm", "-f", &name]);
-        let project = format!("usta.project={}", self.project_tag);
-        let run = format!("usta.run={run_id}");
-        let pids = pkg.environment.pids.to_string();
-        let mount = mount_arg(dir, TASK_MOUNT, true);
-        let result = (|| {
-            c.must(&[
-                "create",
-                "--name",
-                &name,
-                "--label",
-                "usta=1",
-                "--label",
-                &project,
-                "--label",
-                &run,
-                "--memory",
-                &pkg.environment.memory,
-                "--cpus",
-                &pkg.environment.cpus,
-                "--pids-limit",
-                &pids,
-                "--network",
-                "none",
-                "--security-opt",
-                "no-new-privileges",
-                "--ulimit",
-                FILE_LIMIT,
-                "--mount",
-                &mount,
-                "--workdir",
-                TASK_MOUNT,
-                CHECK_IMAGE,
-                "sleep",
-                "600",
-            ])?;
-            c.must(&["start", &name])?;
-            c.run_check(pkg, &name)
-        })();
-        let _ = self.docker.run(&["rm", "-f", &name]);
-        result
+        c.throwaway_check(pkg, run_id, CHECK_IMAGE, dir, TASK_MOUNT)
     }
 }
 

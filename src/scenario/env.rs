@@ -39,6 +39,19 @@ pub(crate) fn internal(msg: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(Internal(msg.into()))
 }
 
+/// A check that ran out of time was not a verdict: the text is for the learner (or the
+/// model, in a proof) and the run keeps its last result.
+#[derive(Debug)]
+pub(crate) struct CheckTimedOut(pub String);
+
+impl std::fmt::Display for CheckTimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CheckTimedOut {}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CheckOutcome {
     Pass,
