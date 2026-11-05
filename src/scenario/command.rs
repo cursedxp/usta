@@ -447,7 +447,11 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
             let mut rec = pick_unfinished(&store, id.as_deref(), &ctx.topic, ctx.pid)?;
             let title = title_of(&pkgs, &rec.package);
             if !confirmed {
-                return Ok(Reply::note(drop_warning(&rec, &title, keeps_folder(&pkgs, &rec))));
+                return Ok(Reply::note(drop_warning(
+                    &rec,
+                    &title,
+                    keeps_folder(&pkgs, &rec),
+                )));
             }
             // Drop works without the runtime: a clean that cannot run is retried at the next start.
             let warning = engine::drop_run(&mut env, &store, &mut rec, &tick)?;

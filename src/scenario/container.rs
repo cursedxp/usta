@@ -9,7 +9,7 @@ use crate::scenario::docker::{run_tool, Docker, Out};
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, CONTAINER};
 use crate::scenario::folder::move_to_done;
 use crate::scenario::package::Package;
-use crate::scenario::workspace::{discard_folder, mount_arg, scrub};
+use crate::scenario::workspace::{discard_folder, mount_arg};
 
 /// Check scripts enter the container only here, at check time, and are removed right after.
 pub(crate) const CHECK_DIR: &str = "/opt/.usta-check";
@@ -265,12 +265,14 @@ impl Environment for ContainerEnv<'_> {
             return Err(e);
         }
         // Setup and start may leave links or editor-run files; the learner gets neither.
-        let ready = self.start_and_setup(pkg, &name).and_then(|_| {
-            folder.map_or(Ok(()), |d| {
-                scrub(d).map_err(|e| internal(format!("cannot clean the task folder: {e}")))
-            })
+        let ready = self.start_and_setup(pkg, &name).and_then(|_| match &ws {
+            Some((_, target)) => self.scrub_workspace(&name, target),
+            None => Ok(()),
         });
         if let Err(e) = ready {
+            if let Some((_, target)) = &ws {
+                self.empty_workspace(&name, target);
+            }
             let _ = self.docker.run(&["rm", "-f", &name]);
             discard_folder(folder);
             return Err(e);
