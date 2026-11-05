@@ -9,7 +9,7 @@ use crate::scenario::docker::{run_tool, Docker, Out};
 use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, CONTAINER};
 use crate::scenario::folder::move_to_done;
 use crate::scenario::package::Package;
-use crate::scenario::workspace::{discard_folder, mount_arg};
+use crate::scenario::workspace::{discard_folder, mount_arg, WORKSPACE_LABEL};
 
 /// Check scripts enter the container only here, at check time, and are removed right after.
 pub(crate) const CHECK_DIR: &str = "/opt/.usta-check";
@@ -255,8 +255,11 @@ impl Environment for ContainerEnv<'_> {
                 "",
             ]);
         }
-        if let (Some(m), Some((_, target))) = (&mount, &ws) {
-            args.extend(["--mount", m, "--workdir", target]);
+        let made_at = ws
+            .as_ref()
+            .map(|(dir, _)| format!("{WORKSPACE_LABEL}={}", dir.display()));
+        if let (Some(m), Some(l), Some((_, target))) = (&mount, &made_at, &ws) {
+            args.extend(["--mount", m, "--workdir", target, "--label", l]);
         }
         args.extend([image.as_str(), "sleep", "infinity"]);
         let folder = ws.as_ref().map(|(dir, _)| dir.as_path());
@@ -264,7 +267,7 @@ impl Environment for ContainerEnv<'_> {
             discard_folder(folder);
             return Err(e);
         }
-        // Setup and start may leave links or editor-run files; the learner gets neither.
+        // Setup and start may leave links or editor-run files. One pass: later writers stay.
         let ready = self.start_and_setup(pkg, &name).and_then(|_| match &ws {
             Some((_, target)) => self.scrub_workspace(&name, target),
             None => Ok(()),
@@ -297,7 +300,7 @@ impl Environment for ContainerEnv<'_> {
         }
         self.guard_single()?;
         if workspace {
-            self.start_workspace(pkg, h)?;
+            self.start_workspace(h)?;
         } else {
             self.must(&["start", &h.reference])?;
         }
