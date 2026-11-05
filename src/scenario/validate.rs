@@ -36,6 +36,8 @@ pub(crate) trait Certify: Environment {
     fn tools_problem(&mut self, _h: &EnvHandle) -> Option<String> {
         None
     }
+    /// A proof's folder is deleted on the host; a server may first empty it from inside.
+    fn empty_for_delete(&mut self, _pkg: &Package, _h: &EnvHandle) {}
 }
 
 impl Certify for ContainerEnv<'_> {
@@ -44,6 +46,11 @@ impl Certify for ContainerEnv<'_> {
     }
     fn tools_problem(&mut self, h: &EnvHandle) -> Option<String> {
         self.missing_tools(&h.reference)
+    }
+    fn empty_for_delete(&mut self, pkg: &Package, h: &EnvHandle) {
+        if let Some(target) = &pkg.environment.workspace {
+            self.empty_workspace(&h.reference, target);
+        }
     }
 }
 
@@ -136,6 +143,7 @@ fn prove_and_clean(env: &mut dyn Certify, pkg: &Package, run_id: &str) -> (Resul
         Err(e) => return (feedback("the task's environment did not build", e), true),
     };
     let result = two_conditions(env, pkg, &h);
+    env.empty_for_delete(pkg, &h);
     let cleaned = env.clean(&h).is_ok();
     (result, cleaned)
 }
@@ -328,6 +336,8 @@ impl Prover for RealProver<'_> {
         // A failed clean keeps the record: the sweep needs it to find what is left.
         if cleaned {
             let _ = self.store.remove(&run_id);
+            // A folder that will not delete stays for `leftovers::sweep_scratch`, which
+            // removes the whole scratch once no proof is alive.
             let _ = std::fs::remove_dir_all(scratch);
         }
         // Anything but a pass leaves no image behind, and an error is no reason to skip the probe.
@@ -784,6 +794,17 @@ mod tests {
         );
         assert!(!store.scratch_dir().exists(), "no folder, no done/ left");
         assert!(!root.join("usta-tasks").exists());
+        // Emptied from inside before the server goes, so root-owned files cannot block the delete.
+        let calls = d.calls();
+        let empty = calls
+            .iter()
+            .position(|c| c.contains(" find /work -mindepth 1 -maxdepth 1 -exec rm -rf {} +"))
+            .expect("emptied from inside");
+        let rm = calls
+            .iter()
+            .position(|c| c.starts_with("rm -f usta-"))
+            .unwrap();
+        assert!(empty < rm, "{calls:?}");
         let _ = std::fs::remove_dir_all(root);
     }
 
