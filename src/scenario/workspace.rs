@@ -32,6 +32,9 @@ pub(crate) fn safe_workspace(p: &str) -> bool {
             .any(|d| Path::new(d).starts_with(path) || path.starts_with(d))
 }
 
+/// Where the host folder was when the container was created.
+pub(crate) const WORKSPACE_LABEL: &str = "usta.workspace";
+
 /// One CSV field for `--mount`: a comma or quote in the path must not split the option.
 pub(crate) fn mount_arg(source: &Path, target: &str, readonly: bool) -> String {
     let source = source.display().to_string().replace('"', "\"\"");
@@ -149,33 +152,30 @@ impl ContainerEnv<'_> {
 
     /// `docker start` for a workspace task. A container made before its project moved still
     /// points at the old folder: Docker's text for that never reaches the learner.
-    pub(crate) fn start_workspace(&self, pkg: &Package, h: &EnvHandle) -> Result<()> {
+    pub(crate) fn start_workspace(&self, h: &EnvHandle) -> Result<()> {
         let o = run_tool(self.docker, &["start", &h.reference])?;
         if o.ok() {
             return Ok(());
         }
-        if bind_source_gone(&o.text()) || self.mount_source_missing(pkg, h) {
+        if self.created_elsewhere(h) {
             return Err(gone_error(self.run_id_of(h)));
         }
         Err(internal(format!("docker start failed: {}", o.text())))
     }
 
-    /// The folder the container was created with no longer exists on the host.
-    fn mount_source_missing(&self, pkg: &Package, h: &EnvHandle) -> bool {
-        let Some(target) = &pkg.environment.workspace else {
+    /// The project moved since the container was created. Read from Usta's own label:
+    /// the runtime's mount source has its own path format, and a wrong "gone" costs work.
+    fn created_elsewhere(&self, h: &EnvHandle) -> bool {
+        let Some((dir, _)) = self.folder_of(h) else {
             return false;
         };
-        let format = format!("{{{{range .Mounts}}}}{{{{if eq .Destination \"{target}\"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}");
+        let format = format!("{{{{index .Config.Labels \"{WORKSPACE_LABEL}\"}}}}");
         let Ok(o) = self.docker.run(&["inspect", "-f", &format, &h.reference]) else {
             return false;
         };
-        let source = o.stdout.trim();
-        o.ok() && !source.is_empty() && !Path::new(source).exists()
+        let made_at = o.stdout.trim();
+        o.ok() && !made_at.is_empty() && Path::new(made_at) != dir
     }
-}
-
-fn bind_source_gone(text: &str) -> bool {
-    text.contains("bind source path does not exist")
 }
 
 #[cfg(test)]
@@ -426,37 +426,28 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_start_that_fails_on_a_stale_bind_source_gives_the_plain_sentence() {
+    fn a_start_that_fails_after_the_project_moved_gives_the_plain_sentence() {
         let root = tmp("ws_stale");
         let pkg = ws_pkg(&root);
-        for (start_err, source) in [
-            ("boom", "/moved/away/usta-tasks/r1"),
-            (
-                "invalid mount config: bind source path does not exist: /x",
-                "",
-            ),
-        ] {
-            let stale = std::rc::Rc::new(std::cell::Cell::new(false));
-            let flag = stale.clone();
-            let d = FakeDocker::new(move |l| {
-                if l.starts_with("start ") && flag.get() {
-                    fail(1, start_err)
-                } else if l.starts_with("inspect -f {{range .Mounts}}") {
-                    ok(source)
-                } else {
-                    ok("")
-                }
-            });
-            let mut e = env(&d, &root);
-            let h = e.prepare(&pkg, "r1").unwrap();
-            stale.set(true);
-            let err = e.resume(&pkg, &h).unwrap_err().to_string();
-            assert!(
-                err.contains("files for this task are gone") && !err.contains(start_err),
-                "{err}"
-            );
-            let _ = std::fs::remove_dir_all(root.join("usta-tasks"));
-        }
+        let stale = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = stale.clone();
+        let d = FakeDocker::new(move |l| {
+            if l.starts_with("start ") && flag.get() {
+                fail(1, "boom")
+            } else if l.starts_with("inspect -f {{index .Config.Labels") {
+                ok("/moved/away/usta-tasks/r1")
+            } else {
+                ok("")
+            }
+        });
+        let mut e = env(&d, &root);
+        let h = e.prepare(&pkg, "r1").unwrap();
+        stale.set(true);
+        let err = e.resume(&pkg, &h).unwrap_err().to_string();
+        assert!(
+            err.contains("files for this task are gone") && !err.contains("boom"),
+            "{err}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -471,7 +462,7 @@ pub(crate) mod tests {
         let d = FakeDocker::new(move |l| {
             if l.starts_with("start ") && flag.get() {
                 fail(1, "port is already allocated")
-            } else if l.starts_with("inspect -f {{range .Mounts}}") {
+            } else if l.starts_with("inspect -f {{index .Config.Labels") {
                 ok(here)
             } else {
                 ok("")

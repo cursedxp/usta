@@ -34,7 +34,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 🌍 **Any topic** | Not Rust-specific. For a new topic (Linux security, GTM, anything) Usta **derives the approach through an introduction** and builds a web-researched **curriculum map** (`not seen → seen → settled → deepened`). Scope guarding: nothing stays hanging in the air. |
 | 📚 **Bring your own material** | Drop your book/course notes (md/txt — PDFs auto-convert if `pdftotext` is installed) into `materials/` — Usta anchors the curriculum to its chapters, assigns reading, and quizzes you on it. You read; it never summarizes the book at you. |
 | 🎨 **Terminal UI** | Claude Code-style terminal UI: two-column welcome box on open (learning status + what's next), a borderless multiline input (a single rule above, grows to 8 rows), sticky status line (spinner + context gauge); a calm, colorblind-safe visual language (glyph+color pairs, one accent), designed in a full TUI design system. Fullscreen: usta owns the window and keeps the conversation in its own scrollable pane (mouse wheel / PageUp / PageDown; drag to select and copy chat text). Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
-| 🛠️ **Scenario mode** | `/scenario` and Usta brings the work, with a story that continues from one task to the next. Any subject works: ask for it (`/scenario start pottery`) and Usta writes the task, tests that it can be solved, and keeps it for next time. Usta picks the environment per task: a small server (it opens a terminal window already inside it), a folder of files, or the conversation itself. Docker is needed only for tasks with a running system. `/scenario check` tells you whether it holds. Not built yet: real accounts and trading replay. |
+| 🛠️ **Scenario mode** | `/scenario` and Usta brings the work, with a story that continues from one task to the next. Any subject works: ask for it (`/scenario start pottery`) and Usta writes the task, tests that it can be solved, and keeps it for next time. Usta picks the environment per task: a small server (it opens a terminal window already inside it), a folder of files, or the conversation itself. Docker is needed only for tasks with a running system. `/scenario check` tells you whether it holds. Not built yet: real accounts and trading replay. Coding tasks keep their files in a folder on your computer, so you write in your own editor while the code runs and is checked inside the task. |
 | 🗂️ **Management** | `usta topics` shows what you're learning where; `reset` clears a topic or everything. |
 | 📈 **Visible progress** | Every session lands in a lightweight history — `usta stats` shows your week (sessions, map %, settled items) and streaks. Broken streak? No guilt: it shows your longest instead. |
 
@@ -169,7 +169,7 @@ Changing behavior = edit markdown, don't touch Rust. (Global behavior files aren
 
 ## Status
 
-v0.41 · Rust 2021 (1.88+). Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+v0.42 · Rust 2021 (1.88+). Design decisions: [`SPEC.md`](SPEC.md). Core behavior: [`USTA.md`](USTA.md). Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Scenario mode design: [spec](docs/superpowers/specs/2026-11-04-scenario-mode-design.md). Further ideas: Homebrew tap, streaming replies, multi-terminal hardening, self-health-check (links/consistency), tech-notes cache.
 

@@ -499,6 +499,7 @@ usta/
   profile-only flush).
 - **Scenario mode (v0.40.0):** see §4.24; containers are scoped by a per-project label, tone is shell-owned, the closing flush owns the curriculum map. Version: `0.40.0`.
 - **Scenario mode step 2 (v0.41.0):** see §4.25; any subject on demand, generated and proven before it is kept. Version: `0.41.0`.
+- **Scenario mode step 3 (v0.42.0):** `environment.workspace` mounts a host task folder into a container task (`src/scenario/workspace.rs`): the learner edits in their own editor, build and check run inside, generated scripts stay off the host. Design: the scenario mode spec. Version: `0.42.0`.
 
 ## 12. Open Decision Points (clarified in the implementation plan)
 
