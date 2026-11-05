@@ -291,11 +291,16 @@ impl Environment for ContainerEnv<'_> {
 
     fn resume(&mut self, pkg: &Package, h: &EnvHandle) -> Result<Option<String>> {
         self.owned(h)?;
-        if pkg.environment.workspace.is_some() {
+        let workspace = pkg.environment.workspace.is_some();
+        if workspace {
             self.workspace_present(h)?;
         }
         self.guard_single()?;
-        self.must(&["start", &h.reference])?;
+        if workspace {
+            self.start_workspace(pkg, h)?;
+        } else {
+            self.must(&["start", &h.reference])?;
+        }
         let Some(s) = &pkg.environment.start else {
             return Ok(None);
         };
