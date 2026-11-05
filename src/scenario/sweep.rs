@@ -1261,7 +1261,10 @@ mod tests {
             .filter(|c| c.starts_with("rm "))
             .collect();
         assert_eq!(rms.len(), 2, "{rms:?}");
-        assert!(rms.iter().all(|c| c.contains("-a") || c.contains("-b")));
+        assert!(
+            rms.iter().all(|c| c.ends_with("-a") || c.ends_with("-b")),
+            "{rms:?}"
+        );
         let _ = std::fs::remove_dir_all(p);
     }
 

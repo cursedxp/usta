@@ -489,6 +489,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_check_with_the_folder_gone_says_so_and_runs_no_script() {
+        let root = tmp("ws_check_gone");
+        let pkg = ws_pkg(&root);
+        let d = FakeDocker::new(|l| ok(if l.starts_with("inspect") { "true" } else { "" }));
+        let mut e = env(&d, &root);
+        let h = e.prepare(&pkg, "r1").unwrap();
+        std::fs::remove_dir_all(root.join("usta-tasks/r1")).unwrap();
+        d.calls.borrow_mut().clear();
+        let err = e.check(&pkg, &h).unwrap_err().to_string();
+        assert!(err.contains("files for this task are gone"), "{err}");
+        assert!(!d.calls().iter().any(|c| c.contains("check.sh")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn clean_removes_the_container_then_moves_the_folder_without_overwriting() {
         let root = tmp("ws_clean");
         let pkg = ws_pkg(&root);
