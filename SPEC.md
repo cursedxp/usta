@@ -502,6 +502,7 @@ usta/
 - **Scenario mode step 3 (v0.42.0):** `environment.workspace` mounts a host task folder into a container task (`src/scenario/workspace.rs`): the learner edits in their own editor, build and check run inside, generated scripts stay off the host. Design: the scenario mode spec. Version: `0.42.0`.
 - **Scenario mode, no built-ins (v0.43.0):** the hand-written packages are gone; every task is generated and takes the strict path. Version: `0.43.0`.
 - **Scenario mode, safer checks (v0.44.0):** a workspace task's check runs in a throwaway server with the folder read-only; generated images follow the 14-day idle rule; build output stays out of the folder. A code task proven under v0.42 or v0.43 is not proven again; if its check needs to write to the folder, drop it and generate a new one. Version: `0.44.0`.
+- **Scenario mode, real-world English (v0.44.1):** task text follows the learner's language; everything inside the task's world (commands, script messages, file names, logs, config) stays in English as on a real system, because the learner must meet what a real system shows. Only new tasks change. Version: `0.44.1`.
 
 ## 12. Open Decision Points (clarified in the implementation plan)
 
