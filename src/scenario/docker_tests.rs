@@ -253,10 +253,11 @@ fn a_workspace_is_shared_both_ways_checked_and_moved_to_done() {
     let root = tmp("cert_ws");
     let d = root.join("cert-ws");
     for (f, c) in [
-        ("task.toml", "id = \"cert-ws\"\ntopic = \"cert\"\ntitle = \"T\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"container\"\nworkspace = \"/work\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n"),
+        ("task.toml", "id = \"cert-ws\"\ntopic = \"cert\"\ntitle = \"T\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"container\"\nworkspace = \"/work\"\nsetup = \"/opt/setup.sh\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n"),
         ("instruction.md", "Write note.txt.\n"),
         ("tone/adventure.md", "## open\nGo.\n\n## close\nDone.\n"),
-        ("environment/Dockerfile", "FROM debian:12-slim\n"),
+        ("environment/Dockerfile", "FROM debian:12-slim\nCOPY setup.sh /opt/setup.sh\n"),
+        ("environment/setup.sh", "echo x > /work/.hidden\nmkdir /work/.vscode\nln -s /etc/passwd /work/link\nln -s /etc /work/src_link\n"),
         ("environment/files/start.py", "print('hi')\n"),
         ("solution/solve.sh", "echo done > /work/note.txt\n"),
         ("tests/check.sh", "[ \"$(pwd)\" = /work ] || exit 1\ngrep -q done /work/note.txt || exit 1\nexit 0\n"),
@@ -285,6 +286,11 @@ fn a_workspace_is_shared_both_ways_checked_and_moved_to_done() {
     // The starting file is inside, and the shell starts at the workspace.
     assert_eq!(sh("cat /work/start.py").stdout.trim(), "print('hi')");
     assert_eq!(sh("pwd").stdout.trim(), "/work");
+    // What setup left (a hidden file, a hidden folder, links) is gone on the host too.
+    for gone in [".hidden", ".vscode", "link", "src_link"] {
+        assert!(folder.join(gone).symlink_metadata().is_err(), "{gone}");
+    }
+    assert!(folder.join("start.py").is_file());
     // Host to container, and container to host.
     std::fs::write(folder.join("from_host.txt"), "host\n").unwrap();
     assert_eq!(sh("cat /work/from_host.txt").stdout.trim(), "host");
