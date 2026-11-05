@@ -418,7 +418,13 @@ async fn run_claude_cli(
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("usta-system-{}-{n}.md", std::process::id()));
-        std::fs::write(&path, system).context("failed to write the system prompt file")?;
+        // `create_new` refuses anything already at this predictable path, a planted link included.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, system.as_bytes()))
+            .context("failed to write the system prompt file")?;
         cmd.arg("--append-system-prompt-file").arg(&path);
         Some(PromptFile(path))
     } else {
