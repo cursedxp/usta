@@ -51,7 +51,7 @@ const RULES: &str = "Check scripts look at system state, never the commands type
     A rubric has at least 2 criteria, each with an id and text, resting only on material in the task. Measure process and decision quality, never outcome. In a task with files, each criterion lists in evidence the files it rests on. \
     Never invent results such as a traffic number after a decision. Finance, health and law tasks use past or fictional data only; never advise on a real position, and never use real money. A task with a real-money risk runs in a simulated world. \
     Keep the story continuous: use the company and open threads given. story.needs and story.closes may name only open threads. story.opens uses new lowercase ids. Skills are short lowercase keywords taken from the curriculum map where possible. \
-    Write learner text in the learner's language, as their profile shows, else English. Keep the whole package small. Do not browse the web.";
+    Write task text in the learner's language, as their profile shows, else English: instruction.md, the rubric, and the lines a check script prints. Everything inside the task's world stays as on a real system, in English: commands, scripts and their messages, code, compiler and tool output, file and directory names, logs and config. Never translate them. Keep the whole package small. Do not browse the web.";
 
 /// Where a workspace check runs, and what it may write. Matches `ContainerEnv::check_fresh`.
 const WORKSPACE_CHECK: &str = "The check of a workspace task runs in a fresh server made from the same image, not in the learner's running one. There the workspace path is read-only and holds the learner's files, and the check cannot write to it: it deletes or edits nothing there, and a build must not write there either (copy the files to /tmp and build in the copy, or point the build tool's output folder under /tmp). Everywhere else in that fresh server it may write. It starts from the image alone, so what environment.setup or environment.start did in the running server is not there: install tools with RUN lines. Every check builds from cold, so check.timeout_secs defaults to 300 and may be up to 300 for a workspace task. \
@@ -288,6 +288,13 @@ pub(crate) fn all(b: &Brief) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn real_world_output_stays_english_and_task_text_follows_the_learner() {
+        assert!(RULES.contains("Write task text in the learner's language"));
+        assert!(RULES.contains("Never translate them"));
+        assert!(!RULES.contains("Write learner text"));
+    }
 
     #[test]
     fn the_judge_prompt_carries_the_rule_and_frames_the_work_as_data() {
