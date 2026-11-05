@@ -123,11 +123,10 @@ fn rubric_problems(p: &Package) -> Vec<String> {
             }
         }
     }
-    if p.is_generated()
-        && p.check
-            .why_rubric
-            .as_deref()
-            .is_none_or(|w| w.trim().is_empty())
+    if p.check
+        .why_rubric
+        .as_deref()
+        .is_none_or(|w| w.trim().is_empty())
     {
         out.push("check.why_rubric must say why this task cannot have a script check".into());
     }
@@ -174,7 +173,7 @@ fn kind_problems(p: &Package) -> Vec<String> {
                     out.push("a workspace needs starting files in environment/files/".into());
                 }
             }
-            if p.is_generated() && safe_rel(&p.environment.context) {
+            if safe_rel(&p.environment.context) {
                 let recipe = p.dir.join(&p.environment.context).join("Dockerfile");
                 match std::fs::read_to_string(recipe) {
                     Ok(t) => {
@@ -375,9 +374,7 @@ impl Package {
             }
         }
         p.extend(kind_problems(self));
-        if self.is_generated() {
-            p.extend(cap_problems(self));
-        }
+        p.extend(cap_problems(self));
         let thread_ids = self
             .story
             .opens
@@ -644,7 +641,7 @@ evidence = ["competitors.csv"]
     }
 
     #[test]
-    fn a_generated_recipe_is_parsed_but_a_shipped_one_is_not() {
+    fn a_recipe_is_parsed() {
         let root = tmp("lint_recipe");
         let d = write_pkg(&root);
         std::fs::write(
@@ -652,9 +649,7 @@ evidence = ["competitors.csv"]
             "FROM debian:12-slim\nADD http://x/y /y\n",
         )
         .unwrap();
-        let mut p = Package::load(&d).unwrap();
-        assert!(p.lint().iter().all(|l| !l.contains("ADD")));
-        p.id = "gen-x-1".into();
+        let p = Package::load(&d).unwrap();
         assert!(p.lint().iter().any(|l| l.contains("ADD is not allowed")));
         std::fs::write(d.join("environment/Dockerfile"), [0xff, 0xfe, b'\n']).unwrap();
         assert!(p.lint().iter().any(|l| l.contains("not valid UTF-8")));

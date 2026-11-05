@@ -171,11 +171,6 @@ pub(crate) fn section(md: &str, name: &str) -> Option<String> {
 }
 
 impl Package {
-    /// Usta assigns this prefix; the model never chooses an id.
-    pub fn is_generated(&self) -> bool {
-        self.id.starts_with("gen-")
-    }
-
     pub fn is_rubric(&self) -> bool {
         self.check.kind == "rubric"
     }

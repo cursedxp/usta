@@ -298,14 +298,6 @@ impl RealProver<'_> {
 
 impl Prover for RealProver<'_> {
     fn prove(&mut self, pkg: &Package, round: usize) -> Result<Proof> {
-        // Only Usta-assigned ids take the capped build; a built-in id would reach the
-        // unlimited `docker build` path.
-        if !pkg.is_generated() {
-            return Err(internal(format!(
-                "validation refused '{}': not a generated package",
-                pkg.id
-            )));
-        }
         if pkg.is_rubric() {
             (self.say)(crate::scenario::generate::SAY_RUBRIC);
             return prove_rubric(self.model, pkg);
@@ -749,22 +741,6 @@ mod tests {
 
     fn rmi(d: &FakeDocker) -> bool {
         d.calls().iter().any(|c| c.starts_with("rmi "))
-    }
-
-    #[test]
-    fn a_package_that_is_not_generated_is_refused_before_anything_runs() {
-        let root = tmp("val_not_gen");
-        let p = Package::load(&write_pkg(&root)).unwrap();
-        assert!(!p.is_generated());
-        let d = FakeDocker::new(|_| ok("true"));
-        let (r, store) = prover_with(&root, &d, |pr| pr.prove(&p, 0));
-        assert!(
-            r.is_err(),
-            "a built-in id would take the unlimited build path"
-        );
-        assert!(d.calls().is_empty(), "{:?}", d.calls());
-        assert!(store.all().is_empty());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

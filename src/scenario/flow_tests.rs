@@ -23,8 +23,48 @@ use crate::scenario::sweep;
 use crate::scenario::terminal::{Launcher, WindowReq};
 
 const TODAY: &str = "2026-11-04";
-const BACKUP: &str = "linux-backup-permissions";
-const CONFIG: &str = "linux-config-typo";
+const BACKUP: &str = "linux-fix-a";
+const CONFIG: &str = "linux-fix-b";
+
+/// A small server task in the library: `needs` and `opens` are story thread ids; the
+/// task with a `start` script has a service to bring back on resume.
+fn fixture(global: &std::path::Path, id: &str, needs: &[&str], opens: &str, start: bool) {
+    let d = library::library_root(global).join(id);
+    let start_line = if start {
+        "start = \"/usr/local/lib/usta/start.sh\"\n"
+    } else {
+        ""
+    };
+    let needs: Vec<String> = needs.iter().map(|n| format!("\"{n}\"")).collect();
+    let task = format!(
+        "id = \"{id}\"\ntopic = \"linux\"\ntitle = \"Task {id}\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"container\"\nsetup = \"/usr/local/lib/usta/setup.sh\"\n{start_line}\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n\n[story]\ncompany = \"Shopwell\"\nevent = \"Done {id}.\"\nneeds = [{}]\n\n[[story.opens]]\nid = \"{opens}\"\ntext = \"{opens}\"\n",
+        needs.join(", ")
+    );
+    let copy = if start {
+        "setup.sh start.sh"
+    } else {
+        "setup.sh"
+    };
+    for (f, c) in [
+        ("task.toml", task),
+        ("instruction.md", "Fix it.\n".into()),
+        (
+            "tone/adventure.md",
+            "## open\n03:12. It broke.\n\n## close\nFixed.\n".into(),
+        ),
+        (
+            "environment/Dockerfile",
+            format!("FROM debian:12-slim\nCOPY {copy} /usr/local/lib/usta/\nWORKDIR /root\n"),
+        ),
+        ("environment/setup.sh", "true\n".into()),
+        ("environment/start.sh", "true\n".into()),
+        ("solution/solve.sh", "true\n".into()),
+        ("tests/check.sh", "exit 0\n".into()),
+    ] {
+        std::fs::create_dir_all(d.join(f).parent().unwrap()).unwrap();
+        std::fs::write(d.join(f), c).unwrap();
+    }
+}
 
 #[derive(Default)]
 struct Daemon {
@@ -109,6 +149,8 @@ impl Daemon {
             } else {
                 fail(1, "No such object")
             }
+        } else if l.contains("start.sh") && self.start_script_fails {
+            fail(1, "shopd: bad config")
         } else if l.contains(" timeout ") && l.contains(".usta-solution") {
             ok("")
         } else if l.contains(" timeout ") {
@@ -130,8 +172,6 @@ impl Daemon {
                 },
                 stderr: String::new(),
             }
-        } else if l.contains("start.sh") && self.start_script_fails {
-            fail(1, "shopd: bad config")
         } else {
             ok("")
         }
@@ -200,8 +240,18 @@ impl World {
         }));
         let d2 = daemon.clone();
         let missing = Rc::new(Cell::new(false));
+        let global = base.join("global");
+        fixture(&global, BACKUP, &[], "backups-ok", false);
+        fixture(&global, CONFIG, &["logs-unrotated"], "config-review", true);
+        fixture(
+            &global,
+            "linux-fix-c",
+            &["backups-ok"],
+            "logs-unrotated",
+            false,
+        );
         World {
-            global: base.join("global"),
+            global,
             base,
             project,
             topic: "linux".into(),
@@ -1429,7 +1479,7 @@ fn esc_during_generation_changes_nothing_the_learner_can_see() {
     );
     assert_eq!(w.running().len(), 1);
     let all = library::load_all(&w.global, "linux").unwrap().pkgs;
-    assert!(all.iter().all(|p| !p.is_generated()));
+    assert_eq!(all.len(), 3, "nothing was added to the library");
 }
 
 #[test]
@@ -1464,7 +1514,6 @@ fn a_folder_script_check_starts_the_runtime_but_a_folder_rubric_does_not() {
 #[test]
 fn a_bad_library_package_is_reported_on_start() {
     let w = World::new("flow_bad_pkg");
-    library::sync(&w.global).unwrap();
     let broken = library::library_root(&w.global).join("broken");
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(broken.join("task.toml"), "not toml [").unwrap();
@@ -2039,4 +2088,96 @@ fn a_bare_start_passing_over_a_server_task_for_a_library_task_says_why() {
     let r = w.start(None);
     assert_eq!(w.runs().last().unwrap().package, "linux-zz-talk");
     assert!(says(&r, "needs none"), "{:?}", r.notices);
+}
+
+const RETIRED: &str = "linux-disk-hog";
+
+/// What an older Usta left behind: the library copy of a retired hand-written task,
+/// and a run of this project that names it.
+fn retired_copy_with_a_paused_run(w: &World) -> RunRecord {
+    w.start(Some(BACKUP));
+    w.relaunch();
+    let lib = library::library_root(&w.global);
+    std::fs::rename(lib.join(BACKUP), lib.join(RETIRED)).unwrap();
+    let task = std::fs::read_to_string(lib.join(RETIRED).join("task.toml")).unwrap();
+    std::fs::write(
+        lib.join(RETIRED).join("task.toml"),
+        task.replace(BACKUP, RETIRED),
+    )
+    .unwrap();
+    let mut rec = w.only_run();
+    assert_eq!(rec.state, RunState::Paused);
+    rec.package = RETIRED.into();
+    Store::new(&w.project).save(&rec).unwrap();
+    rec
+}
+
+#[test]
+fn a_retired_copy_nobody_uses_is_neither_offered_nor_reported() {
+    let w = World::new("flow_retired_idle");
+    fixture(&w.global, RETIRED, &[], "stale-thread", false);
+    let list = w.cmd(ScenarioCmd::List);
+    assert!(
+        !says(&list, &format!("Task {RETIRED}")),
+        "{:?}",
+        list.notices
+    );
+    assert!(!says(&list, "could not be used"), "{:?}", list.notices);
+    // Named as a request it is not a pick: it goes to generation (no model here).
+    let r = w.start(Some(RETIRED));
+    assert!(says(&r, "no task was started"), "{:?}", r.notices);
+    assert!(w.runs().is_empty());
+}
+
+#[test]
+fn an_unfinished_run_on_a_retired_copy_resumes_checks_and_finishes_then_the_copy_goes_quiet() {
+    let w = World::new("flow_retired_run");
+    let rec = retired_copy_with_a_paused_run(&w);
+    let list = w.cmd(ScenarioCmd::List);
+    assert!(says(&list, &rec.run_id), "{:?}", list.notices);
+    let back = w.cmd(ScenarioCmd::Resume(None));
+    assert!(
+        turn(&back).starts_with("[SCENARIO RESUME]"),
+        "{:?}",
+        back.notices
+    );
+    assert_eq!(w.only_run().state, RunState::Active);
+    w.daemon.borrow_mut().check_code = 0;
+    let pass = w.cmd(ScenarioCmd::Check);
+    assert!(
+        turn(&pass).starts_with("[SCENARIO DONE]"),
+        "{:?}",
+        pass.notices
+    );
+    assert_eq!(w.box_count(), 0);
+    let after = w.cmd(ScenarioCmd::List);
+    assert!(
+        !says(&after, &format!("Task {BACKUP}")),
+        "{:?}",
+        after.notices
+    );
+    let r = w.start(Some(RETIRED));
+    assert!(says(&r, "no task was started"), "{:?}", r.notices);
+}
+
+#[test]
+fn a_run_whose_retired_copy_was_deleted_keeps_its_work_and_can_be_dropped() {
+    let w = World::new("flow_retired_gone");
+    let rec = retired_copy_with_a_paused_run(&w);
+    let lib = library::library_root(&w.global);
+    std::fs::remove_dir_all(lib.join(RETIRED)).unwrap();
+    let e = w.try_cmd(ScenarioCmd::Resume(None)).unwrap_err();
+    assert!(format!("{e:#}").contains("not in the library"), "{e:#}");
+    assert_eq!(
+        w.only_run().state,
+        RunState::Paused,
+        "the record is untouched"
+    );
+    assert_eq!(w.box_count(), 1, "the learner's server is untouched");
+    let dropped = w.cmd(ScenarioCmd::Drop {
+        id: Some(rec.run_id),
+        confirmed: true,
+    });
+    assert!(says(&dropped, "Dropped"), "{:?}", dropped.notices);
+    assert_eq!(w.box_count(), 0);
 }

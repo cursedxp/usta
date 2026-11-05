@@ -284,8 +284,19 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         _ => {}
     }
 
-    library::sync(&ctx.global)?;
-    let loaded = library::load_all(&ctx.global, &ctx.topic)?;
+    let mut loaded = library::load_all(&ctx.global, &ctx.topic)?;
+    let in_use: Vec<String> = store
+        .all()
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                r.state,
+                RunState::Preparing | RunState::Active | RunState::Paused
+            )
+        })
+        .map(|r| r.package)
+        .collect();
+    library::hide_retired(&mut loaded, &in_use);
     let pkgs = loaded.pkgs;
     let bad = || bad_notice(ctx, &loaded.bad);
     if matches!(cmd, ScenarioCmd::List) {

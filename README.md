@@ -141,6 +141,7 @@ A script check is exact: it looks at the real result. A rubric check is Usta's j
 
 **Limits**
 
+- Usta ships no ready-made tasks, not even for Linux: the first task in a topic is written when you ask, so it takes a few minutes.
 - Generated scripts run only inside a task, never on your computer. A task protects against mistakes, not against malicious code.
 - Setting up a task uses the network and can reach your local network. Running a task has no network unless the task declares it.
 - The task folder is writable from inside. Usta removes hidden files and links from it once, when the task starts; after that, your editor's trust prompt is the guard.
