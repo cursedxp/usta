@@ -9,7 +9,9 @@ use serde::Deserialize;
 use crate::scenario::container::ContainerEnv;
 use crate::scenario::docker::{probe, Docker, Runtime};
 use crate::scenario::engine::Tick;
-use crate::scenario::env::{internal, CheckOutcome, EnvHandle, Environment, Internal, CONTAINER};
+use crate::scenario::env::{
+    internal, CheckOutcome, CheckTimedOut, EnvHandle, Environment, Internal, CONTAINER,
+};
 use crate::scenario::folder::{copy_data, FolderEnv};
 use crate::scenario::lint::walk;
 use crate::scenario::model::{model_failed, Model, ModelFailed};
@@ -71,7 +73,7 @@ fn lint_first(pkg: &Package) -> Option<Proof> {
 /// Tool output caused by the package goes back to the model; anything else stops the run.
 /// A `ModelFailed` is not `Internal`, so an outage can never become a round.
 fn feedback(stage: &str, e: anyhow::Error) -> Result<Proof> {
-    if e.downcast_ref::<Internal>().is_some() {
+    if e.downcast_ref::<Internal>().is_some() || e.downcast_ref::<CheckTimedOut>().is_some() {
         Ok(Proof::Problems(vec![format!("{stage}: {e}")]))
     } else {
         Err(e)
@@ -84,7 +86,10 @@ fn feedback(stage: &str, e: anyhow::Error) -> Result<Proof> {
 /// the prover's question, asked after a proof that did not pass.
 fn check_in_proof(env: &mut dyn Certify, pkg: &Package, h: &EnvHandle) -> Result<CheckOutcome> {
     env.check(pkg, h).map_err(|e| {
-        if e.downcast_ref::<Internal>().is_some() || e.downcast_ref::<ModelFailed>().is_some() {
+        if e.downcast_ref::<Internal>().is_some()
+            || e.downcast_ref::<ModelFailed>().is_some()
+            || e.downcast_ref::<CheckTimedOut>().is_some()
+        {
             e
         } else {
             internal("the task was not running when its check ran")
@@ -784,9 +789,64 @@ mod tests {
             .expect("emptied from inside");
         let rm = calls
             .iter()
-            .position(|c| c.starts_with("rm -f usta-"))
+            .position(|c| c == "rm -f usta-t-val-gen-demo-r1")
             .unwrap();
         assert!(empty < rm, "{calls:?}");
+        // Every check of the proof, the one after the solution too, ran in a fresh server
+        // with the folder read-only: a check that writes to the workspace fails here.
+        let checks = |p: &str| calls.iter().filter(|c| c.starts_with(p)).count();
+        assert_eq!(checks("exec -u 0 usta-t-chk-val-gen-demo-r1 timeout"), 3);
+        assert!(!calls
+            .iter()
+            .any(|c| c.contains("usta-t-val-gen-demo-r1 timeout 300 sh /opt/.usta-check")));
+        assert!(calls
+            .iter()
+            .filter(|c| c.starts_with("create --name usta-t-chk-"))
+            .all(|c| c.contains("target=/work,readonly")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_check_that_writes_to_the_workspace_fails_the_proof() {
+        // The read-only mount makes the write fail in the check; its exit 1 is "not solved",
+        // also after the reference solution.
+        let root = tmp("val_ws_write");
+        let p = as_generated(crate::scenario::workspace::tests::ws_pkg(&root));
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("ps ") {
+                return ok("");
+            }
+            if l.contains(" sh /opt/.usta-check/check.sh") {
+                return dfail(1, "touch: /work/out: Read-only file system");
+            }
+            ok("true")
+        });
+        let (r, _) = prover_with(&root, &d, |pr| pr.prove(&p, 1));
+        let Proof::Problems(p) = r.unwrap() else {
+            panic!("a check that writes must not pass")
+        };
+        assert!(p.concat().contains("Read-only file system"), "{p:?}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_check_that_runs_out_of_time_in_a_proof_goes_back_to_the_model() {
+        let root = tmp("val_ws_slow");
+        let p = as_generated(crate::scenario::workspace::tests::ws_pkg(&root));
+        let d = FakeDocker::new(|l| {
+            if l.starts_with("ps ") {
+                return ok("");
+            }
+            if l.contains(" sh /opt/.usta-check/check.sh") {
+                return dfail(124, "");
+            }
+            ok("true")
+        });
+        let (r, _) = prover_with(&root, &d, |pr| pr.prove(&p, 1));
+        let Proof::Problems(p) = r.unwrap() else {
+            panic!("a timeout is a problem with the package")
+        };
+        assert!(p.concat().contains("ran out of time"), "{p:?}");
         let _ = std::fs::remove_dir_all(root);
     }
 

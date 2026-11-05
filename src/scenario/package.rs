@@ -45,9 +45,10 @@ fn d_cpus() -> String {
 fn d_pids() -> u32 {
     128
 }
-fn d_timeout() -> u32 {
-    30
-}
+/// `check.timeout_secs` when the package does not say, and for a task with a workspace
+/// (a cold build runs at every check, at 0.5 CPU).
+pub(crate) const DEFAULT_CHECK_SECS: u32 = 30;
+pub(crate) const WORKSPACE_CHECK_SECS: u32 = 300;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct EnvSpec {
@@ -91,8 +92,13 @@ pub(crate) struct CheckSpec {
     /// File name under `tests/`. Script checks only.
     #[serde(default)]
     pub script: String,
-    #[serde(default = "d_timeout")]
+    /// 0 until `Package::load` fills in the default.
+    #[serde(default)]
     pub timeout_secs: u32,
+    /// Workspace tasks only: the check needs the running server, so it runs in it, in
+    /// place. Otherwise it runs in a fresh server with the workspace read-only.
+    #[serde(default)]
+    pub live: bool,
     #[serde(default)]
     pub rubric: Vec<Criterion>,
     /// Files the learner must write in a folder task; what the judge reads.
@@ -199,6 +205,13 @@ impl Package {
                 file.display(),
                 p.check.kind
             );
+        }
+        if p.check.timeout_secs == 0 {
+            p.check.timeout_secs = if p.environment.workspace.is_some() {
+                WORKSPACE_CHECK_SECS
+            } else {
+                DEFAULT_CHECK_SECS
+            };
         }
         p.dir = dir.to_path_buf();
         Ok(p)

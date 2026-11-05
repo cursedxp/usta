@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::scenario::env::{CONTAINER, CONVERSATION, FOLDER};
-use crate::scenario::package::{Package, Tone};
+use crate::scenario::package::{Package, Tone, WORKSPACE_CHECK_SECS};
 use crate::scenario::workspace::safe_workspace;
 
 const MAX_FILES: usize = 200;
@@ -262,11 +262,19 @@ fn cap_problems(p: &Package) -> Vec<String> {
             e.pids
         ));
     }
-    if p.check.timeout_secs == 0 || p.check.timeout_secs > MAX_CHECK_SECS {
+    let cap = if e.workspace.is_some() {
+        WORKSPACE_CHECK_SECS
+    } else {
+        MAX_CHECK_SECS
+    };
+    if p.check.timeout_secs == 0 || p.check.timeout_secs > cap {
         out.push(format!(
-            "check.timeout_secs {} must be at most {MAX_CHECK_SECS}",
+            "check.timeout_secs {} must be at most {cap}",
             p.check.timeout_secs
         ));
+    }
+    if p.check.live && e.workspace.is_none() {
+        out.push("check.live is for tasks with environment.workspace only".into());
     }
     out
 }
@@ -616,6 +624,19 @@ evidence = ["competitors.csv"]
             .lint()
             .join("\n")
             .contains("competitors.csv"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_task_without_workspace_keeps_the_old_cap_and_has_no_live_check() {
+        let root = tmp("lint_cap_old");
+        let mut p = Package::load(&write_pkg(&root)).unwrap();
+        assert_eq!(p.check.timeout_secs, 30);
+        p.check.timeout_secs = 121;
+        p.check.live = true;
+        let problems = p.lint().join("\n");
+        assert!(problems.contains("at most 120"), "{problems}");
+        assert!(problems.contains("check.live"), "{problems}");
         let _ = std::fs::remove_dir_all(root);
     }
 

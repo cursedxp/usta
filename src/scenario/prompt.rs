@@ -53,6 +53,10 @@ const RULES: &str = "Check scripts look at system state, never the commands type
     Keep the story continuous: use the company and open threads given. story.needs and story.closes may name only open threads. story.opens uses new lowercase ids. Skills are short lowercase keywords taken from the curriculum map where possible. \
     Write learner text in the learner's language, as their profile shows, else English. Keep the whole package small. Do not browse the web.";
 
+/// Where a workspace check runs, and what it may write. Matches `ContainerEnv::check_fresh`.
+const WORKSPACE_CHECK: &str = "The check of a workspace task runs in a fresh server made from the same image, not in the learner's running one. There the workspace path is read-only and holds the learner's files, and the check cannot write to it: it deletes or edits nothing there, and a build must not write there either (copy the files to /tmp and build in the copy, or point the build tool's output folder under /tmp). Everywhere else in that fresh server it may write. It starts from the image alone, so what environment.setup or environment.start did in the running server is not there: install tools with RUN lines. Every check builds from cold, so check.timeout_secs defaults to 300 and may be up to 300 for a workspace task. \
+    Set check.live = true in [check] only when the check must read the running server itself (a process that is up, a port that answers, a file the start script wrote). A live check runs in the running server and the workspace is writable there, so it must still only read the workspace. The default is false; most checks of files and builds are not live. ";
+
 // The exact keys of `package.rs`, as task.toml text. A test stages every shape and lints it.
 const TOML_TOP: &str = "title = \"Short task title\"\nskills = [\"lowercase keyword\"]\n";
 const TOML_CONTAINER: &str = r#"[environment]
@@ -77,7 +81,9 @@ memory = "512m" # optional, at most 1g
 
 [check]
 kind = "script"
-script = "check.sh" # runs inside the server and reads /work
+script = "check.sh" # runs in a fresh server, /work is read-only there; build under /tmp
+# timeout_secs = 300 # optional, default and at most 300 here
+# live = true # optional: run in the running server instead; only to read its live state
 "#;
 const TOML_FOLDER_SCRIPT: &str = r#"[environment]
 kind = "folder"
@@ -181,7 +187,7 @@ fn shapes(b: &Brief) -> String {
     if b.talk_only {
         format!("{head}{talk}{dots}")
     } else if b.runtime {
-        format!("{head}{container}{workspace}{folder_script}{folder_rubric}{talk}{data}{dots}")
+        format!("{head}{container}{workspace}{WORKSPACE_CHECK}{folder_script}{folder_rubric}{talk}{data}{dots}")
     } else {
         format!("{head}{folder_rubric}{talk}{data}{dots}")
     }
@@ -326,6 +332,20 @@ mod tests {
         assert!(s.contains("any subject") && s.contains("Prefer a script check"));
         assert!(s.contains("How expensive is a mistake"));
         assert!(s.contains("/task") && s.contains("read-only"));
+    }
+
+    #[test]
+    fn workspace_checks_are_told_where_they_run_and_what_they_may_write() {
+        let s = generate_system(&brief(true, false));
+        for needle in [
+            "fresh server",
+            "read-only",
+            "/tmp",
+            "check.live = true",
+            "300",
+        ] {
+            assert!(s.contains(needle), "{needle}");
+        }
     }
 
     #[test]

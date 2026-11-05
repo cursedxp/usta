@@ -314,3 +314,51 @@ fn a_workspace_is_shared_both_ways_checked_and_moved_to_done() {
         .is_ok_and(|o| !o.ok()));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+#[ignore = "needs Docker"]
+fn a_workspace_check_that_deletes_files_cannot_and_the_file_survives() {
+    let root = tmp("cert_ws_ro");
+    let d = root.join("cert-wsro");
+    for (f, c) in [
+        ("task.toml", "id = \"cert-wsro\"\ntopic = \"cert\"\ntitle = \"T\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"container\"\nworkspace = \"/work\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n"),
+        ("instruction.md", "Write note.txt.\n"),
+        ("tone/adventure.md", "## open\nGo.\n\n## close\nDone.\n"),
+        ("environment/Dockerfile", "FROM debian:12-slim\n"),
+        ("environment/files/keep.txt", "mine\n"),
+        ("solution/solve.sh", "echo done > /work/note.txt\n"),
+        // A buggy check: it deletes inside the workspace, then tries to write; it exits 2 if
+        // either worked, 1 otherwise (not solved).
+        ("tests/check.sh", "rm -rf /work/keep.txt /work/* 2>/dev/null\nif touch /work/x 2>/dev/null; then exit 2; fi\n[ -f /work/note.txt ] || exit 1\nexit 0\n"),
+    ] {
+        std::fs::create_dir_all(d.join(f).parent().unwrap()).unwrap();
+        std::fs::write(d.join(f), c).unwrap();
+    }
+    let pkg = Package::load(&d).unwrap();
+    assert_eq!(pkg.lint(), Vec::<String>::new());
+    let docker = RealDocker;
+    let _guard = Cleanup(format!("usta-{TAG}-cert-wsro"));
+    let _image = ImageCleanup(ContainerEnv::image(&pkg));
+    let tasks = root.join("usta-tasks");
+    let mut env = ContainerEnv {
+        bases: None,
+        docker: &docker,
+        project_tag: TAG.into(),
+        tasks: tasks.clone(),
+    };
+    let h = env.prepare(&pkg, "cert-wsro").unwrap();
+    let folder = tasks.join("cert-wsro");
+    assert!(is_fail(&env.check(&pkg, &h).unwrap()));
+    assert_eq!(
+        std::fs::read_to_string(folder.join("keep.txt")).unwrap(),
+        "mine\n",
+        "the check could not delete the learner's file"
+    );
+    assert!(!folder.join("x").exists());
+    // The throwaway server is gone, and a live check still sees the writable folder.
+    assert!(docker
+        .run(&["inspect", &format!("usta-{TAG}-chk-cert-wsro")])
+        .is_ok_and(|o| !o.ok()));
+    env.clean(&h).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
