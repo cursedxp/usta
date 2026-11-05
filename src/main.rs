@@ -65,6 +65,7 @@ fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
+    // nosemgrep: rust.lang.security.args.args -- command parsing, no security decision
     let args: Vec<String> = std::env::args().collect();
     let topic_arg = match parse_command(&args)? {
         Command::Init => return run_init(),

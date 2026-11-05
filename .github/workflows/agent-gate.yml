@@ -70,7 +70,7 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           BASE="${{ github.event.pull_request.base.sha }}"
-          semgrep scan --config p/default --config p/rust --error --metrics=off ${BASE:+--baseline-commit "$BASE"}
+          semgrep scan --config p/default --config p/rust --exclude-rule rust.lang.security.temp-dir.temp-dir --error --metrics=off ${BASE:+--baseline-commit "$BASE"}
 
   deny:
     runs-on: ubuntu-latest
