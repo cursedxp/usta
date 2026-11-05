@@ -86,12 +86,11 @@ A new environment (browser, virtual machine, another app) is a new implementatio
 | Environment | Used for | `prepare` | `pause` / `resume` | `check` |
 |---|---|---|---|---|
 | Container | Linux, software, technical SEO | Start image, apply the fault | `docker stop` / `docker start` | Script |
-| Own machine | A tool the person already has | Create a work folder | Files stay; Usta's record | Script |
 | Folder (simulated world) | SEO strategy, marketing, trading | Write brief, data exports, competitor pages | Files stay; Usta's record | Script or rubric |
 | Real account | Etsy, Excel, Figma | Learn the person's current state | Usta's record | Screenshot, exported file |
 | Conversation only | Subjects needing no setup | Nothing | Usta's record | Usta judges |
 
-**Own machine:** Usta works only inside the project folder and never changes the wider system.
+**Own editor:** a container task that has the learner write code declares `environment.workspace`, a path inside the container. Usta creates a task folder on the host, puts the starting files there and mounts it at that path. The learner edits in their own editor; builds and the check run in the container. Generated scripts still never run on the host. This replaces the earlier "own machine" environment, which would have run generated scripts on the host.
 
 **Real account:** Usta cannot break this environment on purpose, so tasks are built from the person's actual state. Usta must learn that state first, and prebuilt packages are less useful here.
 
@@ -99,13 +98,7 @@ A new environment (browser, virtual machine, another app) is a new implementatio
 
 ### Tool setup
 
-When a subject needs a tool, Usta chooses in this order:
-
-1. The tool is already installed: use the own machine environment.
-2. It is not installed and Docker is available: use a container. The person may choose to install it themselves.
-3. Docker is not available: guide the installation step by step.
-
-Installing a tool can itself be a scenario, since it is a skill worth learning.
+Tools live in the container, so the learner installs nothing but Docker. Without Docker, Usta asks the learner to install it and offers tasks that need no running system.
 
 ## No work for the learner
 
@@ -143,7 +136,8 @@ Prior art shows two opposite failures: checks that reject valid solutions, and c
 - Containers carry a `usta-` name prefix and label. Usta touches nothing else.
 - On startup Usta removes only leftovers of finished tasks and `usta-` containers with no record. It never removes an unfinished task without asking.
 - A long-untouched unfinished task triggers a question to the person, never a silent delete.
-- The project folder lives on the host and is mounted into the container. The person edits in their own editor, Usta's file watcher keeps working, and builds run in the container.
+- A task with `environment.workspace` keeps its files in a host task folder mounted into the container. The person edits in their own editor and builds run in the container. A finished task's files move to the done folder, as in a folder task.
+- The mounted folder is writable from inside, so a generated script can write there. After `prepare`, Usta removes hidden entries and links from it, so a generated `.vscode` or `.cargo` cannot run when the folder is opened. A `start` script at resume is not scrubbed, since the learner's own hidden files must survive; the editor's own trust prompt is the guard there.
 
 **Resuming:** files survive a stop; running processes do not. On start, the scenario's services come back up and Usta summarises where the person left off.
 
@@ -213,10 +207,10 @@ Model-written content is untrusted.
 This is the order of construction, not a limit on the product.
 
 1. **Done (v0.40.0):** scenario engine, contract, container environment, three Linux scenarios in a plain and an adventure tone.
-2. **Any subject, on demand:** generate and validate, the local library, and the folder and conversation-only environments.
-3. **Own machine** environment and tool setup, tried on a programming language.
-4. **Real account** environment, tried on Etsy. Until then Etsy runs in a simulated world.
-5. **Trading replay**, once a data source is verified.
+2. **Done (v0.41.0), any subject, on demand:** generate and validate, the local library, and the folder and conversation-only environments.
+3. **Own editor:** the mounted task folder for container tasks, tried on a programming language.
+
+Parked by decision on 2026-11-05: the real account environment (Etsy runs in a simulated world) and trading replay.
 
 Each step gets its own plan.
 
