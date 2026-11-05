@@ -34,7 +34,7 @@ Domain-agnostic — Rust, JavaScript, marketing, whatever you're learning. First
 | 🌍 **Any topic** | Not Rust-specific. For a new topic (Linux security, GTM, anything) Usta **derives the approach through an introduction** and builds a web-researched **curriculum map** (`not seen → seen → settled → deepened`). Scope guarding: nothing stays hanging in the air. |
 | 📚 **Bring your own material** | Drop your book/course notes (md/txt — PDFs auto-convert if `pdftotext` is installed) into `materials/` — Usta anchors the curriculum to its chapters, assigns reading, and quizzes you on it. You read; it never summarizes the book at you. |
 | 🎨 **Terminal UI** | Claude Code-style terminal UI: two-column welcome box on open (learning status + what's next), a borderless multiline input (a single rule above, grows to 8 rows), sticky status line (spinner + context gauge); a calm, colorblind-safe visual language (glyph+color pairs, one accent), designed in a full TUI design system. Fullscreen: usta owns the window and keeps the conversation in its own scrollable pane (mouse wheel / PageUp / PageDown; drag to select and copy chat text). Auto plain mode on pipe/`NO_COLOR` (scripts don't break). |
-| 🛠️ **Scenario mode** | `/scenario` and Usta brings the work, with a story that continues from one task to the next. Any subject works: ask for it (`/scenario start pottery`) and Usta writes the task, tests that it can be solved, and keeps it for next time. Usta picks the environment per task: a small server (it opens a terminal window already inside it), a folder of files, or the conversation itself. Docker is needed only for tasks with a running system. `/scenario check` tells you whether it holds. Not built yet: real accounts and trading replay. Coding tasks keep their files in a folder on your computer, so you write in your own editor while the code runs and is checked inside the task. |
+| 🛠️ **Scenario mode** | `/scenario` and Usta brings the work, with a story that continues from one task to the next. Any subject works: ask for it (`/scenario start pottery`) and Usta writes the task, tests that it can be solved, and keeps it for next time. Usta picks the environment per task: a small server (it opens a terminal window already inside it), a folder of files, or the conversation itself. Coding tasks keep their files in a folder on your computer, so you write in your own editor while the code runs and is checked inside the task. `/scenario check` tells you whether it holds. See [Scenario mode](#scenario-mode). |
 | 🗂️ **Management** | `usta topics` shows what you're learning where; `reset` clears a topic or everything. |
 | 📈 **Visible progress** | Every session lands in a lightweight history — `usta stats` shows your week (sessions, map %, settled items) and streaks. Broken streak? No guilt: it shows your longest instead. |
 
@@ -61,6 +61,8 @@ The `usta` crate on crates.io is an unrelated project, so `cargo install usta` d
 Force one with `USTA_BACKEND=cli|api`.
 
 First run with no backend? Usta walks you through it — install Claude Code or paste an API key, no restart needed.
+
+**Docker** (only for scenario tasks that run code or a server): install [Docker Desktop](https://www.docker.com/products/docker-desktop/) once. You never type a Docker command, and Usta opens it if it is closed. Without Docker, everything else works, and scenario mode offers conversation and file tasks.
 
 ## Usage
 
@@ -92,6 +94,57 @@ usta start gtm            # could be rust, gtm, anything
 Practice: Usta assigns exercises into `exercises/` — write, save, and say you're done: the review comes with your message. No solutions handed over.
 
 In-session commands: `/watch on|off` (file feedback) · `/watch live` (immediate review per save) · `/show [topic]` (animated visual explainer) · `/exam` (goal mode: mock exam) · `/game on|off` (gamification) · `/help` · `/quit` · `/context` (what fills the context window; exact bytes; token counts are estimates) · `/scenario` (practice tasks: start, talk, resume, check, pause, drop, tone, help).
+
+### Scenario mode
+
+Normally you bring the project and Usta reacts. In scenario mode Usta brings the work: it gives you a task, sets up what the task needs, and checks the result. What you do carries into the next task, as a continuing story.
+
+**Quick start**, in any topic:
+
+```text
+usta start rust
+/scenario start a small Rust program with a bug I have to fix
+```
+
+Usta writes the task and tests that it can be solved before you see it. This takes about 2 to 10 minutes; progress is on screen and Esc cancels. Tasks that pass are kept, so reusing one needs no wait.
+
+**Commands**
+
+| Command | What it does |
+|---|---|
+| `/scenario` | List your unfinished tasks and the ones you can start |
+| `/scenario start` | Start the next suitable task, or have one written if none is left |
+| `/scenario start <number or id>` | Start a task from the list |
+| `/scenario start <what you want>` | Have a task written for this request |
+| `/scenario talk <what you want>` | Have a task written that happens in this conversation |
+| `/scenario check` | Check the task |
+| `/scenario pause` | Stop for now and keep your work |
+| `/scenario resume [id]` | Continue where you left off |
+| `/scenario drop [id]` | Give a task up; it asks you to confirm |
+| `/scenario tone plain\|adventure` | Plain tasks, or the same tasks told as a story |
+| `/scenario help` | Show the commands |
+
+Any other word after `/scenario` counts as a request, so a typo starts a new task.
+
+**What a task can look like.** Usta picks this per task:
+
+| Task | Where you work | How it is checked | Needs Docker |
+|---|---|---|---|
+| Code | Files in `usta-tasks/<task>/`, in your own editor; a terminal window opens inside the task to run things | Script, inside the task | Yes |
+| Server repair | The terminal window Usta opens, already inside the server | Script, inside the task | Yes |
+| Files | A folder of files, such as a brief and data to work from | Script or rubric | Only for a script |
+| Conversation | Right here in the chat | Rubric | No |
+
+A script check is exact: it looks at the real result. A rubric check is Usta's judgment against written criteria, so it counts for less. Usta tells you which one was used.
+
+**Files and leaving.** Quit whenever you like: a running task stops and your work stays. When a task ends, its files move to `usta-tasks/done/`. Usta removes what it no longer needs: a generated task's image when the task ends, and base images it pulled itself after 14 unused days. Images you pulled yourself are never touched.
+
+**Limits**
+
+- Generated scripts run only inside a task, never on your computer. A task protects against mistakes, not against malicious code.
+- Setting up a task uses the network and can reach your local network. Running a task has no network unless the task declares it.
+- The task folder is writable from inside. Usta removes hidden files and links from it once, when the task starts; after that, your editor's trust prompt is the guard.
+- Tested on macOS. Opening the terminal window on Windows and Linux is untested, and on a Linux host files made inside a task stay owned by root.
 
 ### Companion watching
 
