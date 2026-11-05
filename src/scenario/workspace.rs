@@ -472,7 +472,7 @@ pub(crate) mod tests {
             if l.starts_with("start ") && flag.get() {
                 fail(1, "port is already allocated")
             } else if l.starts_with("inspect -f {{range .Mounts}}") {
-                ok(&here)
+                ok(here)
             } else {
                 ok("")
             }
