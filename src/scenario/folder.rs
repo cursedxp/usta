@@ -31,6 +31,7 @@ pub(crate) struct FolderEnv<'a> {
     pub project_tag: String,
     pub tasks: PathBuf,
     pub model: &'a dyn Model,
+    pub bases: Option<PathBuf>,
 }
 
 /// Copy regular files as plain data: bytes only, so no mode or link survives.
@@ -113,11 +114,12 @@ impl FolderEnv<'_> {
 
     fn check_script(&self, pkg: &Package, run_id: &str, dir: &Path) -> Result<CheckOutcome> {
         let c = ContainerEnv {
+            bases: None,
             docker: self.docker,
             project_tag: self.project_tag.clone(),
             tasks: self.tasks.clone(),
         };
-        ensure_image(self.docker, CHECK_IMAGE)?;
+        ensure_image(self.docker, CHECK_IMAGE, self.bases.as_deref())?;
         let run_id = format!("chk-{run_id}");
         let name = self.reference(&run_id);
         let _ = self.docker.run(&["rm", "-f", &name]);
@@ -233,6 +235,7 @@ mod tests {
 
     fn env<'a>(d: &'a FakeDocker, root: &Path) -> FolderEnv<'a> {
         FolderEnv {
+            bases: None,
             docker: d,
             project_tag: "aaaa1111".into(),
             tasks: root.join("usta-tasks"),

@@ -303,6 +303,7 @@ fn produce(
         cancel: &live.cancel,
     };
     let mut prover = RealProver {
+        bases: Some(crate::scenario::bases::file(&s.ctx.global)),
         docker: s.seams.docker,
         store: s.store,
         tag: project_tag(&s.ctx.project_root),

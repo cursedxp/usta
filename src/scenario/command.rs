@@ -333,6 +333,9 @@ pub(crate) fn run_with(ctx: &Ctx, cmd: ScenarioCmd, seams: &Seams) -> Result<Rep
         seams.live.model.as_ref(),
         &said,
     );
+    let bases = Some(crate::scenario::bases::file(&ctx.global));
+    env.container.bases = bases.clone();
+    env.folder.bases = bases;
     let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
     let tick = Tick {
         pid: ctx.pid,
@@ -886,6 +889,7 @@ mod tests {
         let gone = FakeDocker::new(|_| fail(1, "Error: No such object: usta-x-lin-1"));
         let e = server_gone_error(
             &ContainerEnv {
+                bases: None,
                 tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
                 docker: &gone,
                 project_tag: "x".into(),
@@ -902,6 +906,7 @@ mod tests {
         let there = FakeDocker::new(|_| ok("true"));
         assert!(server_gone_error(
             &ContainerEnv {
+                bases: None,
                 tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
                 docker: &there,
                 project_tag: "x".into()
@@ -912,6 +917,7 @@ mod tests {
         r.reference.clear();
         assert!(server_gone_error(
             &ContainerEnv {
+                bases: None,
                 tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
                 docker: &there,
                 project_tag: "x".into()
@@ -928,6 +934,7 @@ mod tests {
         r.reference = "usta-x-lin-1".into();
         let d = FakeDocker::new(|_| fail(1, "Cannot connect to the Docker daemon"));
         let env = ContainerEnv {
+            bases: None,
             tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: &d,
             project_tag: "x".into(),
@@ -995,6 +1002,7 @@ mod tests {
         let on = FakeDocker::new(|_| ok("true"));
         let off = FakeDocker::new(|_| ok("false"));
         let env = |d| ContainerEnv {
+            bases: None,
             tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
             docker: d,
             project_tag: "x".into(),

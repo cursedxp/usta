@@ -30,11 +30,13 @@ impl<'a> Router<'a> {
     ) -> Router<'a> {
         Router {
             container: ContainerEnv {
+                bases: None,
                 docker,
                 project_tag: tag.to_string(),
                 tasks: tasks.clone(),
             },
             folder: FolderEnv {
+                bases: None,
                 docker,
                 project_tag: tag.to_string(),
                 tasks,

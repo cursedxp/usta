@@ -132,6 +132,7 @@ Prior art shows two opposite failures: checks that reject valid solutions, and c
 - Each container has `--memory`, `--cpus` and `--pids-limit` set.
 - At most one container runs at a time. Other unfinished tasks wait stopped.
 - Network is off by default. A scenario declares it when needed, for example to fetch crates.
+- Disk: when a learner's run of a generated task ends, its image `usta-scn-gen-...` is removed with a plain `docker rmi` (never `-f`, best effort; the package stays and `prepare` rebuilds a missing image). Proof runs keep the image and shipped packages are never touched. Base images Usta itself pulled are listed in `scenarios/bases.txt` beside the library; the startup sweep removes a listed base unused for 14 days, only if the runtime is already running. A base that was on the machine first is never listed, so never removed.
 - Usta warns if the container runtime is older than the fixes for the November 2025 runc escapes (CVE-2025-31133, CVE-2025-52565, CVE-2025-52881).
 - Containers carry a `usta-` name prefix and label. Usta touches nothing else.
 - On startup Usta removes only leftovers of finished tasks and `usta-` containers with no record. It never removes an unfinished task without asking.

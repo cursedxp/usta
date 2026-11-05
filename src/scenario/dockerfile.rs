@@ -28,7 +28,7 @@ pub(crate) const BASES: [&str; 8] = [
 ];
 
 /// An allowed official image with an explicit version.
-fn base_ok(image: &str) -> bool {
+pub(crate) fn base_ok(image: &str) -> bool {
     let Some((name, tag)) = image.split_once(':') else {
         return false;
     };

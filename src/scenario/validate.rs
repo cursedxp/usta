@@ -265,6 +265,8 @@ pub(crate) struct RealProver<'a> {
     pub docker: &'a dyn Docker,
     pub store: &'a Store,
     pub tag: String,
+    /// Where to note base images this proof's build pulls.
+    pub bases: Option<std::path::PathBuf>,
     pub model: &'a dyn Model,
     pub tick: &'a Tick<'a>,
     pub say: &'a dyn Fn(&str),
@@ -319,6 +321,7 @@ impl Prover for RealProver<'_> {
         let scratch = self.store.scratch_dir();
         let (proof, cleaned) = if pkg.environment.kind == CONTAINER {
             let mut env = ContainerEnv {
+                bases: self.bases.clone(),
                 docker: self.docker,
                 project_tag: self.tag.clone(),
                 tasks: scratch.clone(),
@@ -326,6 +329,7 @@ impl Prover for RealProver<'_> {
             prove_and_clean(&mut env, pkg, &run_id)
         } else {
             let mut env = FolderEnv {
+                bases: self.bases.clone(),
                 docker: self.docker,
                 project_tag: self.tag.clone(),
                 tasks: scratch.clone(),
@@ -583,6 +587,7 @@ mod tests {
             Ok(())
         };
         let mut prover = RealProver {
+            bases: None,
             docker: &docker,
             store: &store,
             tag: "t".into(),
@@ -729,6 +734,7 @@ mod tests {
         let say: &dyn Fn(&str) = &|_| {};
         let mut free = || Ok(());
         let mut prover = RealProver {
+            bases: None,
             docker: d,
             store: &store,
             tag: "t".into(),
@@ -930,6 +936,7 @@ mod tests {
         let say: &dyn Fn(&str) = &|_| {};
         let mut free = || Ok(());
         let mut prover = RealProver {
+            bases: None,
             docker: &d,
             store: &store,
             tag: "aaaa1111".into(),
@@ -965,6 +972,7 @@ mod tests {
             Ok(())
         };
         let mut prover = RealProver {
+            bases: None,
             docker: &d,
             store: &store,
             tag: "t".into(),
@@ -1001,6 +1009,7 @@ mod tests {
         let say: &dyn Fn(&str) = &|_| {};
         let mut free = || Ok(());
         let mut prover = RealProver {
+            bases: None,
             docker: &d,
             store: &store,
             tag: "t".into(),

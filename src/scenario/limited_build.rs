@@ -4,6 +4,7 @@
 //! helper is unrecorded on purpose: it holds no work, and the sweep removes any
 //! unrecorded `usta-` container left by a crash.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -34,11 +35,21 @@ fn must(d: &dyn Docker, args: &[&str]) -> Result<Out> {
 }
 
 /// Fetch `image` unless it is here. `create` is bounded at 60 s, too short for a pull.
-pub(crate) fn ensure_image(d: &dyn Docker, image: &str) -> Result<()> {
+/// A pull is noted in `bases` (the runtime had not got the image, so Usta brought it);
+/// a base that was here is only date-refreshed, and only if Usta had noted it before.
+pub(crate) fn ensure_image(d: &dyn Docker, image: &str, bases: Option<&Path>) -> Result<()> {
+    let today = crate::lifecycle::today();
     if run_tool(d, &["image", "inspect", image])?.ok() {
+        if let Some(f) = bases {
+            crate::scenario::bases::used(f, image, &today);
+        }
         return Ok(());
     }
-    must(d, &["pull", image]).map(|_| ())
+    must(d, &["pull", image])?;
+    if let Some(f) = bases {
+        crate::scenario::bases::pulled(f, image, &today);
+    }
+    Ok(())
 }
 
 /// A number the runtime printed. Unreadable is a failure, never a pass.
@@ -63,8 +74,14 @@ fn check_disk(d: &dyn Docker, name: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn build(d: &dyn Docker, pkg: &Package, image: &str, tag: &str) -> Result<()> {
-    build_within(d, pkg, image, tag, BUILD_BUDGET)
+pub(crate) fn build(
+    d: &dyn Docker,
+    pkg: &Package,
+    image: &str,
+    tag: &str,
+    bases: Option<&Path>,
+) -> Result<()> {
+    build_within(d, pkg, image, tag, BUILD_BUDGET, bases)
 }
 
 fn build_within(
@@ -73,12 +90,13 @@ fn build_within(
     image: &str,
     tag: &str,
     budget: Duration,
+    bases: Option<&Path>,
 ) -> Result<()> {
     let ctx = pkg.dir.join(&pkg.environment.context);
     let text = std::fs::read_to_string(ctx.join("Dockerfile"))
         .map_err(|e| internal(format!("no recipe: {e}")))?;
     let recipe = dockerfile::parse(&text).map_err(|p| internal(p.join("; ")))?;
-    ensure_image(d, &recipe.base)?;
+    ensure_image(d, &recipe.base, bases)?;
     let name = format!("usta-{tag}-bld-{}", pkg.id);
     let temp = format!("{image}-bld");
     let result = run_recipe(d, pkg, &recipe, &name, &temp, tag, budget);
@@ -237,7 +255,7 @@ mod tests {
         );
         std::fs::write(p.dir.join("environment/setup.sh"), "true\n").unwrap();
         let d = FakeDocker::new(small);
-        build(&d, &p, "usta-scn-gen-x-1:v1", "aaaa1111").unwrap();
+        build(&d, &p, "usta-scn-gen-x-1:v1", "aaaa1111", None).unwrap();
         let c = d.calls();
         let name = "usta-aaaa1111-bld-gen-x-1";
         let find = |needle: &str| {
@@ -290,7 +308,7 @@ mod tests {
     fn a_recipe_without_workdir_uses_the_bases_own() {
         let (root, p) = pkg_with("lb_nowd", "FROM debian:12-slim\nRUN make it\n");
         let d = FakeDocker::new(small);
-        build(&d, &p, "i:v1", "t").unwrap();
+        build(&d, &p, "i:v1", "t", None).unwrap();
         let c = d.calls();
         assert!(
             !c.iter().any(|l| l.contains("-w ") || l.contains("WORKDIR")),
@@ -309,7 +327,7 @@ mod tests {
                 small(l)
             }
         });
-        let e = build(&d, &p, "i:v1", "t").unwrap_err();
+        let e = build(&d, &p, "i:v1", "t", None).unwrap_err();
         assert!(e.downcast_ref::<Internal>().is_some() && e.to_string().contains("no such thing"));
         let c = d.calls();
         assert!(c.iter().any(|l| l == "rm -fv usta-t-bld-gen-x-1"));
@@ -328,7 +346,7 @@ mod tests {
                 small(l)
             }
         });
-        assert!(build(&d, &p, "i:v1", "t")
+        assert!(build(&d, &p, "i:v1", "t", None)
             .unwrap_err()
             .to_string()
             .contains("too large"));
@@ -348,7 +366,7 @@ mod tests {
                 small(l)
             }
         });
-        assert!(build(&d, &p, "i:v1", "t").is_err());
+        assert!(build(&d, &p, "i:v1", "t", None).is_err());
         assert!(d.calls().iter().any(|l| l == "rmi -f i:v1-bld"));
         assert!(!d.calls().iter().any(|l| l.starts_with("tag ")));
         let _ = std::fs::remove_dir_all(root);
@@ -364,7 +382,7 @@ mod tests {
                 small(l)
             }
         });
-        assert!(build(&d, &p, "i:v1", "t")
+        assert!(build(&d, &p, "i:v1", "t", None)
             .unwrap_err()
             .to_string()
             .contains("too large"));
@@ -378,7 +396,7 @@ mod tests {
     fn an_exhausted_budget_stops_before_the_next_run() {
         let (root, p) = pkg_with("lb_budget", "FROM debian:12-slim\nRUN slow\n");
         let d = FakeDocker::new(small);
-        let e = build_within(&d, &p, "i:v1", "t", Duration::ZERO).unwrap_err();
+        let e = build_within(&d, &p, "i:v1", "t", Duration::ZERO, None).unwrap_err();
         assert!(e.to_string().contains("10 minutes"), "{e}");
         let c = d.calls();
         assert!(!c
@@ -391,8 +409,54 @@ mod tests {
     #[test]
     fn a_base_already_here_is_not_pulled() {
         let d = FakeDocker::new(|_| ok(""));
-        ensure_image(&d, "debian:12-slim").unwrap();
+        ensure_image(&d, "debian:12-slim", None).unwrap();
         assert_eq!(d.calls(), vec!["image inspect debian:12-slim".to_string()]);
+    }
+
+    #[test]
+    fn a_base_is_recorded_only_when_usta_pulled_it_and_its_date_is_refreshed() {
+        let root = crate::scenario::package::tests::tmp("lb_bases");
+        let f = crate::scenario::bases::file(&root);
+        let today = crate::lifecycle::today();
+        let present = FakeDocker::new(|_| ok(""));
+        ensure_image(&present, "rust:1.83-slim", Some(&f)).unwrap();
+        assert!(
+            !f.exists(),
+            "a base that was already here is never recorded"
+        );
+        let absent = FakeDocker::new(small);
+        ensure_image(&absent, "rust:1.83-slim", Some(&f)).unwrap();
+        assert!(absent.calls().contains(&"pull rust:1.83-slim".to_string()));
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            format!("rust:1.83-slim {today}\n")
+        );
+        std::fs::write(&f, "rust:1.83-slim 2020-01-01\n").unwrap();
+        ensure_image(&present, "rust:1.83-slim", Some(&f)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            format!("rust:1.83-slim {today}\n")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_failed_pull_records_nothing() {
+        let root = crate::scenario::package::tests::tmp("lb_bases_fail");
+        let f = crate::scenario::bases::file(&root);
+        let d = FakeDocker::new(|l| {
+            fail(
+                1,
+                if l.starts_with("pull") {
+                    "denied"
+                } else {
+                    "No such image"
+                },
+            )
+        });
+        assert!(ensure_image(&d, "rust:1.83-slim", Some(&f)).is_err());
+        assert!(!f.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -405,7 +469,7 @@ mod tests {
                 small(l)
             }
         });
-        build(&d, &p, "i:v1", "t").unwrap();
+        build(&d, &p, "i:v1", "t", None).unwrap();
         assert!(d.calls().iter().any(|l| l == "tag i:v1-bld i:v1"));
         let _ = std::fs::remove_dir_all(root);
     }
