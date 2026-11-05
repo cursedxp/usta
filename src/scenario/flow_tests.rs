@@ -844,6 +844,81 @@ fn folder_world(name: &str) -> World {
     w
 }
 
+/// A world whose only task is a server task with a workspace folder (topic "linux").
+fn workspace_world(name: &str) -> World {
+    let w = World::new(name);
+    let pkg = crate::scenario::workspace::tests::ws_pkg(&w.base.join("src"));
+    let lib = crate::scenario::library::library_root(&w.global).join("demo-pkg");
+    crate::scenario::folder::copy_data(&pkg.dir, &lib).unwrap();
+    w
+}
+
+#[test]
+fn a_workspace_task_opens_a_window_and_names_the_folder() {
+    let w = workspace_world("flow_ws_start");
+    let r = w.start(Some("demo-pkg"));
+    let run = w.only_run();
+    assert_eq!(run.env, "container");
+    assert_eq!(w.windows.0.get(), 1);
+    assert!(says(&r, "Your task folder is"), "{:?}", r.notices);
+    assert!(says(&r, "usta-tasks/done/"), "{:?}", r.notices);
+    assert!(!says(&r, "docker") && !says(&r, "mount"), "{:?}", r.notices);
+    assert!(w
+        .project
+        .join("usta-tasks")
+        .join(&run.run_id)
+        .join("src/main.rs")
+        .is_file());
+}
+
+#[test]
+fn a_finished_workspace_task_keeps_the_learners_files() {
+    let w = workspace_world("flow_ws_done");
+    w.start(Some("demo-pkg"));
+    let run = w.only_run();
+    let dir = w.project.join("usta-tasks").join(&run.run_id);
+    std::fs::write(dir.join("src/mine.rs"), "mine").unwrap();
+    let r = w.cmd(ScenarioCmd::Check);
+    assert!(says(&r, "kept in usta-tasks/done/"), "{:?}", r.notices);
+    assert!(!dir.exists());
+    let kept = w.project.join("usta-tasks/done").join(&run.run_id);
+    assert_eq!(
+        std::fs::read_to_string(kept.join("src/mine.rs")).unwrap(),
+        "mine"
+    );
+    assert!(w.daemon.borrow().boxes.is_empty(), "the server is gone");
+}
+
+#[test]
+fn a_gone_workspace_folder_blocks_resume_and_a_drop_keeps_the_files() {
+    let w = workspace_world("flow_ws_gone");
+    w.start(Some("demo-pkg"));
+    w.cmd(ScenarioCmd::Pause);
+    let run = w.only_run();
+    std::fs::remove_dir_all(w.project.join("usta-tasks").join(&run.run_id)).unwrap();
+    let e = w.try_cmd(ScenarioCmd::Resume(None)).err().unwrap();
+    assert!(
+        e.to_string().contains("files for this task are gone"),
+        "{e}"
+    );
+    assert_eq!(w.only_run().state, RunState::Paused);
+    assert!(
+        w.daemon.borrow().boxes.values().all(|b| !b.0),
+        "the server was not started"
+    );
+    let w = workspace_world("flow_ws_drop");
+    w.start(Some("demo-pkg"));
+    let run = w.only_run();
+    let dir = w.project.join("usta-tasks").join(&run.run_id);
+    let r = w.cmd(ScenarioCmd::Drop {
+        id: Some(run.run_id.clone()),
+        confirmed: true,
+    });
+    assert!(says(&r, "kept in usta-tasks/done/"), "{:?}", r.notices);
+    assert!(!dir.exists());
+    assert!(w.project.join("usta-tasks/done").join(&run.run_id).is_dir());
+}
+
 fn inspects(w: &World) -> usize {
     w.docker
         .calls()

@@ -47,6 +47,7 @@ fn certify(id: &str) {
         .expect("package present");
     let d = RealDocker;
     let mut env = ContainerEnv {
+        tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
     };
@@ -97,6 +98,7 @@ fn pause_keeps_files_and_resume_reruns_the_start_script() {
         .unwrap();
     let d = RealDocker;
     let mut env = ContainerEnv {
+        tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
     };
@@ -161,6 +163,7 @@ fn a_generated_recipe_builds_inside_limits_and_is_certified() {
     let _guard = Cleanup(format!("usta-{TAG}-cert-gen"));
     let _image = ImageCleanup(ContainerEnv::image(&pkg));
     let mut env = ContainerEnv {
+        tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
     };
@@ -196,6 +199,7 @@ fn a_task_container_runs_under_the_file_size_limit_for_every_exec() {
     let _guard = Cleanup(format!("usta-{TAG}-cert-ul"));
     let _image = ImageCleanup(ContainerEnv::image(&pkg));
     let mut env = ContainerEnv {
+        tasks: std::path::PathBuf::from("/nonexistent-usta-tasks"),
         docker: &d,
         project_tag: TAG.into(),
     };
@@ -240,5 +244,70 @@ fn a_folder_script_check_cannot_write_to_the_task_and_has_no_network() {
         prove_script(&mut env, &pkg, "cert-folder").unwrap(),
         Proof::Passed
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+#[ignore = "needs Docker"]
+fn a_workspace_is_shared_both_ways_checked_and_moved_to_done() {
+    let root = tmp("cert_ws");
+    let d = root.join("cert-ws");
+    for (f, c) in [
+        ("task.toml", "id = \"cert-ws\"\ntopic = \"cert\"\ntitle = \"T\"\nversion = 1\nskills = [\"x\"]\n\n[environment]\nkind = \"container\"\nworkspace = \"/work\"\n\n[check]\nkind = \"script\"\nscript = \"check.sh\"\n"),
+        ("instruction.md", "Write note.txt.\n"),
+        ("tone/adventure.md", "## open\nGo.\n\n## close\nDone.\n"),
+        ("environment/Dockerfile", "FROM debian:12-slim\n"),
+        ("environment/files/start.py", "print('hi')\n"),
+        ("solution/solve.sh", "echo done > /work/note.txt\n"),
+        ("tests/check.sh", "[ \"$(pwd)\" = /work ] || exit 1\ngrep -q done /work/note.txt || exit 1\nexit 0\n"),
+    ] {
+        std::fs::create_dir_all(d.join(f).parent().unwrap()).unwrap();
+        std::fs::write(d.join(f), c).unwrap();
+    }
+    let pkg = Package::load(&d).unwrap();
+    assert_eq!(pkg.lint(), Vec::<String>::new());
+    let docker = RealDocker;
+    let _guard = Cleanup(format!("usta-{TAG}-cert-ws"));
+    let _image = ImageCleanup(ContainerEnv::image(&pkg));
+    let tasks = root.join("usta-tasks");
+    let mut env = ContainerEnv {
+        docker: &docker,
+        project_tag: TAG.into(),
+        tasks: tasks.clone(),
+    };
+    let h = env.prepare(&pkg, "cert-ws").unwrap();
+    let folder = tasks.join("cert-ws");
+    let sh = |cmd: &str| {
+        docker
+            .run(&["exec", &h.reference, "sh", "-c", cmd])
+            .unwrap()
+    };
+    // The starting file is inside, and the shell starts at the workspace.
+    assert_eq!(sh("cat /work/start.py").stdout.trim(), "print('hi')");
+    assert_eq!(sh("pwd").stdout.trim(), "/work");
+    // Host to container, and container to host.
+    std::fs::write(folder.join("from_host.txt"), "host\n").unwrap();
+    assert_eq!(sh("cat /work/from_host.txt").stdout.trim(), "host");
+    assert!(sh("echo box > /work/from_box.txt").ok());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("from_box.txt"))
+            .unwrap()
+            .trim(),
+        "box"
+    );
+    // The check fails until the learner's file exists, then passes.
+    assert!(is_fail(&env.check(&pkg, &h).unwrap()));
+    std::fs::write(folder.join("note.txt"), "done\n").unwrap();
+    assert_eq!(env.check(&pkg, &h).unwrap(), CheckOutcome::Pass);
+    // Pause and resume keep the files; clean moves them.
+    env.pause(&h).unwrap();
+    assert_eq!(env.resume(&pkg, &h).unwrap(), None);
+    env.clean(&h).unwrap();
+    assert!(!folder.exists());
+    let kept = tasks.join("done/cert-ws");
+    assert!(kept.join("note.txt").is_file() && kept.join("from_box.txt").is_file());
+    assert!(docker
+        .run(&["inspect", &h.reference])
+        .is_ok_and(|o| !o.ok()));
     let _ = std::fs::remove_dir_all(root);
 }
